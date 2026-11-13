@@ -26,7 +26,7 @@ Create a private JSON configuration for a registered Firebase Web App. Enable Fi
 }
 ~~~
 
-Supply an expiring Firebase App Check JWT through a private file and refresh it through the host's authorized issuance process before expiration. For a test project with a registered App Check debug secret, set appCheck to development_debug and supply that secret in the credential file. The worker exchanges it over HTTPS with Firebase App Check. Protect both files with owner-only permissions on Unix or a private directory ACL on Windows.
+Supply an expiring Firebase App Check JWT through a private file. Use the host's authorized issuance process to replace it atomically before expiration. The worker checks expiry, issuer, app ID and the project audience locally. Firebase verifies the token when it processes the AI Logic request. For a test project with a registered App Check debug secret, set appCheck to development_debug and supply that secret in the credential file. The worker exchanges it over HTTPS with Firebase App Check. Protect both files with owner-only permissions on Unix or a private directory ACL on Windows. [Firebase App Check token claims](https://firebase.google.com/docs/reference/admin/node/firebase-admin.app-check.decodedappchecktoken)
 
 Generate a random 32-byte credential encoded as 64 lowercase hex characters for the Core-to-worker connection. Hybrid Web needs a second independent credential for the dedicated browser. Keep credential files out of source control and log collection.
 

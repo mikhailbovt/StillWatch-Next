@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -101,6 +102,17 @@ def run(args):
             status, body = request(origin, "/health", core_credential)
             assert status == 200 and json.loads(body)["sdk_version"] == "13.3.0"
             assert request(origin, "/evaluate", core_credential, fire_packet(), binary=True)[0] == 502
+            # These fixtures only exercise local claim checks. No token is
+            # presented to Firebase by the health endpoint.
+            encoded = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+            valid_claims = {"exp": int(time.time()) + 120, "sub": "1:000:web:offline-fixture",
+                            "iss": "https://firebaseappcheck.googleapis.com/000", "aud": ["projects/offline-fixture"]}
+            for claims, ready in ((valid_claims, True), (valid_claims | {"exp": 1}, False),
+                                  (valid_claims | {"sub": "1:000:web:other"}, False),
+                                  (valid_claims | {"aud": ["projects/other"]}, False)):
+                private(app_check, f"{encoded({'alg': 'RS256'})}.{encoded(claims)}.fixture")
+                status, body = request(origin, "/health", core_credential)
+                assert status == 200 and json.loads(body)["cloud_transport"] is ready
             if args.core:
                 with run_core(args.core, args.worker, root / "core", root, root / "core.log",
                               "--semantic-worker", f"127.0.0.1:{port}",

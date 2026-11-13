@@ -69,7 +69,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
     ? credential((await readFile(browserTokenFile, 128, true)).toString("ascii").trim())
     : null;
   if (browserDigest && timingSafeEqual(coreDigest, browserDigest)) throw new Error("Separate worker credentials are required");
-  const appCheck = appCheckProvider(config, appCheckFile, readFile);
+  const { acquire: appCheck, credentialReady } = appCheckProvider(config, appCheckFile, readFile);
   const host = "127.0.0.1:" + port;
   const origin = "http://" + host;
   const hybrid = config.mode === "hybrid_web";
@@ -151,11 +151,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
     }
     if (!authenticated(req, coreDigest)) return reply(res, 401, { error: "unauthorized" });
     if (req.method === "GET" && req.url === "/health") {
-      const cloudCredentialsPresent = await readFile(appCheckFile, 12 * 1024, true)
-        .then(bytes => config.appCheck === "token_file"
-          ? /^[\w-]+\.[\w-]+\.[\w-]+$/.test(bytes.toString("ascii").trim())
-          : /^[\w-]{16,128}$/.test(bytes.toString("ascii").trim()))
-        .catch(() => false);
+      const cloudCredentialsPresent = await credentialReady();
       return reply(res, 200, {
         mode: config.mode, sdk_version: firebaseSdkVersion, model: config.model,
         semantic_evaluation: true,
