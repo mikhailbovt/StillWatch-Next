@@ -7,8 +7,11 @@ import hashlib
 import json
 import os
 import signal
+import socket
 import subprocess
 import sqlite3
+import urllib.error
+import urllib.request
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -239,7 +242,7 @@ def verify_repeated_frames(args, root, model_options):
     with launch([str(args.mediamtx), str(config)], root / "repeated-media.log"):
         until(lambda: check_port(port))
         with run_core(args.core, args.worker, root / "repeated-data", root, root / "repeated-core.log",
-                      *model_options, "--rtsp-peer", peer) as (_, client):
+                      *model_options, "--rtsp-peer", peer, *snapshot_flags(args)) as (_, client):
             with launch(publish, root / "repeated-publisher.log") as publisher:
                 source = {"type": "rtsp", "peer": peer, "stream_path": "/fixture",
                           "secure": False, "transport": "tcp", "credential_ref": None}
@@ -263,6 +266,7 @@ def verify_repeated_frames(args, root, model_options):
                     return None
 
                 normal_camera = until(normal, 8)
+                expect_snapshot(args, client, cam_id, 200)
                 frozen = until(lambda: value if (value := client.camera(cam_id))["runtime"].get("repeated_frame") else None, 22)
                 assert frozen["runtime"]["state"] == "unavailable"
                 assert frozen["source_epoch"] == normal_camera["source_epoch"]
@@ -270,6 +274,7 @@ def verify_repeated_frames(args, root, model_options):
                 assert status == 200 and analysis["state"] == "degraded", analysis
                 assert analysis["people"] is analysis["smoke_regions"] is analysis["fire_regions"] is None
                 assert client.call("GET", "/health/ready")[0] == 200
+                expect_snapshot(args, client, cam_id, 503)
 
                 def recovered():
                     item = normal()
@@ -285,9 +290,39 @@ def verify_repeated_frames(args, root, model_options):
                         "publisher_exit": publisher.poll(),
                     }) from error
                 assert int(after["runtime"]["frame"]) > int(frozen["runtime"]["frame"])
+                expect_snapshot(args, client, cam_id, 200)
                 assert publisher.poll() is None, "The RTSP publisher should still be connected"
     print(json.dumps({"repeated_pixels_detected_with_native_pts": True, "observations_withheld": True,
-                      "moving_pixels_rotated_source_epoch": True, "rtsp_publisher_unchanged": True}))
+                      "moving_pixels_rotated_source_epoch": True, "rtsp_publisher_unchanged": True,
+                      "snapshot_unavailable_during_hold": True if args.media_encoder else None}))
+
+
+def snapshot_flags(args):
+    if args.media_encoder is None:
+        return []
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    return ["--mediamtx", str(args.mediamtx), "--mediamtx-sha256", digest(args.mediamtx),
+            "--media-encoder", str(args.media_encoder), "--media-encoder-sha256", digest(args.media_encoder),
+            "--media-ice-udp", f"127.0.0.1:{port}"]
+
+
+def expect_snapshot(args, client, camera_id, expected):
+    if args.media_encoder is None:
+        return
+    request = urllib.request.Request(f"{client.address}/api/v2/cameras/{camera_id}/snapshot.jpg",
+                                     headers={"Authorization": f"Bearer {client.token}"})
+    try:
+        response = urllib.request.urlopen(request, timeout=3)
+    except urllib.error.HTTPError as error:
+        response = error
+    with response:
+        assert response.status == expected, (response.status, expected)
+        if expected == 200:
+            assert response.headers.get("Cache-Control") == "no-store"
+            assert 0 <= int(response.headers["X-Frame-Age-Ms"]) <= 3000
+            assert response.read(3) == b"\xff\xd8\xff"
 
 
 if __name__ == "__main__":
@@ -297,6 +332,8 @@ if __name__ == "__main__":
     parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--runtime-sha256", required=True)
     parser.add_argument("--mediamtx", type=lambda value: Path(value).resolve(strict=True))
+    parser.add_argument("--media-encoder", type=lambda value: Path(value).resolve(strict=True),
+                        help="Also verify JPEG availability during the source-freeze test")
     parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
     options = parser.parse_args()
@@ -304,4 +341,6 @@ if __name__ == "__main__":
         parser.error("--worker-faults requires Linux procfs")
     if options.source_freeze and not options.mediamtx:
         parser.error("--source-freeze requires --mediamtx")
+    if options.media_encoder and not options.source_freeze:
+        parser.error("--media-encoder requires --source-freeze")
     run(options)

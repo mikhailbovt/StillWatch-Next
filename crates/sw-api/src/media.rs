@@ -103,7 +103,12 @@ pub async fn snapshot(
 ) -> Result<Response, ApiError> {
     principal.scope(DeviceScope::StreamsRead)?;
     principal.camera(id)?;
-    let (jpeg, age) = media(&state)?.snapshot(id).await?;
+    let (jpeg, age) = match media(&state)?.snapshot(id).await {
+        Err(sw_engine::MediaError::Capacity) => {
+            return Err(ApiError::rate_limited("Snapshot encoding capacity reached"));
+        }
+        result => result?,
+    };
     let age = HeaderValue::from_str(&age.to_string()).map_err(|_| ApiError::internal())?;
     Ok((
         [

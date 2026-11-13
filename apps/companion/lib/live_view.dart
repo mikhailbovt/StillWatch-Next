@@ -24,10 +24,12 @@ class CameraPreview extends StatefulWidget {
 }
 
 class _CameraPreviewState extends State<CameraPreview> {
+  static const _maxAge = Duration(seconds: 5);
   MemoryImage? _image;
   Duration? _ageAtReceipt;
   final _sinceReceipt = Stopwatch();
   Timer? _clock;
+  Timer? _expiry;
   bool _pending = false;
   int _generation = 0;
 
@@ -70,6 +72,9 @@ class _CameraPreviewState extends State<CameraPreview> {
   }
 
   void _replace(CameraSnapshot? snapshot) {
+    _expiry?.cancel();
+    final remaining = _maxAge - (snapshot?.ageAtReceipt ?? Duration.zero);
+    if (remaining <= Duration.zero) snapshot = null;
     final old = _image;
     if (old != null) PaintingBinding.instance.imageCache.evict(old);
     _image = snapshot == null ? null : MemoryImage(snapshot.jpeg);
@@ -78,6 +83,9 @@ class _CameraPreviewState extends State<CameraPreview> {
       ..stop()
       ..reset();
     if (_ageAtReceipt != null) _sinceReceipt.start();
+    if (_image != null) {
+      _expiry = Timer(remaining, () => setState(() => _replace(null)));
+    }
   }
 
   Future<void> _fetch() async {
@@ -197,13 +205,16 @@ class _LiveViewState extends State<LiveView> {
         console.link == LinkState.connected &&
         widget.profile.can('streams_read') &&
         camera != null &&
+        !camera.repeatedFrame &&
         (camera.state == 'streaming' || camera.state == 'replaying');
     final previousCamera = _camera;
     final newScope =
         camera?.sceneRevision != previousCamera?.sceneRevision ||
         camera?.sourceEpoch != previousCamera?.sourceEpoch;
+    final changedRepeat =
+        camera?.repeatedFrame != previousCamera?.repeatedFrame;
     _camera = camera;
-    if (active == _active && !newScope) {
+    if (active == _active && !newScope && !changedRepeat) {
       if (active &&
           !_starting &&
           _playback == null &&
@@ -221,9 +232,11 @@ class _LiveViewState extends State<LiveView> {
       setState(() {
         _starting = false;
         _playback = null;
-        _failure = console.link == LinkState.connected
-            ? 'The camera is unavailable.'
-            : 'The Core is offline.';
+        _failure = console.link != LinkState.connected
+            ? 'The Core is offline.'
+            : camera?.repeatedFrame == true
+            ? 'The camera is sending the same frame.'
+            : 'The camera is unavailable.';
       });
       if (previous != null) _closePlayback(previous);
     }

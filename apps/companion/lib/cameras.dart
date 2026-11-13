@@ -55,7 +55,8 @@ class CameraGrid extends StatelessWidget {
           itemBuilder: (context, index) {
             final camera = console.cameras[index];
             final running =
-                camera.state == 'streaming' || camera.state == 'replaying';
+                !camera.repeatedFrame &&
+                (camera.state == 'streaming' || camera.state == 'replaying');
             final canView =
                 online &&
                 console.foreground &&
@@ -63,7 +64,7 @@ class CameraGrid extends StatelessWidget {
                 profile.can('streams_read');
             final status = !online
                 ? 'Core offline'
-                : camera.runtime['repeated_frame'] == true
+                : camera.repeatedFrame
                 ? 'Repeated camera frame'
                 : readable(camera.state);
             return Card(

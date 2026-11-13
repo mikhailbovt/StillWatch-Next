@@ -156,6 +156,7 @@ final class Camera {
   String get name => text(configuration, 'name');
   bool get enabled => configuration['enabled'] == true;
   String get state => text(runtime, 'state');
+  bool get repeatedFrame => runtime['repeated_frame'] == true;
 }
 
 final class AnalysisOrigin {

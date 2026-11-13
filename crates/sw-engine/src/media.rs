@@ -25,7 +25,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     process::ChildStdin,
-    sync::watch,
+    sync::{Semaphore, watch},
 };
 use uuid::Uuid;
 
@@ -34,6 +34,7 @@ use crate::{CameraFrame, CameraRegistry, capture_process::reap};
 const SDP_LIMIT: usize = 48 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_ENCODERS: usize = 8;
+const MAX_SNAPSHOT_ENCODERS: usize = 4;
 const GRANT_TTL: Duration = Duration::from_secs(20);
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 const STALE: Duration = Duration::from_secs(3);
@@ -173,6 +174,7 @@ pub struct MediaService {
     ingest: SocketAddr,
     read_secret: String,
     http: reqwest::Client,
+    snapshots: Arc<Semaphore>,
     state: Mutex<State>,
 }
 
@@ -229,6 +231,7 @@ impl MediaService {
             ingest,
             read_secret,
             http,
+            snapshots: Arc::new(Semaphore::new(MAX_SNAPSHOT_ENCODERS)),
             state: Mutex::new(State {
                 ready: false,
                 viewers: HashMap::new(),
@@ -584,20 +587,44 @@ impl MediaService {
     }
 
     pub async fn snapshot(&self, camera: Uuid) -> Result<(Vec<u8>, u64), MediaError> {
+        let permit = Arc::clone(&self.snapshots)
+            .try_acquire_owned()
+            .map_err(|_| MediaError::Capacity)?;
         let frame = self
             .cameras
             .latest(camera)
             .filter(|frame| usable(frame))
             .ok_or(MediaError::Unavailable)?;
-        let age = frame
-            .captured_at
-            .elapsed()
-            .as_millis()
-            .min(u64::MAX as u128) as u64;
-        let jpeg = tokio::task::spawn_blocking(move || crate::evidence::encode(&frame, None))
+        let captured_at = frame.captured_at;
+        let scope = frame.scope;
+        let jpeg = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            crate::evidence::encode(&frame, None)
+        })
+        .await
+        .map_err(|_| MediaError::Unavailable)?
+        .ok_or(MediaError::Unavailable)?;
+        let current = self
+            .store
+            .camera(camera)
             .await
-            .map_err(|_| MediaError::Unavailable)?
-            .ok_or(MediaError::Unavailable)?;
+            .map_err(|error| match error {
+                sw_storage::StoreError::NotFound => MediaError::Missing,
+                _ => MediaError::Unavailable,
+            })?;
+        let age = captured_at.elapsed();
+        if !current.config.enabled
+            || scope.epoch != current.epoch
+            || scope.scene_revision != current.scene_revision
+            || age > STALE
+            || !self
+                .cameras
+                .latest(camera)
+                .is_some_and(|latest| latest.scope == scope && usable(&latest))
+        {
+            return Err(MediaError::Unavailable);
+        }
+        let age = u64::try_from(age.as_millis()).unwrap_or(u64::MAX);
         Ok((jpeg, age))
     }
 

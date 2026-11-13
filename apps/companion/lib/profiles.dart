@@ -333,7 +333,7 @@ final class ConsoleState extends ChangeNotifier {
             },
           );
       _poll = Timer.periodic(
-        const Duration(seconds: 4),
+        const Duration(seconds: 2),
         (_) => unawaited(refreshCameras()),
       );
       notifyListeners();

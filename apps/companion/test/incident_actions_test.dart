@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:stillwatch_companion/cameras.dart';
 import 'package:stillwatch_companion/incidents.dart';
 import 'package:stillwatch_companion/profiles.dart';
 import 'package:stillwatch_sdk/stillwatch_sdk.dart';
@@ -12,9 +13,27 @@ const _coreId = '8ea319b0-7752-4894-acfe-3f09cf4385c3';
 const _generation = '4cbadcf4-4f81-4729-a1a0-af03e4da8817';
 const _incidentId = 'ff99e874-0710-40fc-8ea3-bac894af062c';
 const _deviceId = '886fbeab-5fe2-44bb-9ed3-2254a23b092b';
+const _cameraId = 'bda823d1-2a02-413f-9d91-4138a3432ff1';
+const _jpeg =
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkS'
+    'Ew8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJ'
+    'CQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy'
+    'MjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAA'
+    'AAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAA'
+    'AAAABf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJ2AUHP/2Q==';
+const _camera = <String, Object?>{
+  'id': _cameraId,
+  'revision': '1',
+  'source_epoch': '3',
+  'scene_revision': '1',
+  'live': true,
+  'scene_review': 'unconfigured',
+  'config': {'name': 'Frame health QA', 'enabled': true},
+  'runtime': {'state': 'streaming', 'frame': '16', 'dropped': '0'},
+};
 const _incident = <String, Object?>{
   'id': _incidentId,
-  'camera_id': 'bda823d1-2a02-413f-9d91-4138a3432ff1',
+  'camera_id': _cameraId,
   'revision': '4',
   'evidence_version': '2',
   'evidence_packet_id': '5907fd70-fe2d-4413-bb42-55d1281ed822',
@@ -200,6 +219,46 @@ void main() {
       }
     },
   );
+
+  testWidgets('expires a preview and reports repeated camera pixels', (
+    tester,
+  ) async {
+    final core = (await tester.runAsync(_CoreFixture.start))!;
+    final console = core.console;
+    final tree = MaterialApp(
+      home: Scaffold(body: CameraGrid(console: console)),
+    );
+    try {
+      console.cameras = [Camera.fromJson(_camera)];
+      await tester.pumpWidget(tree);
+      for (var i = 0; i < 30 && find.byType(Image).evaluate().isEmpty; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 25)),
+        );
+        await tester.pump();
+      }
+      expect(find.byType(Image), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byType(Image), findsNothing);
+      expect(find.text('Repeated camera frame'), findsNothing);
+      console.cameras = [
+        Camera.fromJson({
+          ..._camera,
+          'runtime': {'state': 'unavailable', 'repeated_frame': true},
+        }),
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: CameraGrid(console: console)),
+        ),
+      );
+      expect(find.text('Repeated camera frame'), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(core.close);
+    }
+  });
 }
 
 final class _CoreFixture {
@@ -270,6 +329,10 @@ final class _CoreFixture {
       response.write(': ready\n\n');
       await response.flush();
       return;
+    } else if (path == '/api/v2/cameras/$_cameraId/snapshot.jpg') {
+      response.headers.contentType = ContentType('image', 'jpeg');
+      response.headers.set('X-Frame-Age-Ms', '3000');
+      response.add(base64Decode(_jpeg));
     } else {
       final value = switch (path) {
         '/bootstrap/info' => {
