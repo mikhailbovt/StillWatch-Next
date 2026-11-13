@@ -12,6 +12,9 @@
   "dependencies": {
     "firebase": "13.3.0"
   },
+  "overrides": {
+    "@grpc/grpc-js": "1.13.6"
+  },
   "devDependencies": {
     "esbuild": "0.28.1"
   }
