@@ -27,3 +27,9 @@ A second local pass sent timestamped RGB frames from the native capture worker d
 Five clips yielded no observations at the sampled times. The remaining three yielded seven weak observations total. Those results limit what the policy can recover with the same detector. The diagnostic cannot establish coverage between samples or the effect of a lower threshold. Repeat with `tools/benchmark/fire_observations.py`. The detailed trace is `.local/qualification/holdout/mmodal-fire/windows-observations-onset.json`, SHA-256 `1d14fb1e323cf66a9985d8a9ece1d3d072891d085fab802b606bd879479672eb`.
 
 Manifest SHA-256 `4731d9caedb1bc51ab8dcd297377ec0af0f753cf7bf85d28a23631db8f34c7f1`. The raw per-clip report is `.local/qualification/holdout/mmodal-fire/windows-report.json`, SHA-256 `3b5afc887bfbcbfbcfd1cca2842cd3a086b1580e7abb5c026b42b1fd71972cba`. Use `tools/benchmark/evaluate.py` to repeat the comparison with the manifest and identical media.
+
+## Frozen replay with the revised growth calculation
+
+An Ubuntu CPU run of `local-policy-2` used the same frozen manifest with no threshold tuning. It again matched 0/8 early flame or smoke onsets. Three late reviews appeared in the six flame clips. The two wood smoke clips produced no review. Water mist produced five reviews in 1,755 seconds. Dry ice produced none in 1,810 seconds. No negative clip produced an urgent incident. Differences from the earlier Windows run combine the policy change and the runtime host. The early-onset criterion remains unmet.
+
+Report `.local/qualification/fire-growth-repeat/mmodalfire-frozen-policy2.json`, SHA-256 `e01bb4028a2eb0add870af1e17ea03e0179199e663a70233079b1d6008ee9c3e`. The report records the Core, worker, ONNX Runtime and model pack digests.
