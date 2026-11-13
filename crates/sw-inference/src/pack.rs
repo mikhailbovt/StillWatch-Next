@@ -137,8 +137,14 @@ struct Entry {
     byte_length: u64,
     opset: u32,
     external_data: Vec<serde_json::Value>,
+    source: Source,
     input: Input,
     output: Output,
+}
+
+#[derive(Deserialize)]
+struct Source {
+    classes: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -169,10 +175,21 @@ struct Output {
 impl Entry {
     fn validate(&self, id: ModelId, profile: InputProfile) -> bool {
         let fire = matches!(id, ModelId::Fire);
+        let classes: &[(&str, &str)] = if fire {
+            &[("0", "smoke"), ("1", "fire")]
+        } else {
+            &[("0", "person")]
+        };
         self.artifact == format!("{}.onnx", id.name())
             && (1..=64 * 1024 * 1024).contains(&self.byte_length)
-            && self.opset == 17
+            && self.opset == crate::onnx::OPSET
             && self.external_data.is_empty()
+            && self
+                .source
+                .classes
+                .iter()
+                .map(|(index, name)| (index.as_str(), name.as_str()))
+                .eq(classes.iter().copied())
             && self.input.name == "images"
             && self.input.dtype == "float32"
             && self.input.shape == profile.input_shape()
@@ -196,6 +213,7 @@ impl Entry {
 pub struct ModelPack {
     root: PathBuf,
     manifest: Manifest,
+    graphs: BTreeMap<ModelId, Vec<u8>>,
 }
 
 impl ModelPack {
@@ -221,7 +239,24 @@ impl ModelPack {
         {
             return Err(InferenceError::Manifest);
         }
-        Ok(Self { root, manifest })
+        let mut graphs = BTreeMap::new();
+        for (&id, entry) in &manifest.models {
+            let path = root.join(&entry.artifact).canonicalize()?;
+            if path.parent() != Some(root.as_path()) {
+                return Err(InferenceError::Manifest);
+            }
+            let bytes = read_verified(&path, entry.byte_length, &entry.sha256)?;
+            if bytes.len() as u64 != entry.byte_length {
+                return Err(InferenceError::ArtifactSize);
+            }
+            crate::onnx::validate(&bytes, &entry.input.shape, &entry.output.shape)?;
+            graphs.insert(id, bytes);
+        }
+        Ok(Self {
+            root,
+            manifest,
+            graphs,
+        })
     }
 
     pub fn profile(&self) -> InputProfile {
@@ -234,21 +269,14 @@ impl ModelPack {
             .models
             .get(&id)
             .ok_or(InferenceError::Manifest)?;
-        let bytes = read_verified(
-            &self.root.join(&entry.artifact),
-            entry.byte_length,
-            &entry.sha256,
-        )?;
-        if bytes.len() as u64 != entry.byte_length {
-            return Err(InferenceError::ArtifactSize);
-        }
+        let bytes = self.graphs.get(&id).ok_or(InferenceError::Manifest)?;
         Model::open(
             runtime,
             id,
             self.profile(),
             &entry.input.shape,
             &entry.output.shape,
-            &bytes,
+            bytes,
         )
     }
 

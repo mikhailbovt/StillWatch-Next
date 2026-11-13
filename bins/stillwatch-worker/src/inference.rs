@@ -47,14 +47,10 @@ pub fn run() -> Result<()> {
         .and_then(|pose| pack.load(&runtime, ModelId::Fire).map(|fire| (pose, fire)))
     {
         Ok(models) => models,
-        Err(
-            InferenceError::Io(_) | InferenceError::DigestMismatch | InferenceError::ArtifactSize,
-        ) => {
-            return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE);
-        }
         Err(_) => return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED),
     };
     let mut prepare = Preprocessor::new(pack.profile());
+    drop(pack);
     let mut pixels = Vec::new();
     if using_cuda {
         // The first CUDA call can load and compile kernels. Keep that work within

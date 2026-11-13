@@ -158,6 +158,15 @@ final class Camera {
   String get state => text(runtime, 'state');
 }
 
+final class AnalysisOrigin {
+  AnalysisOrigin.fromJson(Json value)
+    : modelManifestSha256 = text(value, 'model_manifest_sha256'),
+      policyVersion = text(value, 'policy_version');
+
+  final String modelManifestSha256;
+  final String policyVersion;
+}
+
 final class Incident {
   Incident.fromJson(Json value)
     : id = uuid(value['id']),
@@ -169,6 +178,9 @@ final class Incident {
           : uuid(value['evidence_packet_id']),
       category = text(value, 'category'),
       reason = text(value, 'detection_reason'),
+      analysisOrigin = value['analysis_origin'] == null
+          ? null
+          : AnalysisOrigin.fromJson(object(value['analysis_origin'])),
       assessment = text(value, 'assessment'),
       attention = text(value, 'attention'),
       attentionCycle = counter(value['attention_cycle']),
@@ -185,6 +197,7 @@ final class Incident {
   final String? packetId;
   final String category;
   final String reason;
+  final AnalysisOrigin? analysisOrigin;
   final String assessment;
   final String attention;
   final String attentionCycle;

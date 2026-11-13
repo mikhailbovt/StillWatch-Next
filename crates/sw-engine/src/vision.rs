@@ -208,7 +208,8 @@ impl VisionScheduler {
         let mut attempt = 0u32;
         let mut last_camera = None;
         let mut policies = HashMap::<Uuid, HazardPolicies>::new();
-        let mut pending = PendingHazards::new(self.store.clone(), evidence);
+        let mut pending =
+            PendingHazards::new(self.store.clone(), evidence, &self.config.manifest_sha256);
         while !*shutdown.borrow() {
             self.phase(lane, AnalysisState::Starting, None);
             let process = tokio::select! {

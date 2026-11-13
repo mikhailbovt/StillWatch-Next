@@ -1493,6 +1493,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef0b569d1d907ab3a28596aee62cf1f61dacb0529a4bedcd8e7460e2d5228b4"
+dependencies = [
+ "bytes",
+]
+
+[[package]]
 name = "qrcode"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2202,6 +2211,7 @@ dependencies = [
  "sw-domain",
  "sw-inference",
  "sw-protocol",
+ "tempfile",
  "uuid",
 ]
 
@@ -2291,6 +2301,7 @@ name = "sw-inference"
 version = "0.1.0"
 dependencies = [
  "ort",
+ "prost",
  "serde",
  "serde_json",
  "sha2",

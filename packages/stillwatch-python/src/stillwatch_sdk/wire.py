@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import UUID
 
 
@@ -32,6 +32,11 @@ class Camera(TypedDict):
     dimensions: dict[str, int] | None
 
 
+class AnalysisOrigin(TypedDict):
+    model_manifest_sha256: str
+    policy_version: str
+
+
 class Incident(TypedDict):
     id: str
     camera_id: str
@@ -44,6 +49,7 @@ class Incident(TypedDict):
     category: str
     assessment: str
     live: bool
+    analysis_origin: NotRequired[AnalysisOrigin]
 
 
 def counter(value: Any) -> str:

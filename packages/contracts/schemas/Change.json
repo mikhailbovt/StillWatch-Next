@@ -83,6 +83,21 @@
         "acknowledged_at"
       ]
     },
+    "AnalysisOrigin": {
+      "type": "object",
+      "properties": {
+        "model_manifest_sha256": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_manifest_sha256",
+        "policy_version"
+      ]
+    },
     "Assessment": {
       "type": "string",
       "enum": [
@@ -135,6 +150,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Acknowledgement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analysis_origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisOrigin"
             },
             {
               "type": "null"

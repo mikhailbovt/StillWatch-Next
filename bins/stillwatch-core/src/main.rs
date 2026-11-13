@@ -21,7 +21,7 @@ use sw_engine::{
 };
 use sw_protocol::{
     PairingProfile, SemanticRoute,
-    worker::{CudaConfig, InferenceConfig},
+    worker::{CudaConfig, InferenceConfig, MODEL_SELECTION_MAX_BYTES, ModelSelection},
 };
 use sw_storage::{CameraLimits, Store, StoreConfig};
 use tokio::{net::TcpListener, sync::watch};
@@ -82,6 +82,12 @@ struct Config {
     cuda_provider_sha256: Option<String>,
     #[arg(long, requires = "cuda_device")]
     cuda_shared_sha256: Option<String>,
+    /// Read the administrator's validated model selection at startup.
+    #[arg(long)]
+    model_selection_file: Option<PathBuf>,
+    /// Warm the selected inference worker and check readiness without opening cameras.
+    #[arg(long)]
+    check_inference: bool,
     /// JSON settings from the installation administrator.
     #[arg(long)]
     settings_file: Option<PathBuf>,
@@ -155,6 +161,54 @@ fn main() -> Result<()> {
         let settings: Settings = serde_json::from_slice(&bytes).context("invalid Core settings")?;
         settings.apply(&mut config);
     }
+    if let Some(path) = config.model_selection_file.as_deref() {
+        use std::io::Read;
+
+        ensure!(
+            config.model_pack.is_none()
+                && config.model_manifest_sha256.is_none()
+                && config.ort_library.is_none()
+                && config.ort_library_sha256.is_none()
+                && config.cuda_device.is_none()
+                && config.cuda_provider_sha256.is_none()
+                && config.cuda_shared_sha256.is_none(),
+            "configure a model selection file or explicit model runtime settings"
+        );
+        let file = std::fs::File::open(path).context("open validated model selection")?;
+        let mut bytes = Vec::new();
+        file.take(MODEL_SELECTION_MAX_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .context("read validated model selection")?;
+        ensure!(
+            bytes.len() <= MODEL_SELECTION_MAX_BYTES,
+            "model selection exceeds the size limit"
+        );
+        let selected: ModelSelection =
+            serde_json::from_slice(&bytes).context("invalid model selection")?;
+        ensure!(
+            selected.models.is_absolute() && selected.library.is_absolute(),
+            "model selection must use absolute paths"
+        );
+        config.model_pack = Some(selected.models);
+        config.model_manifest_sha256 = Some(selected.manifest_sha256);
+        config.ort_library = Some(selected.library);
+        config.ort_library_sha256 = Some(selected.library_sha256);
+        if let Some(cuda) = selected.cuda {
+            config.cuda_device = Some(cuda.device);
+            config.cuda_provider_sha256 = Some(cuda.provider_sha256);
+            config.cuda_shared_sha256 = Some(cuda.shared_sha256);
+        }
+    }
+    if config.check_inference {
+        let inference = inference_config(&config)?.context("no model pack configured")?;
+        let worker = WorkerBinary::open(&worker_path(&config)?)?;
+        let lanes = usize::from(config.inference_workers);
+        runtime()?.block_on(sw_engine::verify_inference_startup(
+            &worker, &inference, lanes,
+        ))?;
+        println!("StillWatch inference workers are ready ({lanes})");
+        return Ok(());
+    }
     #[cfg(windows)]
     if config.service {
         return scm::start(config);
@@ -168,6 +222,7 @@ struct Settings {
     lan_listen: Option<SocketAddr>,
     lan_advertise: Option<bool>,
     https_proxy: Option<proxy::ProxySettings>,
+    model_selection_file: Option<PathBuf>,
     model_pack: Option<PathBuf>,
     model_manifest_sha256: Option<String>,
     ort_library: Option<PathBuf>,
@@ -201,6 +256,10 @@ impl Settings {
         config.lan_listen = config.lan_listen.or(self.lan_listen);
         config.lan_advertise |= self.lan_advertise.unwrap_or(false);
         config.https_proxy = self.https_proxy;
+        config.model_selection_file = config
+            .model_selection_file
+            .take()
+            .or(self.model_selection_file);
         config.model_pack = config.model_pack.take().or(self.model_pack);
         config.model_manifest_sha256 = config
             .model_manifest_sha256
@@ -327,14 +386,7 @@ async fn serve(
         "invalid history retention days"
     );
     let history_retention_ms = i64::from(config.history_retention_days) * 86_400_000;
-    let worker_path = config
-        .worker
-        .unwrap_or(std::env::current_exe()?.with_file_name(if cfg!(windows) {
-            "stillwatch-worker.exe"
-        } else {
-            "stillwatch-worker"
-        }));
-    let worker = WorkerBinary::open(&worker_path).ok();
+    let worker = WorkerBinary::open(&worker_path(&config)?).ok();
     if worker.is_none() {
         eprintln!("StillWatch capture worker unavailable");
     }
@@ -343,60 +395,7 @@ async fn serve(
         raw_bytes: config.raw_frame_bytes,
     };
     let inference_workers = usize::from(config.inference_workers);
-    let cuda = match (
-        config.cuda_device,
-        config.cuda_provider_sha256,
-        config.cuda_shared_sha256,
-    ) {
-        (Some(device), Some(provider_sha256), Some(shared_sha256)) => {
-            ensure!(
-                inference_workers == 1 && config.model_pack.is_some(),
-                "CUDA requires one worker per GPU and a model pack"
-            );
-            ensure!(
-                valid_digest(&provider_sha256) && valid_digest(&shared_sha256),
-                "CUDA library digests must be SHA-256 hex"
-            );
-            Some(CudaConfig {
-                device,
-                provider_sha256,
-                shared_sha256,
-            })
-        }
-        (None, None, None) => None,
-        _ => anyhow::bail!("CUDA runtime configuration is incomplete"),
-    };
-    let available = std::thread::available_parallelism().map_or(1, usize::from);
-    ensure!(
-        inference_workers == 1
-            || inference_workers * usize::from(config.inference_threads) <= available,
-        "configured inference workers and threads exceed available logical CPUs"
-    );
-    let inference = match (
-        config.model_pack,
-        config.model_manifest_sha256,
-        config.ort_library,
-        config.ort_library_sha256,
-    ) {
-        (Some(models), Some(manifest_sha256), Some(library), Some(library_sha256)) => {
-            ensure!(
-                [&manifest_sha256, &library_sha256]
-                    .into_iter()
-                    .all(|digest| valid_digest(digest)),
-                "model and runtime digests must be SHA-256 hex"
-            );
-            Some(InferenceConfig {
-                models: std::path::absolute(models)?,
-                manifest_sha256,
-                library: std::path::absolute(library)?,
-                library_sha256,
-                threads: usize::from(config.inference_threads),
-                cuda,
-            })
-        }
-        (None, None, None, None) => None,
-        _ => anyhow::bail!("model pack configuration is incomplete"),
-    };
+    let inference = inference_config(&config)?;
     let dir = config.data_dir;
     let media_root = dir.clone();
     let source_root = config.replay_root;
@@ -675,6 +674,75 @@ async fn maintain_storage(
                 }
             }
         }
+    }
+}
+
+fn worker_path(config: &Config) -> Result<PathBuf> {
+    if let Some(path) = &config.worker {
+        return Ok(path.clone());
+    }
+    Ok(std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "stillwatch-worker.exe"
+    } else {
+        "stillwatch-worker"
+    }))
+}
+
+fn inference_config(config: &Config) -> Result<Option<InferenceConfig>> {
+    let inference_workers = usize::from(config.inference_workers);
+    let cuda = match (
+        config.cuda_device,
+        &config.cuda_provider_sha256,
+        &config.cuda_shared_sha256,
+    ) {
+        (Some(device), Some(provider_sha256), Some(shared_sha256)) => {
+            ensure!(
+                inference_workers == 1 && config.model_pack.is_some(),
+                "CUDA requires one worker per GPU and a model pack"
+            );
+            ensure!(
+                valid_digest(provider_sha256) && valid_digest(shared_sha256),
+                "CUDA library digests must be SHA-256 hex"
+            );
+            Some(CudaConfig {
+                device,
+                provider_sha256: provider_sha256.clone(),
+                shared_sha256: shared_sha256.clone(),
+            })
+        }
+        (None, None, None) => None,
+        _ => anyhow::bail!("CUDA runtime configuration is incomplete"),
+    };
+    let threads = usize::from(config.inference_threads);
+    let available = std::thread::available_parallelism().map_or(1, usize::from);
+    ensure!(
+        inference_workers == 1 || inference_workers * threads <= available,
+        "configured inference workers and threads exceed available logical CPUs"
+    );
+    match (
+        &config.model_pack,
+        &config.model_manifest_sha256,
+        &config.ort_library,
+        &config.ort_library_sha256,
+    ) {
+        (Some(models), Some(manifest_sha256), Some(library), Some(library_sha256)) => {
+            ensure!(
+                [manifest_sha256, library_sha256]
+                    .into_iter()
+                    .all(|digest| valid_digest(digest)),
+                "model and runtime digests must be SHA-256 hex"
+            );
+            Ok(Some(InferenceConfig {
+                models: std::path::absolute(models)?,
+                manifest_sha256: manifest_sha256.clone(),
+                library: std::path::absolute(library)?,
+                library_sha256: library_sha256.clone(),
+                threads,
+                cuda,
+            }))
+        }
+        (None, None, None, None) => Ok(None),
+        _ => anyhow::bail!("model pack configuration is incomplete"),
     }
 }
 

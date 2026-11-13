@@ -22,6 +22,26 @@ stillwatch-worker capture-doctor
 stillwatch-worker doctor ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256
 ~~~
 
+## Replace a model pack
+
+Stage the complete new pack in a separate versioned directory owned by the administrator. Preserve the previous pack. The worker checks the class map, hashes, ONNX operators, opset, and tensor declarations before opening sessions. The current profile uses embedded weights.
+
+For atomic selection, set `model_selection_file` in core.json to an absolute file path in a protected directory. On Linux, use `STILLWATCH_SETTINGS_FILE` to load that core.json and remove model and CUDA assignments from the service environment. The service account needs read access to the selection, pack, and runtime. Run the command below from the installed worker directory with the trusted digests. For a CUDA deployment, append `--cuda DEVICE CUDA_PROVIDER_SHA256 ORT_SHARED_PROVIDER_SHA256` and perform activation on the selected GPU host.
+
+~~~text
+stillwatch-worker activate-model-pack SELECTION_FILE ORT_LIBRARY ORT_SHA256 STAGED_PACK MANIFEST_SHA256
+~~~
+
+The command compares all three models with the reference fixtures on the selected execution provider and atomically replaces the selection file after the checks pass. A running service keeps its current sessions. Use the following command with the service's OS account, runtime paths and worker settings to check the activation without binding listeners or opening the data directory. On a dedicated GPU, allow a maintenance window if the previous workers occupy the GPU's available memory.
+
+~~~text
+stillwatch-core --check-inference --data-dir DATA --settings-file SETTINGS_JSON
+~~~
+
+Restart Core during the maintenance window and confirm fresh results on active cameras. Newly created incidents record the manifest digest and local policy version. To roll back, run the activation command with the previous pack and runtime, then repeat the readiness check and restart.
+
+## Windows package build and upgrade
+
 The Windows Core build uses WiX 5.0.2 and its `WixToolset.Util.wixext/5.0.2` extension. Use `wix extension add -g WixToolset.Util.wixext/5.0.2` on the packaging machine. The minimal Windows libav build uses the Win32-thread variant of the x64 MinGW compiler.
 
 Windows installers take the three-component product version from the staged manifest. For major upgrades, install a strictly higher version with the same product family after taking an offline backup. Keep the prior installer and compatible data together for rollback. If rolling back, stop and remove the newer product, restore the compatible backup with its original access permissions, and install the earlier version. Verify that `LocalService` can access `ProgramData\StillWatch` and that permissions still exclude other interactive users. A file copy that drops the service ACL can cause Windows Installer error 1920 during startup.

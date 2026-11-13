@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod activate;
 mod capture;
 mod inference;
 mod parity;
@@ -13,7 +14,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::json;
 use sw_capture::{Decoder, PtsQuality, ReadLimits};
-use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig};
+use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig, ModelSelection};
 
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
@@ -43,23 +44,31 @@ fn main() -> Result<()> {
         }
         [
             command,
+            selection,
+            library,
+            library_sha,
+            pack,
+            manifest_sha,
+            flags @ ..,
+        ] if command == "activate-model-pack" => activate::publish(
+            Path::new(selection),
+            ModelSelection {
+                library: Path::new(library).canonicalize()?,
+                library_sha256: text_arg(library_sha)?.to_ascii_lowercase(),
+                models: Path::new(pack).canonicalize()?,
+                manifest_sha256: text_arg(manifest_sha)?.to_ascii_lowercase(),
+                cuda: cuda_args(flags)?,
+            },
+        ),
+        [
+            command,
             library,
             library_sha,
             model_pack,
             manifest_sha,
             flags @ ..,
         ] if command == "doctor" || command == "verify-model-pack" => {
-            let cuda = match flags {
-                [] => None,
-                [option, device, provider, shared] if option == "--cuda" => {
-                    Some(inference::cuda_provider(CudaConfig {
-                        device: text_arg(device)?.parse()?,
-                        provider_sha256: text_arg(provider)?.to_owned(),
-                        shared_sha256: text_arg(shared)?.to_owned(),
-                    }))
-                }
-                _ => bail!("expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256"),
-            };
+            let cuda = cuda_args(flags)?.map(inference::cuda_provider);
             let library = Path::new(library);
             let library_sha = text_arg(library_sha)?;
             let model_pack = Path::new(model_pack);
@@ -81,8 +90,20 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "usage: stillwatch-worker decode-file VIDEO COUNT | verify-model-pack ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256"
+            "usage: stillwatch-worker decode-file VIDEO COUNT | verify-model-pack ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256 | activate-model-pack SELECTION_FILE ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256"
         ),
+    }
+}
+
+fn cuda_args(flags: &[OsString]) -> Result<Option<CudaConfig>> {
+    match flags {
+        [] => Ok(None),
+        [option, device, provider, shared] if option == "--cuda" => Ok(Some(CudaConfig {
+            device: text_arg(device)?.parse()?,
+            provider_sha256: text_arg(provider)?.to_ascii_lowercase(),
+            shared_sha256: text_arg(shared)?.to_ascii_lowercase(),
+        })),
+        _ => bail!("expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256"),
     }
 }
 

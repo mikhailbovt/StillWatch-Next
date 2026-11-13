@@ -49,6 +49,10 @@ pub fn incident(item: domain::Incident) -> Result<wire::Incident, ApiError> {
             domain::Category::Overview => wire::Category::Overview,
         },
         detection_reason: item.detection_reason,
+        analysis_origin: item.analysis_origin.map(|origin| wire::AnalysisOrigin {
+            model_manifest_sha256: origin.model_manifest_sha256,
+            policy_version: origin.policy_version,
+        }),
         assessment: match item.assessment {
             domain::Assessment::Unknown => wire::Assessment::Unknown,
             domain::Assessment::NoVisibleConcern => wire::Assessment::NoVisibleConcern,

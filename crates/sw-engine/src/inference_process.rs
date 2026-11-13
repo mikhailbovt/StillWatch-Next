@@ -132,6 +132,28 @@ impl InferenceProcess {
     }
 }
 
+/// Check that the same worker bootstrap used by Core reaches ready.
+pub async fn verify_inference_startup(
+    binary: &WorkerBinary,
+    config: &InferenceConfig,
+    lanes: usize,
+) -> Result<(), WorkerError> {
+    let mut workers = Vec::with_capacity(lanes);
+    let startup = async {
+        for _ in 0..lanes {
+            workers.push(InferenceProcess::start(binary, config).await?);
+        }
+        Ok(())
+    }
+    .await;
+    let mut result = startup;
+    for worker in workers {
+        let stopped = worker.stop().await;
+        result = result.and(stopped);
+    }
+    result
+}
+
 impl Drop for InferenceProcess {
     fn drop(&mut self) {
         if let Some(child) = &mut self.child {

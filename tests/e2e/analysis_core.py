@@ -74,12 +74,15 @@ def run(args):
 
             incident = until(committed_evidence, 12)
             assert incident["attention"] == "review" and not incident["live"]
+            origin = incident["analysis_origin"]
+            assert origin["model_manifest_sha256"] == manifest
             path = f"/api/v2/incidents/{incident['id']}/evidence/{incident['evidence_packet_id']}"
             status, packet = client.call("GET", path)
             assert status == 200, (status, packet)
             assert packet["camera_id"] == incident["camera_id"]
             assert packet["source_epoch"] == incident["source_epoch"]
             assert packet["context"]["local_facts"]["type"] == "fire"
+            assert packet["context"]["policy_version"] == origin["policy_version"]
             assert "non_live" in packet["context"]["limitations"]
             assert any(image["kind"] == "overview" and image["availability"] == "available" for image in packet["images"])
             for image in packet["images"]:
@@ -87,9 +90,12 @@ def run(args):
                 assert status == 200 and hashlib.sha256(body).hexdigest() == image["sha256"]
             with closing(sqlite3.connect(root / "data" / "stillwatch.sqlite3")) as db:
                 assert db.execute("select count(*) from notification_outbox").fetchone() == (0,)
+                row = db.execute("select state from incidents where id = ?", (uuid.UUID(incident["id"]).bytes,)).fetchone()
+                assert json.loads(row[0])["analysis_origin"] == origin
             print(json.dumps({"native_ort": True, "supervised_worker": True, "sources": 2,
                               "people_observed": True, "fire_or_smoke_observed": True,
-                              "persisted_evidence": True, "replay_did_not_enqueue_alert": True}))
+                              "persisted_evidence": True, "analysis_origin_persisted": True,
+                              "replay_did_not_enqueue_alert": True}))
         if args.mediamtx:
             verify_live_outbox(args, root, model_options)
         if args.worker_faults:

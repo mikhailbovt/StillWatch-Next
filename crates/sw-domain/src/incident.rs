@@ -85,12 +85,20 @@ pub struct Resolution {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AnalysisOrigin {
+    pub model_manifest_sha256: String,
+    pub policy_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Incident {
     pub id: Uuid,
     pub scope: SourceScope,
     pub revision: u64,
     pub category: Category,
     pub detection_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_origin: Option<AnalysisOrigin>,
     pub first_source_us: i64,
     pub last_source_us: i64,
     pub live: bool,
@@ -114,6 +122,8 @@ pub struct NewIncident {
     pub scope: SourceScope,
     pub category: Category,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_origin: Option<AnalysisOrigin>,
     pub first_source_us: i64,
     pub last_source_us: i64,
     pub live: bool,
@@ -201,6 +211,7 @@ impl Incident {
             revision: 1,
             category: new.category,
             detection_reason: new.reason,
+            analysis_origin: new.analysis_origin,
             first_source_us: new.first_source_us,
             last_source_us: new.last_source_us,
             live: new.live,
@@ -492,6 +503,7 @@ mod tests {
                 },
                 category: Category::Medical,
                 reason: "observed posture change".into(),
+                analysis_origin: None,
                 first_source_us: 0,
                 last_source_us: 50_000,
                 live,

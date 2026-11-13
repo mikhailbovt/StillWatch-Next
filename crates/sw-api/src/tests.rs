@@ -59,6 +59,7 @@ async fn operator_commands_return_committed_revisions_and_problem_details() {
                 },
                 category: Category::Fire,
                 reason: "visible smoke".into(),
+                analysis_origin: None,
                 first_source_us: 0,
                 last_source_us: 600_000,
                 live: true,

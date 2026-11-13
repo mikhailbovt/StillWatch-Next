@@ -34,6 +34,7 @@ export type Lifecycle = "open" | "resolved";
 
 export interface Incident {
   acknowledgement?: Acknowledgement | null;
+  analysis_origin?: AnalysisOrigin | null;
   assessment: Assessment;
   attention: Attention;
   attention_cycle: Counter;
@@ -58,6 +59,11 @@ export interface Incident {
 export interface Acknowledgement {
   acknowledged_at: UtcTimestamp;
   actor_id: string;
+  [k: string]: unknown;
+}
+export interface AnalysisOrigin {
+  model_manifest_sha256: string;
+  policy_version: string;
   [k: string]: unknown;
 }
 export interface Resolution {

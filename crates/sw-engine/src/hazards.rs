@@ -5,9 +5,9 @@ use std::{
 };
 
 use sw_domain::{
-    Assessment, Box2d, Category, DomainError, EvidenceStamp, FireDecision, FireEpisode, FirePolicy,
-    FireSample, FireSettings, HazardPolicy, MedicalCandidate, MedicalReason, MedicalRules,
-    MedicalSample, MotionPhase, NewIncident, SourceScope, Visibility,
+    AnalysisOrigin, Assessment, Box2d, Category, DomainError, EvidenceStamp, FireDecision,
+    FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy, MedicalCandidate,
+    MedicalReason, MedicalRules, MedicalSample, MotionPhase, NewIncident, SourceScope, Visibility,
 };
 use sw_protocol::{
     Counter, Dimensions, EvidenceContext, EvidenceInterval, EvidenceLimitation, EvidenceVisibility,
@@ -306,6 +306,7 @@ pub(crate) struct PendingHazards {
     queue: VecDeque<Batch>,
     store: Store,
     evidence: Arc<EvidenceSampler>,
+    origin: AnalysisOrigin,
     retry_at: Option<tokio::time::Instant>,
 }
 
@@ -320,11 +321,15 @@ enum Pending {
 }
 
 impl PendingHazards {
-    pub fn new(store: Store, evidence: Arc<EvidenceSampler>) -> Self {
+    pub fn new(store: Store, evidence: Arc<EvidenceSampler>, model_manifest_sha256: &str) -> Self {
         Self {
             queue: VecDeque::new(),
             store,
             evidence,
+            origin: AnalysisOrigin {
+                model_manifest_sha256: model_manifest_sha256.to_ascii_lowercase(),
+                policy_version: POLICY_VERSION.into(),
+            },
             retry_at: None,
         }
     }
@@ -364,7 +369,14 @@ impl PendingHazards {
         {
             let result = match pending {
                 Pending::Evidence(hazard) => {
-                    persist(&self.store, &self.evidence, &batch.frame, hazard).await
+                    persist(
+                        &self.store,
+                        &self.evidence,
+                        &batch.frame,
+                        hazard,
+                        &self.origin,
+                    )
+                    .await
                 }
                 Pending::Recovery(incident) => match batch.frame.frame.header.source_micros {
                     Some(source_us)
@@ -405,6 +417,7 @@ async fn persist(
     evidence: &Arc<EvidenceSampler>,
     frame: &Arc<CameraFrame>,
     hazard: &Hazard,
+    origin: &AnalysisOrigin,
 ) -> Result<(), StoreError> {
     let now = utc_ms();
     let new = NewIncident {
@@ -412,6 +425,7 @@ async fn persist(
         scope: frame.scope,
         category: hazard.category(),
         reason: hazard.reason.into(),
+        analysis_origin: Some(origin.clone()),
         first_source_us: hazard.first_source_us.min(hazard.source_us),
         last_source_us: hazard.source_us,
         live: frame.live,
@@ -464,7 +478,7 @@ async fn persist(
         coverage,
         local_facts: hazard.facts,
         limitations,
-        policy_version: POLICY_VERSION.into(),
+        policy_version: origin.policy_version.clone(),
         prompt_version: match hazard.category() {
             Category::Fire => "fire-evidence-1",
             Category::Medical => "medical-evidence-1",

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod appearance;
+mod onnx;
 mod pack;
 mod postprocess;
 mod preprocess;
@@ -34,6 +35,8 @@ pub enum InferenceError {
     DigestMismatch,
     #[error("model manifest is invalid or has an unsupported profile")]
     Manifest,
+    #[error("ONNX graph is invalid or outside the supported model profile")]
+    ModelGraph,
     #[error("model or runtime artifact exceeds its declared size limit")]
     ArtifactSize,
     #[error("the process already loaded a different ONNX Runtime library")]

@@ -285,6 +285,7 @@ fn import_incidents(
                 },
                 category,
                 reason,
+                analysis_origin: None,
                 first_source_us: scaled(old.first_ts, 1_000_000.0)?,
                 last_source_us: scaled(old.last_ts, 1_000_000.0)?,
                 live: false,

@@ -7,6 +7,7 @@ pub use crate::{MaskRect, REGION_UNITS as MASK_UNITS};
 use serde::{Deserialize, Serialize};
 
 pub const CONFIG_MAX_BYTES: usize = 16 * 1024;
+pub const MODEL_SELECTION_MAX_BYTES: usize = 12 * 1024;
 /// A valid capture request whose configured source cannot be opened or decoded.
 pub const CAPTURE_SOURCE_EXIT: i32 = 4;
 /// SChannel can take several seconds to validate a cold certificate chain.
@@ -82,6 +83,18 @@ pub struct InferenceConfig {
     pub models: PathBuf,
     pub manifest_sha256: String,
     pub threads: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cuda: Option<CudaConfig>,
+}
+
+/// Administrator-owned selection written after validating and warming the pack.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSelection {
+    pub library: PathBuf,
+    pub library_sha256: String,
+    pub models: PathBuf,
+    pub manifest_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cuda: Option<CudaConfig>,
 }

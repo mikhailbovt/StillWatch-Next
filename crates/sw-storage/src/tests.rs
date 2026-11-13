@@ -27,6 +27,7 @@ fn incident() -> NewIncident {
         },
         category: Category::Medical,
         reason: "observed posture change".into(),
+        analysis_origin: None,
         first_source_us: 0,
         last_source_us: 50_000,
         live: true,

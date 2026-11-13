@@ -13,6 +13,16 @@
         }
       ]
     },
+    "analysis_origin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisOrigin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "assessment": {
       "$ref": "#/$defs/Assessment"
     },
@@ -117,6 +127,21 @@
       "required": [
         "actor_id",
         "acknowledged_at"
+      ]
+    },
+    "AnalysisOrigin": {
+      "type": "object",
+      "properties": {
+        "model_manifest_sha256": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_manifest_sha256",
+        "policy_version"
       ]
     },
     "Assessment": {

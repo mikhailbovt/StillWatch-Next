@@ -336,7 +336,10 @@ impl Database {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = get_incident(&tx, new.id)?;
-        if current.scope != new.scope || current.category != new.category {
+        if current.scope != new.scope
+            || current.category != new.category
+            || current.analysis_origin != new.analysis_origin
+        {
             return Err(sw_domain::DomainError::Stale.into());
         }
         if current.resolution.is_some() || current.last_source_us >= new.last_source_us {

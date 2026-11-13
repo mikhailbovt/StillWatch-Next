@@ -103,6 +103,13 @@ pub struct Resolution {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AnalysisOrigin {
+    pub model_manifest_sha256: String,
+    pub policy_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Incident {
     pub id: Uuid,
     pub camera_id: Uuid,
@@ -114,6 +121,8 @@ pub struct Incident {
     pub evidence_state: EvidenceState,
     pub category: Category,
     pub detection_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_origin: Option<AnalysisOrigin>,
     pub assessment: Assessment,
     pub attention: Attention,
     pub attention_cycle: Counter,

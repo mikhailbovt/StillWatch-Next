@@ -16,6 +16,7 @@ sw-capture.workspace = true
 sw-domain.workspace = true
 sw-inference.workspace = true
 sw-protocol = { workspace = true, features = ["worker"] }
+tempfile.workspace = true
 uuid.workspace = true
 
 [lints]
