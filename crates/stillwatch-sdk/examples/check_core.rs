@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use stillwatch_sdk::{
-    Client, DeviceKey, DeviceSession, Error, PairedEndpoint, StreamMessage, enroll,
-    protocol::PairingOffer,
+    ChangeStream, Client, DeviceKey, DeviceSession, Error, PairedEndpoint, StreamMessage, enroll,
+    protocol::{Change, ChangeKind, Cursor, PairingOffer, ProblemCode},
 };
 use uuid::Uuid;
 
@@ -12,6 +12,31 @@ use uuid::Uuid;
 struct Input {
     offer: PairingOffer,
     camera: Uuid,
+    reconnect_markers: Option<PathBuf>,
+}
+
+async fn next_change(changes: &mut ChangeStream) -> anyhow::Result<Box<Change>> {
+    while let Some(message) = changes.next().await {
+        match message {
+            Ok(StreamMessage::Change(change)) => return Ok(change),
+            Err(
+                Error::Transport
+                | Error::Deadline
+                | Error::Http {
+                    status: 502 | 503 | 504,
+                    ..
+                },
+            ) => {}
+            other => anyhow::bail!("expected a scoped change, received {other:?}"),
+        }
+    }
+    anyhow::bail!("change stream ended")
+}
+
+fn incident(change: &Change) -> &stillwatch_sdk::protocol::Incident {
+    match &change.kind {
+        ChangeKind::IncidentOpened(item) | ChangeKind::IncidentUpdated(item) => item,
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -53,15 +78,45 @@ async fn main() -> anyhow::Result<()> {
     assert_eq!(cameras.cameras.len(), 1);
     assert_eq!(cameras.cameras[0].id, input.camera);
     let mut changes = client.changes(client.snapshot().await?.cursor);
-    let result = tokio::time::timeout(Duration::from_secs(30), changes.next()).await?;
-    let Some(Ok(StreamMessage::Change(change))) = result else {
-        anyhow::bail!("expected a scoped change");
-    };
-    let item = match change.kind {
-        stillwatch_sdk::protocol::ChangeKind::IncidentOpened(item)
-        | stillwatch_sdk::protocol::ChangeKind::IncidentUpdated(item) => item,
-    };
-    assert_eq!(item.camera_id, input.camera);
+    if let Some(directory) = &input.reconnect_markers {
+        std::fs::File::create_new(directory.join("ready-rust"))?;
+    }
+    let first = tokio::time::timeout(Duration::from_secs(30), next_change(&mut changes)).await??;
+    assert_eq!(incident(&first).camera_id, input.camera);
+    if let Some(directory) = &input.reconnect_markers {
+        assert_eq!(incident(&first).detection_reason, "fixture 0");
+        std::fs::File::create_new(directory.join("after-first-rust"))?;
+        let next =
+            tokio::time::timeout(Duration::from_secs(45), next_change(&mut changes)).await??;
+        assert_eq!(incident(&next).camera_id, input.camera);
+        assert_eq!(incident(&next).detection_reason, "fixture 1000");
+        assert_eq!(next.stream_generation, first.stream_generation);
+        assert!(next.sequence > first.sequence);
+        drop(changes);
+
+        let mut expired = client.changes(Cursor {
+            generation: Uuid::new_v4(),
+            sequence: next.sequence,
+        });
+        let Some(Err(error @ Error::Http { status: 409, .. })) =
+            tokio::time::timeout(Duration::from_secs(5), expired.next()).await?
+        else {
+            anyhow::bail!("expected a cursor expiration problem");
+        };
+        assert_eq!(
+            error.problem().map(|value| value.code),
+            Some(ProblemCode::CursorExpired)
+        );
+        let fresh = client.snapshot().await?;
+        assert_eq!(fresh.cursor, next.cursor());
+        assert_eq!(fresh.incidents.len(), 2);
+        assert!(
+            fresh
+                .incidents
+                .iter()
+                .all(|item| item.camera_id == input.camera)
+        );
+    }
     println!("rust pairing and scoped SSE verified");
     Ok(())
 }

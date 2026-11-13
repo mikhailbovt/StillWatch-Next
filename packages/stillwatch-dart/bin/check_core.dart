@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -46,14 +47,71 @@ Future<void> main(List<String> arguments) async {
       'Camera scope mismatch',
     );
     final cursor = (reads[0] as Snapshot).cursor;
-    final change = await client
-        .changes(cursor: cursor)
-        .first
-        .timeout(const Duration(seconds: 30));
-    check(
-      change.incident?.cameraId == options['camera'],
-      'Event scope mismatch',
-    );
+    final markers = options['reconnect_markers'] as String?;
+    if (markers != null) {
+      await File('$markers/ready-dart').create(exclusive: true);
+    }
+    final stream = StreamIterator(client.changes(cursor: cursor));
+    try {
+      check(
+        await stream.moveNext().timeout(const Duration(seconds: 30)),
+        'No scoped event',
+      );
+      final change = stream.current;
+      check(
+        change.incident?.cameraId == options['camera'],
+        'Event scope mismatch',
+      );
+      if (markers != null) {
+        check(change.incident?.reason == 'fixture 0', 'Wrong initial event');
+        await File('$markers/after-first-dart').create(exclusive: true);
+        check(
+          await stream.moveNext().timeout(const Duration(seconds: 45)),
+          'No event after reconnect',
+        );
+        final next = stream.current;
+        check(
+          next.incident?.cameraId == options['camera'] &&
+              next.incident?.reason == 'fixture 1000' &&
+              next.cursor.generation == change.cursor.generation &&
+              BigInt.parse(next.cursor.sequence) >
+                  BigInt.parse(change.cursor.sequence),
+          'Reconnected cursor or scope mismatch',
+        );
+        await stream.cancel();
+
+        final otherGeneration = next.cursor.generation.replaceRange(
+          0,
+          1,
+          next.cursor.generation.startsWith('0') ? '1' : '0',
+        );
+        final expired = StreamIterator(
+          client.changes(cursor: Cursor('$otherGeneration:0')),
+        );
+        try {
+          await expired.moveNext().timeout(const Duration(seconds: 5));
+          throw StateError('Accepted cursor from another generation');
+        } on StillWatchException catch (error) {
+          check(
+            error.status == 409 && error.code == 'cursor_expired',
+            'Wrong cursor expiration problem',
+          );
+        } finally {
+          await expired.cancel();
+        }
+        final fresh = await client.snapshot();
+        check(
+          fresh.cursor.toString() == next.cursor.toString() &&
+              fresh.incidents.length == 2 &&
+              fresh.incidents.every(
+                (item) => item.cameraId == options['camera'],
+              ),
+          'Snapshot did not recover the visible state',
+        );
+      }
+    } finally {
+      await stream.cancel();
+    }
     stdout.writeln('dart pairing, refresh and scoped SSE verified');
   } finally {
     client.close();

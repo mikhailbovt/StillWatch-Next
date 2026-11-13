@@ -14,7 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
-from replay_core import run_core
+from replay_core import run_core, until
 from rtsp_core import free_port
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,15 +93,47 @@ def python_client():
             snapshot, _, cameras = await asyncio.gather(client.snapshot(), client.snapshot(), client.cameras())
             assert refreshes == 1
             assert [camera["id"] for camera in cameras["cameras"]] == [options["camera"]]
+            marker_dir = options.get("reconnect_markers")
+            if marker_dir:
+                (Path(marker_dir) / "ready-python").touch(exist_ok=False)
             stream = client.changes(Cursor.parse(snapshot["cursor"]))
             try:
                 event = await asyncio.wait_for(anext(stream), timeout=30)
                 assert event.data["payload"]["camera_id"] == options["camera"]
+                if marker_dir:
+                    assert event.data["payload"]["detection_reason"] == "fixture 0"
+                    (Path(marker_dir) / "after-first-python").touch(exist_ok=False)
+                    next_event = await asyncio.wait_for(anext(stream), timeout=45)
+                    assert next_event.data["payload"]["camera_id"] == options["camera"]
+                    assert next_event.data["payload"]["detection_reason"] == "fixture 1000"
+                    assert next_event.cursor.generation == event.cursor.generation
+                    assert int(next_event.cursor.sequence) > int(event.cursor.sequence)
             finally:
                 await stream.aclose()
+            if marker_dir:
+                await assert_expired(client, Cursor(str(uuid4()), "0"))
+                snapshot = await client.snapshot()
+                assert Cursor.parse(snapshot["cursor"]) == next_event.cursor
+                assert {item["id"] for item in snapshot["incidents"]} == {
+                    event.data["payload"]["id"], next_event.data["payload"]["id"],
+                }
 
     asyncio.run(check())
     print("python sync/async pairing, refresh and scoped SSE verified")
+
+
+async def assert_expired(client, cursor):
+    from stillwatch_sdk import CoreError
+
+    stream = client.changes(cursor)
+    try:
+        await asyncio.wait_for(anext(stream), timeout=5)
+    except CoreError as error:
+        assert (error.status, error.code) == (409, "cursor_expired")
+    else:
+        raise AssertionError("accepted a cursor from another generation")
+    finally:
+        await stream.aclose()
 
 
 def run(args):
@@ -110,6 +142,9 @@ def run(args):
         sources = root / "sources"
         sources.mkdir()
         data = root / "data"
+        reconnect = bool(getattr(args, "reconnect", False))
+        marker_dir = root / "markers"
+        marker_dir.mkdir(mode=0o700)
         with ExitStack() as stack:
             flags = ["--lan-listen", f"127.0.0.1:{free_port()}"]
             if args.nginx:
@@ -117,7 +152,8 @@ def run(args):
 
                 proxy = stack.enter_context(proxy_profile(args.nginx, args.openssl, root))
                 flags.extend(proxy.flags)
-            _, local = stack.enter_context(run_core(args.core, args.worker, data, sources, root / "core.log", *flags))
+            writer = stack.enter_context(ExitStack())
+            _, local = writer.enter_context(run_core(args.core, args.worker, data, sources, root / "core.log", *flags))
             visible = create_camera(local, "Visible SDK camera")
             hidden = create_camera(local, "Hidden SDK camera")
             commands = {
@@ -136,16 +172,30 @@ def run(args):
                         json.dump({
                             "camera": visible,
                             "offer": issue(args.cli, local, data, visible, proxy=bool(args.nginx)),
+                            **({"reconnect_markers": str(marker_dir)} if reconnect else {}),
                         }, stream)
                     working = ROOT / ("packages/stillwatch-" + name) if name in ("dart", "typescript") else ROOT
                     processes[name] = subprocess.Popen([*command, str(configuration)], cwd=working)
-                for index in range(16):
-                    if all(process.poll() is not None for process in processes.values()):
-                        break
-                    time.sleep(1)
+                if reconnect:
+                    until(lambda: len(list(marker_dir.glob("ready-*"))) == len(commands), 25)
+                    # Each stream has a pre-event cursor and consumes the same
+                    # visible event before the server is taken down.
                     for camera in (hidden, visible):
-                        open_incident(data / "stillwatch.sqlite3", camera, index)
-                statuses = {name: process.wait(timeout=20) for name, process in processes.items()}
+                        open_incident(data / "stillwatch.sqlite3", camera, 0)
+                    until(lambda: all((marker_dir / f"after-first-{name}").is_file() for name in commands), 25)
+                    writer.close()
+                    time.sleep(2)
+                    _, local = writer.enter_context(run_core(args.core, args.worker, data, sources, root / "restart-core.log", *flags))
+                    for camera in (hidden, visible):
+                        open_incident(data / "stillwatch.sqlite3", camera, 1000)
+                else:
+                    for index in range(16):
+                        if all(process.poll() is not None for process in processes.values()):
+                            break
+                        time.sleep(1)
+                        for camera in (hidden, visible):
+                            open_incident(data / "stillwatch.sqlite3", camera, index)
+                statuses = {name: process.wait(timeout=55 if reconnect else 20) for name, process in processes.items()}
                 assert set(statuses.values()) == {0}, statuses
             finally:
                 for process in processes.values():
@@ -153,7 +203,7 @@ def run(args):
                         process.kill()
                         process.wait()
         print(json.dumps({"sdk": list(commands), "pinned_tls": True, "scoped_sse": True,
-                          "counter_fixtures": True, "https_proxy": bool(args.nginx)}))
+                          "counter_fixtures": True, "https_proxy": bool(args.nginx), "core_restart_resume": reconnect}))
 
 
 if __name__ == "__main__":
@@ -163,6 +213,7 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser(description=__doc__)
         for name in ("core", "worker", "cli", "node", "dart", "rust-client"):
             parser.add_argument("--" + name, type=lambda path: Path(path).resolve(strict=True), required=True)
+        parser.add_argument("--reconnect", action="store_true")
         from proxy_core import proxy_arguments
 
         run(proxy_arguments(parser))
