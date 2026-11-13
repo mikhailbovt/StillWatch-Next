@@ -24,7 +24,7 @@ stillwatch-worker doctor ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256
 
 The Windows Core build uses WiX 5.0.2 and its `WixToolset.Util.wixext/5.0.2` extension. Use `wix extension add -g WixToolset.Util.wixext/5.0.2` on the packaging machine. The minimal Windows libav build uses the Win32-thread variant of the x64 MinGW compiler.
 
-Windows installers take the three-component product version from the staged manifest. For major upgrades, install a strictly higher version with the same product family after taking an offline backup. Keep the prior installer and compatible data together for rollback. If rolling back, stop and remove the newer product, restore the compatible backup, and install the earlier version.
+Windows installers take the three-component product version from the staged manifest. For major upgrades, install a strictly higher version with the same product family after taking an offline backup. Keep the prior installer and compatible data together for rollback. If rolling back, stop and remove the newer product, restore the compatible backup with its original access permissions, and install the earlier version. Verify that `LocalService` can access `ProgramData\StillWatch` and that permissions still exclude other interactive users. A file copy that drops the service ACL can cause Windows Installer error 1920 during startup.
 
 ## Enroll a device
 
@@ -127,7 +127,7 @@ Closing the Companion window leaves the agent available in the signed-in session
 
 Use the Flutter framework revision in the CI workflow and run `flutter pub get --enforce-lockfile` from the Companion directory before building. This generates the native Android registrant for secure storage, file selection, notifications, discovery, and WebRTC. For Android-only builds on Windows, you can use Flutter's `config --no-enable-windows-desktop` in a separate Flutter configuration directory. Windows desktop builds still require native symbolic link support.
 
-Use `flutter build apk --release --target-platform android-arm64 --no-pub` and `flutter build appbundle --release --target-platform android-arm64 --no-pub`. Android release signing reads the local, ignored key.properties file. For an iOS archive, use the locked Flutter version on a macOS host with Xcode and a matching Apple distribution or development profile. Record the signing profile type and applicable devices when handing over an iOS build.
+Use `flutter build apk --release --target-platform android-arm64` and `flutter build appbundle --release --target-platform android-arm64`. The release build refreshes Android's plugin registrant to exclude the development-only integration test plugin. Android release signing reads the local, ignored key.properties file. For an iOS archive, use the locked Flutter version on a macOS host with Xcode and a matching Apple distribution or development profile. Record the signing profile type and applicable devices when handing over an iOS build.
 
 ## CUDA qualification
 
