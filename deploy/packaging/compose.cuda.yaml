@@ -1,8 +1,8 @@
 services:
   stillwatch:
-    gpus:
-      - driver: nvidia
-        device_ids: ["${STILLWATCH_GPU_ID:-0}"]
+    image: "${STILLWATCH_GPU_IMAGE:-stillwatch-core:0.1.0-cuda}"
+    devices:
+      - "${STILLWATCH_GPU_DEVICE:-nvidia.com/gpu=${STILLWATCH_GPU_ID:-all}}"
     environment:
       STILLWATCH_RUNTIME_DIR: /opt/stillwatch-ort-cuda
       STILLWATCH_CUDA_LIB_DIR: /opt/stillwatch-cuda-libs

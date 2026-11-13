@@ -35,8 +35,13 @@ impl InferenceProcess {
             stdout,
             result: Vec::new(),
         };
-        let initialized =
-            tokio::time::timeout(Duration::from_secs(30), process.bootstrap(config)).await;
+        // A cold CUDA worker may compile kernels before it can accept live frames.
+        let startup_budget = if config.cuda.is_some() {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(30)
+        };
+        let initialized = tokio::time::timeout(startup_budget, process.bootstrap(config)).await;
         match initialized {
             Ok(Ok(())) => Ok(process),
             Ok(Err(error)) => {

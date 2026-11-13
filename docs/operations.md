@@ -53,6 +53,8 @@ For replay, place a supported video in the Core sources directory. Enable pace f
 
 The owner can also select **Upload replay video** in the Companion. The Core probes a decoded frame before publishing the uploaded file. Each upload may contain up to 128 MiB and the managed upload directory holds up to 2 GiB. The original recording is stored on the Core host. Camera masks apply when replay is decoded and shared. Include required source videos in the host's backup and remove unused uploads from the replay directory after removing their camera configurations.
 
+Save and enable the camera before marking a controlled flame. Open **Camera settings**, choose **Add fire region**, and tap the corners in order around the expected flame. Choose the source and expected flame mode, then apply and save. After changing the source or privacy masks, save those changes and review the regions on a fresh masked snapshot. Core requires another review when it detects a change in the camera geometry.
+
 Set mediamtx, mediamtx_sha256, media_encoder, media_encoder_sha256 and media_ice_udp in core.json to enable video. Use the installed MediaMTX and FFmpeg/OpenH264 binaries and their digests from manifest.json. On Linux you can set STILLWATCH_ICE_UDP to enable video with the installed binaries. Bind ICE to the Core's private address. Verify decoded video separately from control connectivity.
 
 ## Migration, backup and restore
@@ -129,4 +131,11 @@ Use `flutter build apk --release --target-platform android-arm64 --no-pub` and `
 
 The CUDA backend uses the same locked FP32 model tensors and policies. Pass cuda_device, cuda_provider_sha256 and cuda_shared_sha256 on the Core command line with the existing model and ORT flags. Use dashes in flag names. In core.json use a cuda object with device, provider_sha256 and shared_sha256. Keep the provider libraries beside the matching ONNX Runtime library and install the corresponding NVIDIA user-space runtime through an authorized source. An invalid or missing provider prevents the requested backend from starting.
 
-Use the CPU profile for qualified local operation. The CUDA Compose override mounts the NVIDIA runtime separately and requires working Docker GPU device support. Run the worker's model verification with --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256 before relying on this backend. Tensor or observation drift outside the existing bounds leaves the profile experimental.
+Use the CPU profile for qualified local operation. The CUDA Compose override mounts operator-provisioned CUDA, cuDNN and ONNX Runtime libraries read-only. It uses the NVIDIA Container Toolkit's CDI device mapping with Docker Engine 28.3 or later. Docker reads the generated CDI specification from its configured directories. The WSL profile uses `nvidia.com/gpu=all`. On Linux, set `STILLWATCH_GPU_DEVICE` to the desired device name from `nvidia-ctk cdi list` when the container must use a specific GPU. Run the worker's model verification with `--cuda DEVICE PROVIDER_SHA256 SHARED_SHA256` before relying on this backend. Tensor or observation drift outside the existing bounds leaves the profile experimental. [NVIDIA CDI support](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/cdi-support.html), [Docker CDI devices](https://docs.docker.com/reference/cli/docker/container/run/#cdi-devices)
+
+Build the CUDA profile from the local verified CPU image and use both Compose files. The CUDA image configures its writable kernel cache under the existing `/tmp` tmpfs. The worker warms one tensor geometry before reporting readiness, within a bounded startup deadline. The live inference deadline stays two seconds.
+
+~~~sh
+docker build --pull=false -f deploy/packaging/Dockerfile.cuda -t stillwatch-core:0.1.0-cuda .
+docker compose -f deploy/packaging/compose.cpu.yaml -f deploy/packaging/compose.cuda.yaml up -d
+~~~

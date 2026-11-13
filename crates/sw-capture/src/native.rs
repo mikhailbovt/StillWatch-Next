@@ -308,6 +308,15 @@ impl Decoder {
         Self::open(&url, Some(c"rtsp"), options, limits, cancelled, false)
     }
 
+    #[cfg(not(any(windows, target_os = "linux")))]
+    pub fn open_usb(
+        _device: &str,
+        _limits: ReadLimits,
+        _cancelled: Arc<AtomicBool>,
+    ) -> Result<Self, CaptureError> {
+        Err(CaptureError::UnsupportedDevice)
+    }
+
     #[cfg(any(windows, target_os = "linux"))]
     pub fn open_usb(
         device: &str,
@@ -524,6 +533,11 @@ pub fn devices() -> Result<Vec<CaptureDevice>, CaptureError> {
     }
     devices.sort_unstable_by(|a, b| a.device_id.cmp(&b.device_id));
     Ok(devices)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn devices() -> Result<Vec<CaptureDevice>, CaptureError> {
+    Err(CaptureError::UnsupportedDevice)
 }
 
 #[cfg(windows)]

@@ -9,6 +9,7 @@ import 'incidents.dart';
 import 'live_view.dart';
 import 'onvif_picker.dart';
 import 'profiles.dart';
+import 'scene_editor.dart';
 
 class CameraGrid extends StatelessWidget {
   const CameraGrid({super.key, required this.console});
@@ -171,10 +172,10 @@ class _CameraEditorState extends State<_CameraEditor> {
   late final TextEditingController _reference = TextEditingController(
     text: _initialSource['credential_ref'] as String?,
   );
-  late final TextEditingController _regions = TextEditingController(
-    text: const JsonEncoder.withIndent('  ')
-        .convert(_initial['controlled_fire_regions'] ?? []),
-  );
+  late final _regions = <Json>[
+    if (_initial['controlled_fire_regions'] is List)
+      ...objects(_initial, 'controlled_fire_regions'),
+  ];
   late final _masks = <Json>[
     if (_initial['privacy_masks'] is List)
       ...objects(
@@ -204,6 +205,32 @@ class _CameraEditorState extends State<_CameraEditor> {
         _masks.add(mask);
       } else {
         _masks[index] = mask;
+      }
+    });
+  }
+
+  Future<void> _editRegion([int? index]) async {
+    final camera = widget.camera;
+    if (camera == null || !camera.enabled) {
+      setState(() {
+        _error = true;
+        _status = 'Enable and save the camera before drawing regions.';
+      });
+      return;
+    }
+    final region = await showDialog<Json>(
+      context: context,
+      builder: (_) => SceneRegionEditor(
+        existing: index == null ? null : _regions[index],
+        snapshot: () => widget.profile.client.cameraImage(camera.id),
+      ),
+    );
+    if (!mounted || region == null) return;
+    setState(() {
+      if (index == null) {
+        _regions.add(region);
+      } else {
+        _regions[index] = region;
       }
     });
   }
@@ -244,7 +271,7 @@ class _CameraEditorState extends State<_CameraEditor> {
       if (mounted) {
         setState(() {
           _error = true;
-          _status = 'Check the source fields and the JSON array of controlled fire regions.';
+          _status = 'Check the camera name and source fields.';
         });
       }
     } catch (error) {
@@ -262,9 +289,6 @@ class _CameraEditorState extends State<_CameraEditor> {
   Future<void> _save() => _perform(() async {
     final name = _name.text.trim();
     if (name.isEmpty || name.runes.length > 80) throw const FormatException();
-    final raw = jsonDecode(_regions.text);
-    if (raw is! List) throw const FormatException();
-    final regions = raw.map(object).toList(growable: false);
     final config = <String, Object?>{
       'name': name,
       'enabled': _enabled,
@@ -272,7 +296,7 @@ class _CameraEditorState extends State<_CameraEditor> {
       if (_cloudConsent || _initial['cloud_consent'] == true)
         'cloud_consent': _cloudConsent,
       'privacy_masks': _masks,
-      'controlled_fire_regions': regions,
+      'controlled_fire_regions': _regions,
     };
     final camera = widget.camera;
     if (camera == null) {
@@ -286,7 +310,16 @@ class _CameraEditorState extends State<_CameraEditor> {
           return _canonical(entry.value) != _canonical(old);
         }),
       );
-      if (_recheck) patch['controlled_fire_regions'] = regions;
+      if (_recheck) patch['controlled_fire_regions'] = _regions;
+      if (_regions.isNotEmpty &&
+          patch.containsKey('controlled_fire_regions') &&
+          (patch.containsKey('source') || patch.containsKey('privacy_masks'))) {
+        setState(() {
+          _error = true;
+          _status = 'Save the source or mask changes first, then review the regions on the updated camera.';
+        });
+        return;
+      }
       if (patch.isNotEmpty) {
         await widget.profile.client.patchCamera(camera, patch, operationId());
       }
@@ -399,7 +432,6 @@ class _CameraEditorState extends State<_CameraEditor> {
     _address.dispose();
     _path.dispose();
     _reference.dispose();
-    _regions.dispose();
     super.dispose();
   }
 
@@ -552,31 +584,36 @@ class _CameraEditorState extends State<_CameraEditor> {
                 'Controlled fire regions',
                 style: theme.textTheme.titleMedium,
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'Use convex polygons in normalized coordinates from 0 to 10000. Sources are burner, candle, fireplace or grill. Modes are steady and intermittent.',
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _regions,
-                minLines: 2,
-                maxLines: 7,
-                autocorrect: false,
-                enableSuggestions: false,
-                decoration: const InputDecoration(
-                  labelText: 'Regions (JSON)',
-                  hintText: '[{"source":"candle","mode":"steady","polygon":[{"x":10,"y":10},{"x":50,"y":10},{"x":50,"y":50}]}]',
+              for (final (index, region) in _regions.indexed)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(readable(text(region, 'source'))),
+                  subtitle: Text(readable(text(region, 'mode'))),
+                  onTap: _busy ? null : () => _editRegion(index),
+                  trailing: IconButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() => _regions.removeAt(index)),
+                    tooltip: 'Remove region',
+                    icon: const Icon(Icons.close),
+                  ),
                 ),
+              TextButton.icon(
+                onPressed: _busy || _regions.length >= 16 ? null : _editRegion,
+                icon: const Icon(Icons.add),
+                label: const Text('Add fire region'),
               ),
-              if (widget.camera?.sceneReview == 'needs_review')
+              if (widget.camera?.sceneReview == 'needs_review' &&
+                  _regions.isNotEmpty)
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text(
-                    'Confirm the regions against the current scene',
+                    'Confirm regions against the current scene',
                   ),
                   value: _recheck,
-                  onChanged: (value) =>
-                      setState(() => _recheck = value == true),
+                  onChanged: _busy
+                      ? null
+                      : (value) => setState(() => _recheck = value == true),
                 ),
               if (_status != null)
                 Padding(

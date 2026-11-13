@@ -22,6 +22,9 @@ pub enum CaptureError {
     InvalidFile,
     #[error("capture device is unavailable")]
     InvalidDevice,
+    #[cfg(not(any(windows, target_os = "linux")))]
+    #[error("USB capture is unsupported on this operating system")]
+    UnsupportedDevice,
     #[error("network capture source is invalid")]
     InvalidNetwork,
     #[error("the installed decoder cannot enforce RTSP peer confinement")]

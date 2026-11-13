@@ -30,6 +30,7 @@ pub fn run() -> Result<()> {
     let Ok(pack) = ModelPack::open(&config.models, &config.manifest_sha256) else {
         return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE);
     };
+    let using_cuda = config.cuda.is_some();
     let runtime = match Runtime::load(
         &config.library,
         &config.library_sha256,
@@ -53,6 +54,16 @@ pub fn run() -> Result<()> {
     };
     let mut prepare = Preprocessor::new(pack.profile());
     let mut pixels = Vec::new();
+    if using_cuda {
+        // The first CUDA call can load and compile kernels. Keep that work within
+        // the supervised startup deadline and leave the live frame deadline intact.
+        pixels.resize(640 * 360 * 3, 0);
+        let (tensor, geometry) = prepare.prepare(Image::rgb(640, 360, &pixels)?);
+        let size = geometry.tensor_size();
+        if pose.run(size, tensor, |_| ()).is_err() || fire.run(size, tensor, |_| ()).is_err() {
+            return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED);
+        }
+    }
     output.write_all(&INFERENCE_READY)?;
     output.flush()?;
 
