@@ -16,6 +16,13 @@ final class WhepAnswer {
   final String? etag;
 }
 
+final class CameraSnapshot {
+  const CameraSnapshot(this.jpeg, this.ageAtReceipt);
+
+  final Uint8List jpeg;
+  final Duration? ageAtReceipt;
+}
+
 typedef _Access = Future<String> Function({String? rejected});
 
 final class StillWatchClient {
@@ -243,15 +250,33 @@ final class StillWatchClient {
     String incidentId,
     String packetId,
     int ordinal,
-  ) => _jpeg(
+  ) async => (await _jpeg(
     '/api/v2/incidents/${uuid(incidentId)}/evidence/${uuid(packetId)}/$ordinal',
     512 * 1024,
-  );
+  )).$2;
 
-  Future<Uint8List> cameraImage(String cameraId) =>
-      _jpeg('/api/v2/cameras/${uuid(cameraId)}/snapshot.jpg', 1024 * 1024);
+  Future<Uint8List> cameraImage(String cameraId) async =>
+      (await cameraSnapshot(cameraId)).jpeg;
 
-  Future<Uint8List> _jpeg(String path, int limit) async {
+  Future<CameraSnapshot> cameraSnapshot(String cameraId) async {
+    final requestTime = Stopwatch()..start();
+    final (headers, jpeg) = await _jpeg(
+      '/api/v2/cameras/${uuid(cameraId)}/snapshot.jpg',
+      1024 * 1024,
+    );
+    final milliseconds = int.tryParse(
+      headers.value('x-frame-age-ms') ?? '',
+      radix: 10,
+    );
+    return CameraSnapshot(
+      jpeg,
+      milliseconds == null || milliseconds < 0 || milliseconds > 60 * 1000
+          ? null
+          : Duration(milliseconds: milliseconds) + requestTime.elapsed,
+    );
+  }
+
+  Future<(HttpHeaders, Uint8List)> _jpeg(String path, int limit) async {
     final response = await _request('GET', path, limit: limit);
     if (response.$1.contentType?.mimeType != 'image/jpeg' ||
         response.$2.length < 3 ||
@@ -260,7 +285,7 @@ final class StillWatchClient {
         response.$2[2] != 0xff) {
       throw const StillWatchException('protocol');
     }
-    return response.$2;
+    return response;
   }
 
   Future<List<Json>> devices() => _list('/api/v2/devices');

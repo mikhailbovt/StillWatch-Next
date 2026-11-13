@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:material_ui/material_ui.dart';
@@ -13,35 +12,46 @@ class CameraPreview extends StatefulWidget {
     required this.profile,
     required this.camera,
     required this.active,
+    this.showAge = false,
   });
   final CoreProfile profile;
   final Camera camera;
   final bool active;
+  final bool showAge;
 
   @override
   State<CameraPreview> createState() => _CameraPreviewState();
 }
 
 class _CameraPreviewState extends State<CameraPreview> {
-  Uint8List? _jpeg;
+  MemoryImage? _image;
+  Duration? _ageAtReceipt;
+  final _sinceReceipt = Stopwatch();
+  Timer? _clock;
   bool _pending = false;
   int _generation = 0;
 
   @override
   void initState() {
     super.initState();
+    _watchAge();
     if (widget.active) unawaited(_fetch());
   }
 
   @override
   void didUpdateWidget(CameraPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.profile.id != oldWidget.profile.id ||
+    if (widget.showAge != oldWidget.showAge ||
+        widget.active != oldWidget.active) {
+      _watchAge();
+    }
+    if (widget.profile != oldWidget.profile ||
+        widget.camera.id != oldWidget.camera.id ||
         widget.camera.sceneRevision != oldWidget.camera.sceneRevision ||
         widget.camera.sourceEpoch != oldWidget.camera.sourceEpoch ||
         widget.active != oldWidget.active) {
       _generation++;
-      _jpeg = null;
+      _replace(null);
       _pending = false;
       if (widget.active) unawaited(_fetch());
     } else if (widget.active &&
@@ -50,42 +60,95 @@ class _CameraPreviewState extends State<CameraPreview> {
     }
   }
 
+  void _watchAge() {
+    _clock?.cancel();
+    if (widget.showAge && widget.active) {
+      _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (_image != null && mounted) setState(() {});
+      });
+    }
+  }
+
+  void _replace(CameraSnapshot? snapshot) {
+    final old = _image;
+    if (old != null) PaintingBinding.instance.imageCache.evict(old);
+    _image = snapshot == null ? null : MemoryImage(snapshot.jpeg);
+    _ageAtReceipt = snapshot?.ageAtReceipt;
+    _sinceReceipt
+      ..stop()
+      ..reset();
+    if (_ageAtReceipt != null) _sinceReceipt.start();
+  }
+
   Future<void> _fetch() async {
     if (_pending) return;
     _pending = true;
     final generation = _generation;
-    Uint8List? image;
+    CameraSnapshot? image;
     try {
-      image = await widget.profile.client.cameraImage(widget.camera.id);
+      image = await widget.profile.client.cameraSnapshot(widget.camera.id);
     } catch (_) {
       // Runtime state and the full viewer can show the failure without a stale thumbnail.
     } finally {
       if (mounted && generation == _generation) {
         setState(() {
           _pending = false;
-          _jpeg = image;
+          _replace(image);
         });
       }
     }
   }
 
   @override
+  void dispose() {
+    _clock?.cancel();
+    _replace(null);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final bytes = _jpeg;
+    final image = _image;
+    final age = _ageAtReceipt;
     return ColoredBox(
       color: const Color(0xff0b1517),
       child: Center(
-        child: bytes == null
+        child: image == null
             ? Icon(
                 Icons.videocam_outlined,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                 size: 36,
               )
-            : Image.memory(
-                bytes,
-                gaplessPlayback: false,
-                fit: BoxFit.contain,
-                width: double.infinity,
+            : Stack(
+                alignment: Alignment.bottomLeft,
+                children: [
+                  Image(
+                    image: image,
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: double.infinity,
+                  ),
+                  if (widget.showAge)
+                    Positioned(
+                      left: 12,
+                      bottom: 10,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Text(
+                            age == null
+                                ? 'Snapshot age unavailable'
+                                : 'Snapshot from ${(age + _sinceReceipt.elapsed).inSeconds}s ago',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
       ),
     );
@@ -132,13 +195,23 @@ class _LiveViewState extends State<LiveView> {
         console.foreground &&
         console.selected == widget.profile &&
         console.link == LinkState.connected &&
+        widget.profile.can('streams_read') &&
         camera != null &&
         (camera.state == 'streaming' || camera.state == 'replaying');
+    final previousCamera = _camera;
     final newScope =
-        camera?.sceneRevision != _camera?.sceneRevision ||
-        camera?.sourceEpoch != _camera?.sourceEpoch;
+        camera?.sceneRevision != previousCamera?.sceneRevision ||
+        camera?.sourceEpoch != previousCamera?.sourceEpoch;
     _camera = camera;
-    if (active == _active && !newScope) return;
+    if (active == _active && !newScope) {
+      if (active &&
+          !_starting &&
+          _playback == null &&
+          camera.runtime['frame'] != previousCamera?.runtime['frame']) {
+        setState(() {});
+      }
+      return;
+    }
     _active = active;
     if (active) {
       unawaited(_connect());
@@ -277,6 +350,7 @@ class _LiveViewState extends State<LiveView> {
                                 profile: widget.profile,
                                 camera: _camera!,
                                 active: _active,
+                                showAge: true,
                               )
                             : const Center(
                                 child: Icon(

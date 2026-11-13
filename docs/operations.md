@@ -59,6 +59,8 @@ Save and enable the camera before marking a controlled flame. Open **Camera sett
 
 Set mediamtx, mediamtx_sha256, media_encoder, media_encoder_sha256 and media_ice_udp in core.json to enable video. Use the installed MediaMTX and FFmpeg/OpenH264 binaries and their digests from manifest.json. On Linux you can set STILLWATCH_ICE_UDP to enable video with the installed binaries. Bind ICE to the Core's private address. Verify decoded video separately from control connectivity.
 
+When playback stalls, the Companion can show a masked snapshot with the age of the frame. It continues fetching snapshots while the camera and control route are reachable. Use **Reconnect video** after the media route recovers.
+
 ## Migration, backup and restore
 
 Stop the legacy writer and take an offline backup of its data directory. Provide the first camera mapping as a JSON object with a camera field containing a CameraConfig. Set same_geometry to true only after verifying the camera framing and normalized privacy masks. The imported camera starts disabled. Review its source and masks before enabling it.

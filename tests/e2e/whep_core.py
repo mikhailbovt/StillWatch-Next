@@ -113,8 +113,11 @@ async def connect(lan, session, camera, turn_url):
 
 
 async def viewers(lan, session, camera, local, turn_url):
-    status, _, jpeg = request(lan, session["access_token"], "GET", f"/api/v2/cameras/{camera}/snapshot.jpg")
+    status, headers, jpeg = request(lan, session["access_token"], "GET", f"/api/v2/cameras/{camera}/snapshot.jpg")
     assert status == 200 and jpeg[:3] == b"\xff\xd8\xff"
+    headers = {key.lower(): value for key, value in headers.items()}
+    assert 0 <= int(headers["x-frame-age-ms"]) <= 3000, headers["x-frame-age-ms"]
+    assert headers["cache-control"] == "no-store"
     with av.open(io.BytesIO(jpeg), format="mjpeg") as container:
         image = next(container.decode(video=0)).to_ndarray(format="rgb24")
         assert image[:, :135, :].max() < 25 and image[:, 190:, :].max() > 100
