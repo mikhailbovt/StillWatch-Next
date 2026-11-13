@@ -8,6 +8,8 @@ import { decodePacket } from "./packet.js";
 import { evaluate, makeAI } from "./generate.js";
 
 const RESPONSE_LIMIT = 12 * 1024;
+const DEVICE_WAIT_MS = 4_000;
+const DEVICE_GRACE_MS = 8_000;
 const browserPath = new URL("../dist/hybrid.js", import.meta.url);
 const pagePath = new URL("../public/index.html", import.meta.url);
 
@@ -77,6 +79,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   const script = hybrid ? await readFile(browserPath, 2 * 1024 * 1024) : null;
   let localState = "disconnected";
   let lastBrowserSeen = 0;
+  let waiting = null;
   let job = null;
   let running = false;
 
@@ -100,7 +103,40 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   }
 
   function browserReady() {
-    return Date.now() - lastBrowserSeen < 8_000 && ["ready", "unavailable"].includes(localState);
+    const state = browserState();
+    return state === "ready" || state === "unavailable";
+  }
+
+  function browserState() {
+    return waiting || job?.claimed || Date.now() - lastBrowserSeen < DEVICE_GRACE_MS
+      ? localState : "disconnected";
+  }
+
+  function dispatch() {
+    if (!waiting || !job || job.claimed || localState === "initializing"
+        || (job.route === "local_only" && localState !== "ready")) return;
+    job.claimed = true;
+    waiting.finish(job);
+  }
+
+  function waitForJob(res) {
+    if (res.destroyed) return;
+    const clear = () => {
+      clearTimeout(timer);
+      if (waiting === poll) waiting = null;
+    };
+    const poll = { finish(current) {
+      clear();
+      res.removeListener("close", clear);
+      if (res.destroyed) return;
+      if (!current) return reply(res, 204, null);
+      res.setHeader("X-StillWatch-Request", current.id);
+      reply(res, 200, current.body, "application/octet-stream");
+    } };
+    const timer = setTimeout(() => poll.finish(null), DEVICE_WAIT_MS);
+    waiting = poll;
+    res.once("close", clear);
+    dispatch();
   }
 
   async function request(req, res) {
@@ -117,31 +153,33 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
       if (req.method === "POST" && req.url === "/device/poll") {
         const state = JSON.parse((await readBody(req, 128)).toString("utf8")).state;
         if (!["ready", "unavailable", "initializing"].includes(state)) return reply(res, 400, { error: "invalid_state" });
+        if (waiting) return reply(res, 409, { error: "device_poll_active" });
         localState = state;
         lastBrowserSeen = Date.now();
-        if (!job || job.claimed || state === "initializing" || (job.route === "local_only" && state !== "ready")) {
-          return reply(res, 204, null);
-        }
-        job.claimed = true;
-        res.setHeader("X-StillWatch-Request", job.id);
-        return reply(res, 200, job.body, "application/octet-stream");
+        return waitForJob(res);
       }
       if (req.method === "POST" && req.url === "/device/result") {
         if (!job?.claimed || req.headers["x-stillwatch-request"] !== job.id) return reply(res, 409, { error: "expired" });
         const current = job;
         const body = JSON.parse((await readBody(req, RESPONSE_LIMIT)).toString("utf8"));
-        if (current !== job) return reply(res, 409, { error: "expired" });
+        if (current !== job || current.finished) return reply(res, 409, { error: "expired" });
+        current.finished = true;
+        lastBrowserSeen = Date.now();
         current.resolve(body);
         return reply(res, 204, null);
       }
       if (req.method === "POST" && req.url === "/device/attestation") {
-        if (!job?.claimed || job.route === "local_only" || job.attestation
-            || req.headers["x-stillwatch-request"] !== job.id) {
+        const current = job;
+        if (!current?.claimed || current.finished || current.route === "local_only" || current.attestation
+            || req.headers["x-stillwatch-request"] !== current.id) {
           return reply(res, 409, { error: "expired_or_ineligible" });
         }
-        job.attestation = true;
+        current.attestation = true;
         try {
-          const token = await appCheck(AbortSignal.timeout(4_000));
+          const token = await appCheck(AbortSignal.any([current.signal, AbortSignal.timeout(4_000)]));
+          if (job !== current || current.finished || current.signal.aborted) {
+            return reply(res, 409, { error: "expired_or_ineligible" });
+          }
           return reply(res, 200, token);
         } catch {
           return reply(res, 503, { error: "app_check_unavailable" });
@@ -156,7 +194,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
         mode: config.mode, sdk_version: firebaseSdkVersion, model: config.model,
         semantic_evaluation: true,
         cloud_transport: cloudCredentialsPresent && (!hybrid || browserReady()),
-        local_state: hybrid && Date.now() - lastBrowserSeen < 8_000 ? localState : "disconnected",
+        local_state: hybrid ? browserState() : "disconnected",
         max_images: 5, max_bytes: maxRequestBytes, busy: running,
       });
     }
@@ -182,7 +220,9 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
         }
         result = await new Promise((resolve, reject) => {
           controller.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true });
-          job = { id: randomUUID(), body, resolve, claimed: false, route: packet.meta.route, attestation: false };
+          job = { id: randomUUID(), body, resolve, claimed: false, finished: false,
+            route: packet.meta.route, attestation: false, signal: controller.signal };
+          dispatch();
         });
         if (result?.error) return reply(res, 503, { error: "inference_unavailable" });
       }
@@ -214,6 +254,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   server.listen(port, "127.0.0.1");
   const shutdown = () => {
     server.close();
+    waiting?.finish(null);
     setTimeout(() => server.closeAllConnections(), 1_500).unref();
   };
   process.once("SIGINT", shutdown);

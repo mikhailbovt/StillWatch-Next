@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -25,7 +26,8 @@ from rtsp_core import check_port, free_port, launch
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def request(origin, route, token=None, body=None, *, host=None, foreign_origin=None, binary=False, timeout=5):
+def request(origin, route, token=None, body=None, *, host=None, foreign_origin=None, binary=False,
+            timeout=5, request_id=None, include_headers=False):
     headers = {}
     if token is not None:
         headers["Authorization"] = "Bearer " + token
@@ -33,6 +35,8 @@ def request(origin, route, token=None, body=None, *, host=None, foreign_origin=N
         headers["Host"] = host
     if foreign_origin is not None:
         headers["Origin"] = foreign_origin
+    if request_id is not None:
+        headers["X-StillWatch-Request"] = request_id
     if body is not None:
         headers["Content-Type"] = "application/octet-stream" if binary else "application/json"
     req = urllib.request.Request(origin + route, data=body, headers=headers)
@@ -41,7 +45,8 @@ def request(origin, route, token=None, body=None, *, host=None, foreign_origin=N
     except urllib.error.HTTPError as error:
         response = error
     with response:
-        return response.status, response.read(512 * 1024)
+        body = response.read(512 * 1024)
+        return (response.status, body, response.headers) if include_headers else (response.status, body)
 
 
 def private(path, value):
@@ -50,7 +55,7 @@ def private(path, value):
         path.chmod(0o600)
 
 
-def fire_packet():
+def fire_packet(route="cloud_only", timeout_ms=1000):
     jpeg = (ROOT / "tests/fixtures/evidence/black.jpg").read_bytes()
     metadata = {
         "schema_version": "1.0",
@@ -64,11 +69,47 @@ def fire_packet():
         "context": {"local_facts": {"type": "fire"}, "prompt_version": "fire-evidence-1"},
         "attachments": [{"id": "f0", "sha256": hashlib.sha256(jpeg).hexdigest(),
                          "kind": "overview", "source_s": 1.0, "bytes": len(jpeg)}],
-        "route": "cloud_only",
-        "timeout_ms": 1000,
+        "route": route,
+        "timeout_ms": timeout_ms,
     }
     encoded = json.dumps(metadata).encode()
     return struct.pack("<I", len(encoded)) + encoded + jpeg
+
+
+def verify_waiting_browser(origin, core_credential, browser_credential):
+    packet = fire_packet("local_only", 3000)
+    ready = b'{"state":"ready"}'
+
+    def healthy():
+        code, body = request(origin, "/health", core_credential)
+        return code == 200 and json.loads(body)["local_state"] == "ready"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        browser = pool.submit(request, origin, "/device/poll", browser_credential, ready, include_headers=True)
+        until(healthy, 2)
+        assert not browser.done()
+        assert request(origin, "/device/poll", browser_credential, ready)[0] == 409
+        evaluation = pool.submit(request, origin, "/evaluate", core_credential, packet, binary=True)
+        status, body, headers = browser.result(timeout=3)
+        assert status == 200 and body == packet
+        request_id = headers["X-StillWatch-Request"]
+        assert uuid.UUID(request_id)
+        assert request(origin, "/device/attestation", browser_credential, b"{}", request_id=request_id)[0] == 409
+        assert request(origin, "/device/result", browser_credential, b"{}", request_id=str(uuid.uuid4()))[0] == 409
+        failed = b'{"error":"inference_unavailable"}'
+        assert request(origin, "/device/result", browser_credential, failed, request_id=request_id)[0] == 204
+        assert evaluation.result(timeout=3)[0] == 503
+        assert request(origin, "/device/result", browser_credential, failed, request_id=request_id)[0] == 409
+    assert request(origin, "/device/poll", browser_credential, ready, timeout=7)[0] == 204
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        evaluation = pool.submit(request, origin, "/evaluate", core_credential,
+                                 fire_packet("local_only", 600), binary=True)
+        status, _, headers = request(origin, "/device/poll", browser_credential, ready, include_headers=True)
+        assert status == 200
+        assert evaluation.result(timeout=3)[0] == 504
+        assert request(origin, "/device/result", browser_credential, failed,
+                       request_id=headers["X-StillWatch-Request"])[0] == 409
 
 
 def run(args):
@@ -138,8 +179,10 @@ def run(args):
             assert status == 200 and set(json.loads(body)) == {"firebase", "model"}
             assert request(origin, "/device/attestation", browser_credential, b"{}")[0] == 409
             assert request(origin, "/evaluate", core_credential, fire_packet(), binary=True)[0] == 503
+            verify_waiting_browser(origin, core_credential, browser_credential)
         print(json.dumps({"node_and_hybrid_started": True, "scope_and_origin_enforced": True,
                           "invalid_app_check_fails_closed": True, "core_capability_handshake": bool(args.core),
+                          "bounded_browser_long_poll": True, "local_only_denies_attestation": True,
                           "firebase_network_inference": False}))
 
 

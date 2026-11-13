@@ -142,44 +142,55 @@ prepare.addEventListener("click", async () => {
 });
 
 async function poll() {
-  if (!credential) return;
-  try {
-    const response = await request("/device/poll", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state }), signal: AbortSignal.timeout(4_000),
-    });
-    if (response.status === 401) {
-      rememberCredential(null);
-      credential = "";
-      window.location.reload();
-      return;
-    }
-    if (response.status === 200) {
-      const requestId = response.headers.get("X-StillWatch-Request");
-      currentJob = requestId;
-      let result;
-      try {
-        const packet = await decodePacket(await response.arrayBuffer());
-        result = await evaluate(ai, configured.model, packet, AbortSignal.timeout(packet.meta.timeout_ms), true);
-        status.textContent = result.inference_source === "on_device" ? "Last evaluation ran on this device." : "Last evaluation ran in the cloud.";
-      } catch (error) {
-        result = { error: "inference_unavailable" };
-        const reason = evaluationFailure(error);
-        status.textContent = `Evaluation unavailable (${reason}). Waiting for the next request.`;
-      } finally {
-        currentJob = undefined;
-      }
-      await request("/device/result", {
-        method: "POST", body: JSON.stringify(result),
-        headers: { "Content-Type": "application/json", "X-StillWatch-Request": requestId },
-        signal: AbortSignal.timeout(4_000),
+  let reconnecting = false;
+  // Fetch completion drives the healthy connection. A hidden tab may
+  // otherwise run recurring JavaScript timers much less often.
+  while (credential) {
+    try {
+      const response = await request("/device/poll", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }), signal: AbortSignal.timeout(7_000),
       });
+      if (response.status === 401) {
+        rememberCredential(null);
+        credential = "";
+        window.location.reload();
+        return;
+      }
+      if (response.status !== 200 && response.status !== 204) throw new Error("connection");
+      if (reconnecting) {
+        reconnecting = false;
+        status.textContent = "Worker connected. Waiting for evidence.";
+      }
+      if (response.status === 200) await serveJob(response);
+    } catch {
+      reconnecting = true;
+      status.textContent = "Connection interrupted. Reconnecting…";
+      await new Promise(resolve => setTimeout(resolve, 1_000));
     }
-  } catch {
-    status.textContent = "Connection interrupted. Reconnecting…";
-  } finally {
-    setTimeout(poll, 350);
   }
+}
+
+async function serveJob(response) {
+  const requestId = response.headers.get("X-StillWatch-Request");
+  currentJob = requestId;
+  let result;
+  try {
+    const packet = await decodePacket(await response.arrayBuffer());
+    result = await evaluate(ai, configured.model, packet, AbortSignal.timeout(packet.meta.timeout_ms), true);
+    status.textContent = result.inference_source === "on_device" ? "Last evaluation ran on this device." : "Last evaluation ran in the cloud.";
+  } catch (error) {
+    result = { error: "inference_unavailable" };
+    const reason = evaluationFailure(error);
+    status.textContent = `Evaluation unavailable (${reason}). Waiting for the next request.`;
+  } finally {
+    currentJob = undefined;
+  }
+  await request("/device/result", {
+    method: "POST", body: JSON.stringify(result),
+    headers: { "Content-Type": "application/json", "X-StillWatch-Request": requestId },
+    signal: AbortSignal.timeout(4_000),
+  });
 }
 
 function evaluationFailure(error) {
