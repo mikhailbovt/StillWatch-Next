@@ -114,6 +114,9 @@
             }
           ]
         },
+        "repeated_frame": {
+          "type": "boolean"
+        },
         "state": {
           "$ref": "#/$defs/CaptureState"
         }

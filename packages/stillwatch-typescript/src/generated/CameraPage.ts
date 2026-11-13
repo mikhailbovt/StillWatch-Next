@@ -368,6 +368,7 @@ export interface CameraRuntime {
   dropped: Counter;
   frame?: Counter | null;
   last_frame_age_ms?: Counter | null;
+  repeated_frame?: boolean;
   state: CaptureState;
   [k: string]: unknown;
 }

@@ -126,11 +126,19 @@ impl VisionScheduler {
 
     pub fn status(&self, camera: Uuid, epoch: u64) -> AnalysisStatus {
         let mut response = AnalysisStatus::with_state(AnalysisState::Degraded);
+        let source_unusable = self
+            .cameras
+            .latest(camera)
+            .is_some_and(|frame| frame.scope.epoch == epoch && !frame.usable_for_analysis);
         if let Some(lane) = self.cameras.inference_lane(camera)
             && let Ok(progress) = self.progress.read()
         {
             let state = progress.lanes[lane].state;
             response.state = state;
+            if state == AnalysisState::Ready && source_unusable {
+                response.state = AnalysisState::Degraded;
+                return response;
+            }
             if let Some(analysis) = progress
                 .per_camera
                 .get(&camera)

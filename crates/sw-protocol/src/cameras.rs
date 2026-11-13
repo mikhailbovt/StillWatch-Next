@@ -306,6 +306,8 @@ pub struct CameraRuntime {
     pub frame: Option<Counter>,
     pub dropped: Counter,
     pub last_frame_age_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repeated_frame: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

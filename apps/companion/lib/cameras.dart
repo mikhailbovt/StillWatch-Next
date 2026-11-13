@@ -61,7 +61,11 @@ class CameraGrid extends StatelessWidget {
                 console.foreground &&
                 running &&
                 profile.can('streams_read');
-            final status = online ? readable(camera.state) : 'Core offline';
+            final status = !online
+                ? 'Core offline'
+                : camera.runtime['repeated_frame'] == true
+                ? 'Repeated camera frame'
+                : readable(camera.state);
             return Card(
               clipBehavior: Clip.antiAlias,
               key: ValueKey(camera.id),

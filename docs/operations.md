@@ -73,6 +73,8 @@ stillwatch-cli cameras --data-dir DATA list
 
 For replay, place a supported video in the Core sources directory. Enable pace for source-clock playback and repeat for repeated playback. A repeat creates a fresh source epoch. Replay incidents cannot initiate real alert delivery.
 
+Core flags a live source when its sampled decoded pixels repeat for at least six seconds while native timestamps advance. During that hold, the camera reports a repeated frame, current detector values are unavailable and the Core withholds fresh video. A changed image starts a new epoch. A genuinely static digital scene can also repeat exactly. Noise or changing overlays can hide a frozen picture from this check.
+
 The owner can also select **Upload replay video** in the Companion. The Core probes a decoded frame before publishing the uploaded file. Each upload may contain up to 128 MiB and the managed upload directory holds up to 2 GiB. The original recording is stored on the Core host. Camera masks apply when replay is decoded and shared. Include required source videos in the host's backup and remove unused uploads from the replay directory after removing their camera configurations.
 
 Save and enable the camera before marking a controlled flame. Open **Camera settings**, choose **Add fire region**, and tap the corners in order around the expected flame. Choose the source and expected flame mode, then apply and save. After changing the source or privacy masks, save those changes and review the regions on a fresh masked snapshot. Core requires another review when it detects a change in the camera geometry.

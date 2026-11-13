@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    hash::{BuildHasher, RandomState},
     net::SocketAddr,
     path::{Component, Path, PathBuf},
     sync::{Arc, RwLock},
@@ -32,6 +33,8 @@ use crate::{
 };
 
 const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
+const CONTENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(650);
+const CONTENT_HOLD_AFTER: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Error)]
 pub enum RegistryError {
@@ -71,6 +74,7 @@ struct State {
     phase: CaptureState,
     dropped: u64,
     last: Option<(u64, Instant)>,
+    repeated_frame: bool,
 }
 
 struct Slot {
@@ -163,6 +167,7 @@ impl CameraRegistry {
             },
             dropped: 0,
             last: None,
+            repeated_frame: false,
         });
         let (frame, last_frame_age_ms) = state.last.map_or((None, None), |(frame, time)| {
             (
@@ -192,6 +197,7 @@ impl CameraRegistry {
                 frame,
                 dropped: Counter(state.dropped),
                 last_frame_age_ms,
+                repeated_frame: state.repeated_frame,
             },
         }
     }
@@ -604,6 +610,7 @@ impl CameraRegistry {
                 phase,
                 dropped: 0,
                 last: None,
+                repeated_frame: false,
             });
             let (frame, latest) = watch::channel(None);
             if let Ok(mut slots) = self.slots.write() {
@@ -736,6 +743,7 @@ impl CameraRegistry {
         stop: &mut watch::Receiver<bool>,
     ) -> Result<CaptureState, RegistryError> {
         let mut clock = FrameClock::default();
+        let mut content = RepeatedFrames::default();
         let live = camera.config.source.is_live();
         let empty = Arc::<[ControlledFireRegion]>::from([]);
         let zones = Arc::from(camera.config.controlled_fire_regions.clone());
@@ -751,16 +759,27 @@ impl CameraRegistry {
                     state.send_modify(|state| {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
+                        state.repeated_frame = false;
                     });
                     continue;
                 }
                 CaptureRead::End => return Ok(CaptureState::Completed),
             };
             let now = Instant::now();
-            let (reset, geometry_changed, usable) = clock.observe(frame.header, now);
+            let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
             let sample = scene::measure(&frame);
+            if reset {
+                content.clear();
+            }
+            let was_held = content.holding;
+            if live && has_native_time {
+                content.observe(&frame.rgb, sample.fingerprint, now);
+            }
+            let usable = has_native_time && !content.holding;
+            let resumed = was_held && usable;
             let moved = camera.reviewed_scene.as_ref().is_some_and(|reference| {
-                sample.visibility == Visibility::Good
+                usable
+                    && sample.visibility == Visibility::Good
                     && scene::different(reference, &sample.fingerprint)
             });
             let confirmed_shift = if moved {
@@ -774,7 +793,7 @@ impl CameraRegistry {
                     .store
                     .invalidate_camera_scene(camera.id, camera.revision)
                     .await?;
-            } else if reset {
+            } else if reset || resumed {
                 *camera = self
                     .store
                     .bump_camera_epoch(camera.id, camera.revision)
@@ -810,10 +829,15 @@ impl CameraRegistry {
                     } else {
                         CaptureState::Replaying
                     }
+                } else if content.holding {
+                    CaptureState::Unavailable
                 } else {
                     CaptureState::ClockHold
                 };
-                state.last = Some((frame_id, now));
+                if usable {
+                    state.last = Some((frame_id, now));
+                }
+                state.repeated_frame = content.holding;
             });
         }
     }
@@ -827,7 +851,53 @@ struct Task {
 }
 
 fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
-    state.send_modify(|state| state.phase = phase);
+    state.send_modify(|state| {
+        state.phase = phase;
+        state.repeated_frame = false;
+    });
+}
+
+#[derive(Default)]
+struct RepeatedFrames {
+    hasher: RandomState,
+    fingerprint: Option<[u8; scene::FINGERPRINT_BYTES]>,
+    last_sample: Option<Instant>,
+    repeat: Option<(u64, Instant)>,
+    holding: bool,
+}
+
+impl RepeatedFrames {
+    fn clear(&mut self) {
+        self.fingerprint = None;
+        self.last_sample = None;
+        self.repeat = None;
+        self.holding = false;
+    }
+
+    fn observe(&mut self, rgb: &[u8], fingerprint: [u8; scene::FINGERPRINT_BYTES], now: Instant) {
+        if self.fingerprint.replace(fingerprint) != Some(fingerprint) {
+            self.last_sample = Some(now);
+            self.repeat = None;
+            self.holding = false;
+            return;
+        }
+        if self
+            .last_sample
+            .is_some_and(|at| now.duration_since(at) < CONTENT_SAMPLE_INTERVAL)
+        {
+            return;
+        }
+        // The cheap scene sample gates a bounded-rate hash of the decoded bytes.
+        // Static-looking scenes with changing decoded pixels remain available.
+        self.last_sample = Some(now);
+        let hash = self.hasher.hash_one(rgb);
+        let (_, since) = self
+            .repeat
+            .filter(|(old, _)| *old == hash)
+            .unwrap_or((hash, now));
+        self.repeat = Some((hash, since));
+        self.holding = now.duration_since(since) >= CONTENT_HOLD_AFTER;
+    }
 }
 
 #[derive(Default)]
@@ -911,5 +981,36 @@ mod tests {
             ),
             (true, true, true)
         );
+    }
+
+    #[test]
+    fn prolonged_repeated_pixels_hold_until_actual_content_changes() {
+        let mut tracker = RepeatedFrames::default();
+        let now = Instant::now();
+        let fingerprint = [12; scene::FINGERPRINT_BYTES];
+        for tick in 0..=10 {
+            tracker.observe(
+                &[17, 41, 111],
+                fingerprint,
+                now + CONTENT_SAMPLE_INTERVAL * tick,
+            );
+            assert!(!tracker.holding);
+        }
+        let frozen = now + CONTENT_SAMPLE_INTERVAL * 11;
+        tracker.observe(&[17, 41, 111], fingerprint, frozen);
+        assert!(tracker.holding);
+
+        tracker.observe(
+            &[17, 42, 111],
+            fingerprint,
+            frozen + CONTENT_SAMPLE_INTERVAL,
+        );
+        assert!(!tracker.holding);
+        tracker.observe(
+            &[17, 42, 111],
+            [13; scene::FINGERPRINT_BYTES],
+            frozen + Duration::from_secs(9),
+        );
+        assert!(!tracker.holding);
     }
 }

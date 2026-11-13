@@ -98,6 +98,8 @@ def run(args):
                               "replay_did_not_enqueue_alert": True}))
         if args.mediamtx:
             verify_live_outbox(args, root, model_options)
+        if args.source_freeze:
+            verify_repeated_frames(args, root, model_options)
         if args.worker_faults:
             verify_inference_recovery(args, root, model_options)
 
@@ -163,10 +165,10 @@ def verify_inference_recovery(args, root, model_options):
                           "unavailable_observations_hidden": True, "core_stayed_live": True}))
 
 
-def verify_live_outbox(args, root, model_options):
+def rtsp_router(root, name):
     port = free_port()
     peer = f"127.0.0.1:{port}"
-    config = root / "live.yml"
+    config = root / f"{name}.yml"
     config.write_text(f"""logLevel: warn
 rtsp: true
 rtspTransports: [tcp]
@@ -179,6 +181,11 @@ moq: false
 paths:
   fixture:
 """)
+    return port, peer, config
+
+
+def verify_live_outbox(args, root, model_options):
+    port, peer, config = rtsp_router(root, "live")
     publish = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
                "-i", str(root / "fire.mp4"), "-an", "-c:v", "copy",
                "-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://{peer}/fixture"]
@@ -215,6 +222,74 @@ paths:
                                   "incident_and_outbox": True, "outbox_intents_in_cycle": len(intents)}))
 
 
+def verify_repeated_frames(args, root, model_options):
+    port, peer, config = rtsp_router(root, "repeated")
+    # One uninterrupted sender advances PTS through 6 s of movement, 11 s of
+    # repeated decoded pixels, and a second moving segment.
+    fixture = root / "repeat-pixels.mp4"
+    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                    "-i", "testsrc2=size=320x240:rate=12:duration=30",
+                    "-vf", "select=not(between(t\\,6\\,17)),fps=12",
+                    "-c:v", "libx264", "-qp", "0", "-threads", "1", "-preset", "ultrafast",
+                    "-tune", "zerolatency", "-g", "12", str(fixture)], check=True)
+    publish = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-i", str(fixture),
+               "-c:v", "copy", "-f", "rtsp", "-rtsp_transport", "tcp",
+               f"rtsp://{peer}/fixture"]
+    # Keyframes are losslessly repeated so decoder noise cannot imitate movement.
+    with launch([str(args.mediamtx), str(config)], root / "repeated-media.log"):
+        until(lambda: check_port(port))
+        with run_core(args.core, args.worker, root / "repeated-data", root, root / "repeated-core.log",
+                      *model_options, "--rtsp-peer", peer) as (_, client):
+            with launch(publish, root / "repeated-publisher.log") as publisher:
+                source = {"type": "rtsp", "peer": peer, "stream_path": "/fixture",
+                          "secure": False, "transport": "tcp", "credential_ref": None}
+                body = {"name": "Repeated RTSP frames", "source": source, "enabled": True}
+
+                def start_camera():
+                    code, created = client.call("POST", "/api/v2/cameras", body, key="repeated-source")
+                    return created if code == 201 else None
+
+                camera = until(start_camera, 12)
+                cam_id = camera["id"]
+                path = f"/api/v2/cameras/{cam_id}/analysis-status"
+
+                def normal():
+                    item = client.camera(cam_id)
+                    code, analysis = client.call("GET", path)
+                    assert code == 200
+                    if item["runtime"]["state"] == "streaming" and analysis["state"] == "ready":
+                        assert not item["runtime"].get("repeated_frame", False)
+                        return item
+                    return None
+
+                normal_camera = until(normal, 8)
+                frozen = until(lambda: value if (value := client.camera(cam_id))["runtime"].get("repeated_frame") else None, 22)
+                assert frozen["runtime"]["state"] == "unavailable"
+                assert frozen["source_epoch"] == normal_camera["source_epoch"]
+                status, analysis = client.call("GET", path)
+                assert status == 200 and analysis["state"] == "degraded", analysis
+                assert analysis["people"] is analysis["smoke_regions"] is analysis["fire_regions"] is None
+                assert client.call("GET", "/health/ready")[0] == 200
+
+                def recovered():
+                    item = normal()
+                    return item if item and int(item["source_epoch"]) > int(frozen["source_epoch"]) else None
+
+                try:
+                    after = until(recovered, 12)
+                except AssertionError as error:
+                    raise AssertionError({
+                        "frozen_epoch": frozen["source_epoch"],
+                        "final_camera": client.camera(cam_id)["runtime"],
+                        "final_analysis": client.call("GET", path)[1],
+                        "publisher_exit": publisher.poll(),
+                    }) from error
+                assert int(after["runtime"]["frame"]) > int(frozen["runtime"]["frame"])
+                assert publisher.poll() is None, "The RTSP publisher should still be connected"
+    print(json.dumps({"repeated_pixels_detected_with_native_pts": True, "observations_withheld": True,
+                      "moving_pixels_rotated_source_epoch": True, "rtsp_publisher_unchanged": True}))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("core", "worker", "ffmpeg", "demo", "models", "runtime"):
@@ -223,7 +298,10 @@ if __name__ == "__main__":
     parser.add_argument("--runtime-sha256", required=True)
     parser.add_argument("--mediamtx", type=lambda value: Path(value).resolve(strict=True))
     parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
+    parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():
         parser.error("--worker-faults requires Linux procfs")
+    if options.source_freeze and not options.mediamtx:
+        parser.error("--source-freeze requires --mediamtx")
     run(options)
