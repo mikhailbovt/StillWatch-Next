@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
-const POLICY_VERSION: &str = "local-policy-1";
+const POLICY_VERSION: &str = "local-policy-2";
 const PACKET_TTL_MS: i64 = 15_000;
 
 pub(crate) struct HazardPolicies {

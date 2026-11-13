@@ -95,8 +95,8 @@ struct Region {
 #[derive(Clone, Copy)]
 struct Measurement {
     at: i64,
-    flame_area: f64,
-    smoke_area: f64,
+    flame_area: Option<f64>,
+    smoke_area: Option<f64>,
 }
 
 struct Cluster {
@@ -301,8 +301,8 @@ impl Region {
         if sample.visibility != Visibility::Poor {
             self.history.push_back(Measurement {
                 at,
-                flame_area: cluster.flame.map_or(0.0, Box2d::area) / frame_area,
-                smoke_area: cluster.smoke.map_or(0.0, Box2d::area) / frame_area,
+                flame_area: cluster.flame.map(|region| region.area() / frame_area),
+                smoke_area: cluster.smoke.map(|region| region.area() / frame_area),
             });
         }
         let facts = FireFacts {
@@ -363,24 +363,39 @@ fn adjacent(a: Box2d, b: Box2d) -> bool {
     gap_x.hypot(gap_y) <= scale * 0.15 && (ax - bx).hypot(ay - by) <= scale * 0.75
 }
 
-fn grows(history: &VecDeque<Measurement>, area: impl Fn(&Measurement) -> f64) -> bool {
-    let count = history.len();
-    if count < 4
-        || history
-            .back()
-            .expect("last measurement")
-            .at
-            .saturating_sub(history[0].at)
-            < 1_200_000
-    {
+fn grows(history: &VecDeque<Measurement>, area: impl Fn(&Measurement) -> Option<f64>) -> bool {
+    let Some(last) = history.back() else {
+        return false;
+    };
+    if area(last).is_none() {
         return false;
     }
-    let median = |mut values: Vec<f64>| {
+    let mut areas = [0.0; HISTORY_SAMPLES];
+    let mut count = 0;
+    let mut earliest = last.at;
+    // An absent class has no measured box. Compare observations of the same
+    // class and restart its trend after a gap in coverage.
+    for measurement in history.iter().rev() {
+        let Some(observed) = area(measurement) else {
+            continue;
+        };
+        if earliest.saturating_sub(measurement.at) > CONTINUITY_US {
+            break;
+        }
+        areas[count] = observed;
+        count += 1;
+        earliest = measurement.at;
+    }
+    if count < 4 || last.at.saturating_sub(earliest) < 1_200_000 {
+        return false;
+    }
+    let median = |values: &mut [f64]| {
         values.sort_unstable_by(f64::total_cmp);
         (values[(values.len() - 1) / 2] + values[values.len() / 2]) * 0.5
     };
-    let early = median(history.iter().take(count / 2).map(&area).collect());
-    let late = median(history.iter().skip(count / 2).map(area).collect());
+    let (late, early) = areas[..count].split_at_mut(count.div_ceil(2));
+    let early = median(early);
+    let late = median(late);
     late > early * 1.55 && late - early >= 0.0005
 }
 
@@ -536,5 +551,54 @@ mod tests {
             assert_eq!(event.decision, FireDecision::Review);
             assert_eq!(event.facts.apparent_growth, i == 2);
         }
+    }
+
+    #[test]
+    fn missing_class_is_not_a_smaller_box_for_a_growth_comparison() {
+        let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
+        let scope = scope();
+        for (i, label) in [
+            ObservationLabel::Smoke,
+            ObservationLabel::Smoke,
+            ObservationLabel::Fire,
+            ObservationLabel::Fire,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let event = sample(
+                &mut policy,
+                scope,
+                i as i64 * 500_000,
+                observation(label, 0.45, 40.0),
+                Visibility::Good,
+                Some(1.0),
+            );
+            assert!(!event.facts.apparent_growth);
+            assert!(!event.facts.smoke_growth);
+            if i == 3 {
+                assert_eq!(event.decision, FireDecision::ControlledContext);
+            }
+        }
+    }
+
+    #[test]
+    fn growth_uses_recent_measurements_of_the_current_class() {
+        let history = [Some(0.01), Some(0.01), None, Some(0.02), Some(0.022), None]
+            .into_iter()
+            .enumerate()
+            .map(|(index, flame_area)| Measurement {
+                at: index as i64 * 500_000,
+                flame_area,
+                smoke_area: Some(0.01),
+            })
+            .collect::<VecDeque<_>>();
+        assert!(!grows(&history, |sample| sample.flame_area));
+        let mut visible = history;
+        visible.pop_back();
+        assert!(grows(&visible, |sample| sample.flame_area));
+        visible[3].at = 2_500_000;
+        visible[4].at = 3_000_000;
+        assert!(!grows(&visible, |sample| sample.flame_area));
     }
 }

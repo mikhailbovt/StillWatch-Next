@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import sqlite3
 import uuid
@@ -12,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from replay_core import run_core, until
+from replay_core import capture_children, run_core, until, workers_alive
 from rtsp_core import check_port, free_port, launch
 
 
@@ -90,6 +92,69 @@ def run(args):
                               "persisted_evidence": True, "replay_did_not_enqueue_alert": True}))
         if args.mediamtx:
             verify_live_outbox(args, root, model_options)
+        if args.worker_faults:
+            verify_inference_recovery(args, root, model_options)
+
+
+def inference_worker(parent):
+    workers = []
+    for pid in capture_children(parent):
+        try:
+            command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except FileNotFoundError:
+            continue
+        if command[1:] == [b"infer", b""]:
+            workers.append(pid)
+    return workers[0] if len(workers) == 1 else None
+
+
+def verify_inference_recovery(args, root, model_options):
+    with run_core(args.core, args.worker, root / "faults", root, root / "fault-core.log",
+                  *model_options, "--inference-workers", "1") as (process, client):
+        status, camera = client.call("POST", "/api/v2/cameras", {
+            "name": "Inference recovery", "enabled": True,
+            "source": {"type": "replay", "file": "pose.mp4", "pace": True, "repeat": True},
+        }, key="inference-recovery")
+        assert status == 201
+        camera_id = camera["id"]
+        path = f"/api/v2/cameras/{camera_id}/analysis-status"
+
+        def current():
+            status, value = client.call("GET", path)
+            assert status == 200
+            return value
+
+        def ready():
+            value = current()
+            return value if value["state"] == "ready" and int(value["fire_frames"]) > 0 else None
+
+        initial = until(ready, 20)
+        for fault, failure in ((signal.SIGSTOP, "worker_timeout"), (signal.SIGKILL, "worker_failed")):
+            pid = until(lambda: inference_worker(process.pid))
+            os.kill(pid, fault)
+
+            def degraded():
+                _, value = client.call("GET", "/api/v2/status")
+                return value["inference"]["failure"] == failure
+
+            until(degraded)
+            state = current()
+            assert state["state"] == "degraded"
+            assert all(state[name] is None for name in ("people", "fire_regions", "smoke_regions"))
+            assert client.call("GET", "/health/ready")[0] == 200
+
+            def recovered():
+                value = ready()
+                if value is None or workers_alive({pid}):
+                    return None
+                if value["source_epoch"] == initial["source_epoch"]:
+                    return value if int(value["fire_frames"]) > int(initial["fire_frames"]) else None
+                return value if int(value["source_epoch"]) > int(initial["source_epoch"]) else None
+
+            initial = until(recovered, 30)
+            assert inference_worker(process.pid) != pid
+        print(json.dumps({"native_inference_hang_reaped": True, "native_inference_crash_restarted": True,
+                          "unavailable_observations_hidden": True, "core_stayed_live": True}))
 
 
 def verify_live_outbox(args, root, model_options):
@@ -151,4 +216,8 @@ if __name__ == "__main__":
     parser.add_argument("--manifest-sha256", required=True)
     parser.add_argument("--runtime-sha256", required=True)
     parser.add_argument("--mediamtx", type=lambda value: Path(value).resolve(strict=True))
-    run(parser.parse_args())
+    parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
+    options = parser.parse_args()
+    if options.worker_faults and not Path("/proc/self/task").is_dir():
+        parser.error("--worker-faults requires Linux procfs")
+    run(options)
