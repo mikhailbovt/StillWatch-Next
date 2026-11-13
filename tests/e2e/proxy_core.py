@@ -47,12 +47,13 @@ class Proxy:
 
 
 @contextlib.contextmanager
-def proxy_profile(nginx, openssl, root):
+def proxy_profile(nginx, openssl, root, *, port=None, listen_port=None):
     directory = root / "proxy"
     directory.mkdir(mode=0o700)
-    port = free_port()
+    port = port or free_port()
+    listen_port = listen_port or port
     upstream = free_port()
-    while upstream == port:
+    while upstream in (port, listen_port):
         upstream = free_port()
     authority = f"{DNS_NAME}:{port}"
     endpoint = f"https://{authority}"
@@ -74,7 +75,7 @@ def proxy_profile(nginx, openssl, root):
     include.chmod(0o600)
     config = (REPOSITORY / "deploy/nginx/stillwatch.conf").read_text(encoding="utf-8")
     for before, after in {
-        "listen 443 ssl;": f"listen 127.0.0.1:{port} ssl;",
+        "listen 443 ssl;": f"listen 127.0.0.1:{listen_port} ssl;",
         'if ($http_host != "watch.example.com")': f'if ($http_host != "{authority}")',
         "proxy_set_header Host watch.example.com;": f"proxy_set_header Host {authority};",
         "watch.example.com": DNS_NAME,
@@ -97,7 +98,7 @@ def proxy_profile(nginx, openssl, root):
     }}), encoding="utf-8")
     with launch([str(nginx), "-p", str(directory) + "/", "-c", "nginx.conf",
                  "-g", "daemon off; master_process off;"], directory / "nginx.log"):
-        until(lambda: check_port(port))
+        until(lambda: check_port(listen_port))
         yield Proxy(endpoint, upstream, ("--settings-file", str(settings)), der.read_bytes(), secret)
 
 

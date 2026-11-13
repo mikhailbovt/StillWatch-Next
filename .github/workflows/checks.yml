@@ -88,6 +88,10 @@ jobs:
           uv run --no-project --python 3.12.14 python -B tests/e2e/proxy_core.py \
             --core target/debug/stillwatch-core --worker target/debug/stillwatch-worker \
             --nginx "$scratch/usr/sbin/nginx" --openssl "$(command -v openssl)"
+          uv run --no-project --python 3.12.14 python -B tests/e2e/gateway_core.py \
+            --core target/debug/stillwatch-core --worker target/debug/stillwatch-worker \
+            --gateway target/debug/stillwatch-gateway --nginx "$scratch/usr/sbin/nginx" \
+            --openssl "$(command -v openssl)" --node "$(command -v node)"
       - name: Check legacy migration on Windows
         if: runner.os == 'Windows'
         shell: pwsh

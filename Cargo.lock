@@ -2154,6 +2154,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "stillwatch-gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rustls",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "stillwatch-sdk"
 version = "0.1.0"
 dependencies = [

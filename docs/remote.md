@@ -39,6 +39,33 @@ Use `stillwatch-cli pair --data-dir CORE_DATA --role viewer --camera CAMERA_ID -
 
 For certificate renewal, provision the new leaf on nginx and Core together, restart Core with the updated DER and issue fresh pairing offers over a trusted channel. Companion operators verify the new fingerprint with the Core owner, then use **Forget Core on this device** in Settings before enrolling with the new offer. Revoke superseded device registrations after successful migration. Preserve the database so existing camera IDs and history remain available.
 
+## Outbound control relay
+
+Use this profile when Companion reaches a relay host and the Core host can initiate outbound TCP. Build `stillwatch-gateway` with `cargo build --release --locked -p stillwatch-gateway` and run its two modes as separate unprivileged processes. One relay instance serves one Core installation.
+
+Keep the reverse-proxy setup on the Core host and change nginx's TLS listener to `127.0.0.1:9443`. Its certificate and the Core's configured `https_proxy.endpoint` still describe the Companion-facing DNS origin. For the commands below that origin is `https://watch.example.com:8443`. The `Host` check and the upstream `proxy_set_header Host` must include `:8443`. Point the DNS record at the relay, and keep nginx's endpoint private key on the Core host.
+
+On the relay create a separate identity for the connector TLS endpoint with a matching DNS SAN and server authentication purpose. Export the certificate as DER and the private key as unencrypted PKCS#8 DER. Generate a new connector token with `openssl rand -hex 32 > connector.token` using `umask 077`. Transfer the token and connector certificate to the Core host over a trusted channel. The connector matches the relay certificate before sending this token. Protect the key and token with owner-only permissions or ACLs. The two hosts use a connector token distinct from the Core and nginx credentials.
+
+~~~sh
+stillwatch-gateway serve --listen 0.0.0.0:8443 --connector-listen 0.0.0.0:9444 \
+  --certificate-der /etc/stillwatch/connector.der \
+  --private-key-der /etc/stillwatch/connector-key.der \
+  --token-file /etc/stillwatch/connector.token
+~~~
+
+Run the connector on the Core host. Replace the example address with the relay's reachable address and restrict access to the connector port to the Core site's egress IP where possible. Start both processes through their host service supervisors so a process restart also reloads credentials.
+
+~~~sh
+stillwatch-gateway connect --relay 192.0.2.10:9444 --relay-name relay.example.com \
+  --relay-certificate-der /etc/stillwatch/connector.der \
+  --token-file /etc/stillwatch/connector.token --upstream 127.0.0.1:9443
+~~~
+
+Issue a standard proxy pairing offer. The gateway relays the inner TLS bytes to nginx on the Core host, which terminates Companion TLS and applies the same origin, body size and proxy credential checks. The gateway has the connector credential and observes TCP peers, timing and encrypted traffic sizes. The nginx instance sees the connector as the TCP peer, so its IP-based request limit is shared across viewers for this profile. The gateway allows up to 32 simultaneous public connections overall, 12 from an IP and 80 new public connections per one-second window. The default connector pool supplies 24 connections and can be sized for the operator's workload. Each assigned connection has a 35-minute lifetime. The connector replaces lost connections automatically. Reconnecting clients use the Core's normal snapshot and SSE recovery.
+
+Stop both services during connector credential rotation to close existing tunnels, replace the credential files, then restart both. Media uses the Core's separate ICE/TURN setup. Check video and control independently from the remote network.
+
 ## TURN
 
 An operator can supply a dedicated Coturn server with shared-secret authentication and an allocation quota. Point Core at a private file containing the Coturn secret, with owner-only permissions. The two flags are shown below.
@@ -62,4 +89,4 @@ stillwatch-alarm-agent monitor --state MONITOR_STATE --interval-seconds 10 --con
 
 An unreachable state means the observer lost its control path. Check the Core, host network and VPN before diagnosing the cause. Verify video delivery independently.
 
-A public DNS deployment and external NAT qualification require an operator-supplied network. An optional outbound control relay is outside the two profiles above.
+Public DNS and external NAT qualification require an operator-supplied network.
