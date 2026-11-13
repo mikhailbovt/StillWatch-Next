@@ -8,6 +8,7 @@ import json
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import tomllib
 from pathlib import Path
@@ -75,6 +76,47 @@ def media_encoder(args, out, suffix, spec, target):
     return {"version": spec["native_version"], "openh264": spec["openh264_version"], "sha256": expected}
 
 
+def model_pack(args, out, worker, ort_path, ort_sha256):
+    if args.model_sha256 is None or not re.fullmatch(r"[0-9a-f]{64}", args.model_sha256):
+        raise ValueError("A trusted model manifest SHA-256 is required")
+    directory = out / "models"
+    manifest = directory / "models.lock.json"
+    copy(args.models / manifest.name, manifest, args.model_sha256)
+    locked = json.loads(manifest.read_text(encoding="utf-8"))
+    for name in MODEL_FILES[1:]:
+        expected = (locked["parity_report_sha256"] if name == "parity-report.json"
+                    else locked["models"][Path(name).stem]["sha256"])
+        copy(args.models / name, directory / name, expected)
+    if args.model_notices is not None:
+        copy(args.model_notices, out / "licenses/model-notices")
+    report = json.loads((directory / "parity-report.json").read_text(encoding="utf-8"))
+    cases = report["cases"]
+    if not isinstance(cases, dict) or not 1 <= len(cases) <= 64:
+        raise ValueError("Invalid model reference fixture count")
+    fixtures = directory / "fixtures"
+    for name, case in cases.items():
+        if not re.fullmatch(r"[a-z0-9_]{1,40}", name):
+            raise ValueError("Invalid model reference fixture name")
+        files = {f"{name}.f32": case["tensor_sha256"]}
+        rgb = case.get("image")
+        if rgb is not None:
+            files[f"{name}.rgb"] = rgb["rgb_sha256"]
+        for model in ("pose", "pose_balanced", "fire"):
+            files[f"{model}_{name}.f32"] = report["models"][model][name]["reference_sha256"]
+        for filename, expected in files.items():
+            source = args.models / "fixtures" / filename
+            metadata = source.stat()
+            if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 3840 * 2160 * 3:
+                raise ValueError(f"Invalid model reference fixture {filename}")
+            copy(source, fixtures / filename, expected)
+    completed = subprocess.run([
+        str(worker), "verify-model-pack", str(ort_path), ort_sha256, str(directory.resolve()), args.model_sha256,
+    ], timeout=90, check=True, text=True, capture_output=True)
+    if json.loads(completed.stdout).get("qualified") is not True:
+        raise ValueError("Staged model reference verification did not succeed")
+    return args.model_sha256
+
+
 def main(args):
     system = platform.system().lower()
     if system not in ("windows", "linux") or platform.machine().lower() not in ("amd64", "x86_64"):
@@ -121,20 +163,7 @@ def main(args):
         raise ValueError("Staged capture worker lacks RTSP peer confinement")
     model_digest = None
     if args.models is not None:
-        if args.model_sha256 is None or not re.fullmatch(r"[0-9a-f]{64}", args.model_sha256):
-            raise ValueError("A trusted model manifest SHA-256 is required")
-        model_digest = args.model_sha256
-        for name in MODEL_FILES:
-            copy(args.models / name, out / "models" / name, model_digest if name == "models.lock.json" else None)
-        if args.model_notices is not None:
-            copy(args.model_notices, out / "licenses/model-notices")
-        completed = subprocess.run([
-            str(worker), "doctor",
-            str((out / "runtime" / ort_file).resolve()), ort["library_sha256"],
-            str((out / "models").resolve()), model_digest,
-        ], timeout=30, check=True, text=True, capture_output=True)
-        if json.loads(completed.stdout).get("models") != 3:
-            raise ValueError("Model pack startup verification did not succeed")
+        model_digest = model_pack(args, out, worker, (out / "runtime" / ort_file).resolve(), ort["library_sha256"])
     revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
     status = subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True)
     with (ROOT / "rust-toolchain.toml").open("rb") as toolchain:

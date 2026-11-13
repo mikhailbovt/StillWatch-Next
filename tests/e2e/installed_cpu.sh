@@ -20,6 +20,7 @@ done
 "$install_dir/bin/stillwatch-worker" doctor \
     "$install_dir/runtime/libonnxruntime.so.1.31.0" 469849977cb60744ea160927e1a3a0643fd4c55c0aff743251c6d293402e334e \
     "$STILLWATCH_MODEL_DIR" "$STILLWATCH_MODEL_SHA256" | grep -F '"models":3'
+/usr/bin/stillwatch-core --check-inference | grep -F 'inference workers are ready'
 
 /usr/bin/stillwatch-core &
 core=$!
@@ -33,8 +34,11 @@ for attempt in {1..30}; do
     if [[ -s /var/lib/stillwatch/local-access-token ]] &&
         timeout 5 /usr/bin/stillwatch-cli doctor --data-dir /var/lib/stillwatch \
             >/tmp/stillwatch-doctor.json 2>/tmp/stillwatch-doctor-error; then
-        grep -F '"state": "ready"' /tmp/stillwatch-doctor.json
-        exit 0
+        if grep -Fq '"ready_workers": 1' /tmp/stillwatch-doctor.json &&
+            grep -Fq '"failure": null' /tmp/stillwatch-doctor.json; then
+            grep -F '"state": "ready"' /tmp/stillwatch-doctor.json
+            exit 0
+        fi
     fi
     sleep 0.2
 done
