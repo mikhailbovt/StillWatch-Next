@@ -1,0 +1,71 @@
+name: iOS Companion checks
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install locked Flutter framework
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/stillwatch-flutter"
+          git -C "$RUNNER_TEMP/stillwatch-flutter" remote add origin https://github.com/flutter/flutter.git
+          git -C "$RUNNER_TEMP/stillwatch-flutter" fetch --depth 1 origin refs/tags/3.50.0:refs/tags/3.50.0
+          test "$(git -C "$RUNNER_TEMP/stillwatch-flutter" rev-parse '3.50.0^{commit}')" = ab2912035e160d9cad6306df307576da6128ebdb
+          git -C "$RUNNER_TEMP/stillwatch-flutter" checkout --detach 3.50.0
+          echo "$RUNNER_TEMP/stillwatch-flutter/bin" >> "$GITHUB_PATH"
+      - name: Analyze and test Companion
+        working-directory: apps/companion
+        run: |
+          xcodebuild -version
+          flutter --version
+          flutter pub get --enforce-lockfile
+          flutter analyze --fatal-infos
+          flutter test --no-pub
+      - name: Build unsigned iOS archive
+        working-directory: apps/companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ipa --release --no-codesign --no-pub
+          app=build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app
+          test -d "$app"
+          find "$app" -type f -print | sed "s|^$app/||" | LC_ALL=C sort > "$RUNNER_TEMP/ios-inventory.txt"
+          if grep -Ei '(\.(onnx|pt|safetensors|tflite)$|onnxruntime|stillwatch-core|firebase[._-]ai)' "$RUNNER_TEMP/ios-inventory.txt"; then
+            exit 1
+          fi
+      - name: Build and launch on iOS Simulator
+        working-directory: apps/companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ios --simulator --debug --no-pub
+          device=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for key, devices in sorted(runtimes.items(), reverse=True)
+                     if "SimRuntime.iOS-" in key for d in devices if d["name"].startswith("iPhone")))
+          ')
+          app=build/ios/iphonesimulator/Runner.app
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch "$device" "$bundle"
+          sleep 2
+          mkdir -p "$RUNNER_TEMP/stillwatch-ios"
+          cp "$RUNNER_TEMP/ios-inventory.txt" "$RUNNER_TEMP/stillwatch-ios/"
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/stillwatch-ios/first-run.png"
+      - name: Retain simulator screenshot and archive inventory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stillwatch-ios-simulator
+          path: ${{ runner.temp }}/stillwatch-ios/
+          if-no-files-found: error
+          retention-days: 1

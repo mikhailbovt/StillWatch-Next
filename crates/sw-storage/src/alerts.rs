@@ -1,0 +1,128 @@
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use sw_domain::UnixMillis;
+use sw_protocol::{AlertDelivery, AlertFeed, Attention, Counter, UtcTimestamp};
+use uuid::Uuid;
+
+use crate::{
+    Store, StoreError,
+    cameras::camera_filter,
+    db::{id, row_counter, sql_counter},
+};
+
+const MAX_FEED: usize = 128;
+const AUDIT_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+impl Store {
+    pub async fn active_alerts(
+        &self,
+        actor: Uuid,
+        cameras: Option<Vec<Uuid>>,
+        now: UnixMillis,
+    ) -> Result<AlertFeed, StoreError> {
+        let filter = camera_filter(cameras)?;
+        let instance = self.identity().instance_id;
+        self.call(move |db| {
+            let mut query = db.conn.prepare(
+                "SELECT n.id, n.incident_id, i.camera_id, i.revision, n.attention_cycle, n.attention, n.expires_at, r.client_seen_at
+                 FROM notification_outbox n JOIN incidents i ON i.id = n.incident_id
+                 LEFT JOIN alert_silences s ON s.incident_id = i.id AND s.device_id = ?1 AND s.attention_cycle = n.attention_cycle
+                 LEFT JOIN notification_receipts r ON r.alert_id = n.id AND r.device_id = ?1
+                 WHERE n.state = 'queued' AND n.expires_at > ?2 AND n.next_attempt_at <= ?2
+                   AND i.resolved = 0 AND i.attention = n.attention
+                   AND json_extract(i.state, '$.acknowledgement') IS NULL
+                   AND coalesce(s.until_utc, 0) <= ?2
+                   AND (?3 IS NULL OR lower(hex(i.camera_id)) IN (SELECT value FROM json_each(?3)))
+                 ORDER BY n.attention DESC, r.client_seen_at IS NOT NULL, n.created_at DESC, n.id DESC LIMIT ?4",
+            )?;
+            let rows = query.query_map(params![id(&actor), now, filter, MAX_FEED as i64], |row| {
+                Ok((
+                    row_counter(row, 0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row_counter(row, 3)?,
+                    row_counter(row, 4)?,
+                    row.get::<_, u8>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                ))
+            })?;
+            let mut alerts = Vec::new();
+            for row in rows {
+                let (alert, incident, camera, revision, cycle, attention, expiry, seen) = row?;
+                alerts.push(AlertDelivery {
+                    id: Counter(alert),
+                    core_id: instance,
+                    incident_id: parse_id(&incident)?,
+                    camera_id: parse_id(&camera)?,
+                    revision: Counter(revision),
+                    attention_cycle: Counter(cycle),
+                    attention: match attention {
+                        1 => Attention::Review,
+                        2 => Attention::Urgent,
+                        _ => return Err(StoreError::Invalid),
+                    },
+                    expires_at: timestamp(expiry)?,
+                    client_seen_at: seen.map(timestamp).transpose()?,
+                });
+            }
+            Ok(AlertFeed { alerts })
+        }).await
+    }
+
+    pub async fn record_alert_seen(
+        &self,
+        actor: Uuid,
+        alert: Counter,
+        cycle: Counter,
+        cameras: Option<Vec<Uuid>>,
+        now: UnixMillis,
+    ) -> Result<(), StoreError> {
+        let filter = camera_filter(cameras)?;
+        self.call(move |db| {
+            let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let row_id = sql_counter(alert.0)?;
+            let allowed = tx.query_row(
+                "SELECT 1 FROM notification_outbox n JOIN incidents i ON i.id = n.incident_id
+                 WHERE n.id = ?1 AND n.attention_cycle = ?2 AND n.expires_at > ?3
+                   AND (?4 IS NULL OR lower(hex(i.camera_id)) IN (SELECT value FROM json_each(?4)))",
+                params![row_id, sql_counter(cycle.0)?, now, filter],
+                |_| Ok(()),
+            ).optional()?;
+            if allowed.is_none() {
+                return Err(StoreError::NotFound);
+            }
+            tx.execute(
+                "INSERT INTO notification_receipts(alert_id, device_id, client_seen_at) VALUES (?, ?, ?)
+                 ON CONFLICT(alert_id, device_id) DO NOTHING",
+                params![row_id, id(&actor), now],
+            )?;
+            tx.commit()?;
+            Ok(())
+        }).await
+    }
+
+    pub async fn expire_alerts(&self, now: UnixMillis) -> Result<(), StoreError> {
+        self.call(move |db| {
+            let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute(
+                "UPDATE notification_outbox SET state = 'expired' WHERE state = 'queued' AND expires_at <= ?",
+                [now],
+            )?;
+            tx.execute(
+                "DELETE FROM notification_outbox WHERE state = 'expired' AND expires_at <= ?",
+                [now.saturating_sub(AUDIT_RETENTION_MS)],
+            )?;
+            tx.execute("DELETE FROM alert_silences WHERE until_utc <= ?", [now])?;
+            tx.commit()?;
+            Ok(())
+        }).await
+    }
+}
+
+fn parse_id(data: &[u8]) -> Result<Uuid, StoreError> {
+    Uuid::from_slice(data).map_err(|_| StoreError::Invalid)
+}
+
+fn timestamp(ms: UnixMillis) -> Result<UtcTimestamp, StoreError> {
+    UtcTimestamp::from_unix_millis(ms).map_err(|_| StoreError::Invalid)
+}

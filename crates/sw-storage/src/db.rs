@@ -1,0 +1,628 @@
+use std::{
+    fs::{self, File, OpenOptions, TryLockError},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use sw_domain::{
+    Assessment, Attention, Clearance, EvidenceStamp, Incident, NewIncident, SourceScope,
+    Transition, UnixMillis,
+};
+use tokio::sync::watch;
+use uuid::Uuid;
+
+use crate::{
+    Change, ChangeCursor, CommandResult, HistoryCursor, Identity, IncidentPage, MAX_CHANGES,
+    MAX_PAGE, MAX_SNAPSHOT, OperatorCommand, Snapshot, StoreError, cameras::camera_filter,
+};
+
+pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
+pub const APPLICATION_ID: i64 = 0x53574e32;
+pub const SCHEMA_VERSION: i64 = 7;
+pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
+const ALERT_TTL: i64 = 60 * 60 * 1_000;
+
+pub(crate) struct Database {
+    pub(crate) conn: Connection,
+    pub(crate) identity: Identity,
+    pub(crate) blobs: PathBuf,
+    pub(crate) quota: u64,
+    pub(crate) notify: watch::Sender<()>,
+    _lock: File,
+}
+
+impl Database {
+    pub fn open(root: &Path, quota: u64, notify: watch::Sender<()>) -> Result<Self, StoreError> {
+        private_dir(root)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(root.join("instance.lock"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Err(StoreError::InUse),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        let blobs = root.join("blobs");
+        private_dir(&blobs)?;
+        let mut conn = Connection::open_with_flags(
+            root.join(DATABASE_FILE),
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+                | OpenFlags::SQLITE_OPEN_CREATE
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(Duration::from_secs(3))?;
+        migrate(&mut conn)?;
+        let journal: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        if !journal.eq_ignore_ascii_case("wal") {
+            return Err(StoreError::Schema);
+        }
+        conn.execute_batch(
+            "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;
+             PRAGMA journal_size_limit = 16777216;",
+        )?;
+        let identity = read_identity(&conn)?;
+        let mut db = Self {
+            conn,
+            identity,
+            blobs,
+            quota,
+            notify,
+            _lock: lock,
+        };
+        db.reconcile_evidence()?;
+        Ok(db)
+    }
+
+    pub fn create(&mut self, new: NewIncident, now: UnixMillis) -> Result<Incident, StoreError> {
+        self.create_checked(new, now, false)
+    }
+
+    pub fn create_hazard(
+        &mut self,
+        new: NewIncident,
+        now: UnixMillis,
+    ) -> Result<Incident, StoreError> {
+        self.create_checked(new, now, true)
+    }
+
+    fn create_checked(
+        &mut self,
+        new: NewIncident,
+        now: UnixMillis,
+        verify_camera: bool,
+    ) -> Result<Incident, StoreError> {
+        let hash = digest(&new)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = tx
+            .query_row(
+                "SELECT creation_hash, state FROM incidents WHERE id = ?",
+                [id(&new.id)],
+                |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        if let Some((creation_hash, state)) = existing {
+            if creation_hash != hash {
+                return Err(StoreError::IncidentConflict);
+            }
+            return Ok(serde_json::from_str(&state)?);
+        }
+        if verify_camera {
+            verify_camera_scope(&tx, new.scope)?;
+        }
+        let transition = Incident::create(new, now)?;
+        let incident = &transition.incident;
+        let state = serde_json::to_string(incident)?;
+        tx.execute(
+            "INSERT INTO incidents(id, camera_id, revision, created_at, updated_at, resolved, attention, creation_hash, state, camera_hazard)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![id(&incident.id), id(&incident.scope.camera_id), sql_counter(incident.revision)?, incident.created_at,
+                incident.updated_at, incident.resolution.is_some(), attention(incident.attention), hash.as_slice(), state, verify_camera],
+        )?;
+        append_change(&tx, &transition, true, &state)?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(transition.incident)
+    }
+
+    pub fn get(&self, incident: Uuid) -> Result<Incident, StoreError> {
+        get_incident(&self.conn, incident)
+    }
+
+    pub fn history(
+        &self,
+        after: Option<HistoryCursor>,
+        limit: usize,
+        allowed: Option<Vec<Uuid>>,
+    ) -> Result<IncidentPage, StoreError> {
+        validate_page(limit)?;
+        let allowed = camera_filter(allowed)?;
+        let incidents = self
+            .conn
+            .prepare(
+                "SELECT state FROM incidents WHERE (?1 IS NULL OR (created_at, id) < (?1, ?2))
+             AND (?3 IS NULL OR lower(hex(camera_id)) IN (SELECT value FROM json_each(?3)))
+             ORDER BY created_at DESC, id DESC LIMIT ?4",
+            )?
+            .query_map(
+                params![
+                    after.map(|cursor| cursor.created_at),
+                    after.as_ref().map(|cursor| id(&cursor.id)),
+                    allowed,
+                    limit as i64 + 1
+                ],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let more = incidents.len() > limit;
+        let incidents = incidents
+            .iter()
+            .take(limit)
+            .map(|state| serde_json::from_str::<Incident>(state))
+            .collect::<Result<Vec<_>, _>>()?;
+        let next = incidents
+            .last()
+            .filter(|_| more)
+            .map(|incident| HistoryCursor {
+                created_at: incident.created_at,
+                id: incident.id,
+            });
+        Ok(IncidentPage { incidents, next })
+    }
+
+    pub fn snapshot(&mut self, allowed: Option<Vec<Uuid>>) -> Result<Snapshot, StoreError> {
+        let allowed = camera_filter(allowed)?;
+        let tx = self.conn.transaction()?;
+        let (_, sequence) = bounds(&tx)?;
+        let incidents = {
+            let mut statement = tx.prepare(
+                "SELECT state FROM incidents WHERE resolved = 0
+                 AND (?1 IS NULL OR lower(hex(camera_id)) IN (SELECT value FROM json_each(?1)))
+                 ORDER BY created_at DESC, id DESC LIMIT ?2",
+            )?;
+            let states = statement.query_map(params![allowed, MAX_SNAPSHOT as i64 + 1], |row| {
+                row.get::<_, String>(0)
+            })?;
+            states
+                .map(|state| Ok(serde_json::from_str::<Incident>(&state?)?))
+                .collect::<Result<Vec<_>, StoreError>>()?
+        };
+        if incidents.len() > MAX_SNAPSHOT {
+            return Err(StoreError::SnapshotLimit);
+        }
+        tx.commit()?;
+        Ok(Snapshot {
+            cursor: ChangeCursor {
+                generation: self.identity.generation,
+                sequence,
+            },
+            incidents,
+        })
+    }
+
+    pub fn changes(
+        &mut self,
+        after: ChangeCursor,
+        limit: usize,
+    ) -> Result<Vec<Change>, StoreError> {
+        validate_page(limit)?;
+        if after.generation != self.identity.generation {
+            return Err(StoreError::CursorExpired);
+        }
+        let tx = self.conn.transaction()?;
+        let (oldest, newest) = bounds(&tx)?;
+        if after.sequence > newest || after.sequence < oldest {
+            return Err(StoreError::CursorExpired);
+        }
+        let changes = {
+            let mut statement = tx.prepare("SELECT sequence, opened, incident FROM change_events WHERE sequence > ? ORDER BY sequence LIMIT ?")?;
+            let rows = statement.query_map(
+                params![sql_counter(after.sequence)?, limit as i64],
+                |row| {
+                    Ok((
+                        row_counter(row, 0)?,
+                        row.get::<_, bool>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )?;
+            rows.map(|row| {
+                let (sequence, opened, state) = row?;
+                let incident = serde_json::from_str(&state)?;
+                Ok(Change {
+                    cursor: ChangeCursor { sequence, ..after },
+                    opened,
+                    incident,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?
+        };
+        tx.commit()?;
+        Ok(changes)
+    }
+
+    pub fn apply(
+        &mut self,
+        command: OperatorCommand,
+        now: UnixMillis,
+    ) -> Result<CommandResult, StoreError> {
+        let key = &command.idempotency_key;
+        if !(1..=128).contains(&key.len())
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        {
+            return Err(StoreError::Invalid);
+        }
+        let operation = command.action.operation();
+        let actor = id(&command.actor_id);
+        let hash = digest(&(
+            command.incident_id,
+            command.expected_revision,
+            &command.action,
+        ))?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM idempotency_records WHERE expires_at <= ?",
+            [now],
+        )?;
+        let cached = tx.query_row(
+            "SELECT request_hash, result FROM idempotency_records WHERE actor_id = ? AND operation = ? AND key = ?",
+            params![actor, operation, key], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+        if let Some((previous_hash, state)) = cached {
+            if previous_hash != hash {
+                return Err(StoreError::Idempotency);
+            }
+            return Ok(CommandResult {
+                incident: serde_json::from_str(&state)?,
+                replayed: true,
+            });
+        }
+        let incident = get_incident(&tx, command.incident_id)?;
+        if incident.revision != command.expected_revision {
+            return Err(StoreError::Revision {
+                current: incident.revision,
+            });
+        }
+        let transition = incident.apply(command.actor_id, &command.action, now)?;
+        let (sequence, state) = update_incident(&tx, &transition)?;
+        tx.execute(
+            "INSERT INTO operator_actions(change_sequence, incident_id, incident_revision, actor_id, occurred_at, action) VALUES (?, ?, ?, ?, ?, ?)",
+            params![sequence, id(&incident.id), sql_counter(transition.incident.revision)?, actor, transition.incident.updated_at, serde_json::to_string(&command.action)?],
+        )?;
+        tx.execute(
+            "INSERT INTO idempotency_records(actor_id, operation, key, request_hash, result, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            params![actor, operation, key, hash.as_slice(), state, now.saturating_add(IDEMPOTENCY_TTL)],
+        )?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(CommandResult {
+            incident: transition.incident,
+            replayed: false,
+        })
+    }
+
+    pub fn observe(
+        &mut self,
+        incident: Uuid,
+        scope: SourceScope,
+        source_us: i64,
+        assessment: Assessment,
+        now: UnixMillis,
+    ) -> Result<Incident, StoreError> {
+        self.transition(incident, |current| {
+            current.record_observation(scope, source_us, assessment, now)
+        })
+    }
+
+    pub fn observe_hazard(
+        &mut self,
+        new: NewIncident,
+        now: UnixMillis,
+    ) -> Result<Incident, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = get_incident(&tx, new.id)?;
+        if current.scope != new.scope || current.category != new.category {
+            return Err(sw_domain::DomainError::Stale.into());
+        }
+        if current.resolution.is_some() || current.last_source_us >= new.last_source_us {
+            return Ok(current);
+        }
+        verify_camera_scope(&tx, new.scope)?;
+        let transition =
+            current.record_observation(new.scope, new.last_source_us, new.assessment, now)?;
+        update_incident(&tx, &transition)?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(transition.incident)
+    }
+
+    pub fn record_recovery(
+        &mut self,
+        incident: Uuid,
+        scope: SourceScope,
+        source_us: i64,
+        now: UnixMillis,
+    ) -> Result<(), StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_camera_scope(&tx, scope)?;
+        let current = get_incident(&tx, incident)?;
+        let transition = current.record_recovery(scope, source_us, now)?;
+        update_incident(&tx, &transition)?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(())
+    }
+
+    pub fn semantic(
+        &mut self,
+        incident: Uuid,
+        stamp: EvidenceStamp,
+        assessment: Assessment,
+        clearance: Clearance,
+        now: UnixMillis,
+    ) -> Result<Incident, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = get_incident(&tx, incident)?;
+        if tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cameras WHERE id = ?)",
+            [id(&stamp.scope.camera_id)],
+            |row| row.get::<_, bool>(0),
+        )? {
+            verify_camera_scope(&tx, stamp.scope)?;
+        }
+        let transition = current.record_semantic(stamp, assessment, clearance, now)?;
+        update_incident(&tx, &transition)?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(transition.incident)
+    }
+
+    fn transition(
+        &mut self,
+        incident: Uuid,
+        reducer: impl FnOnce(Incident) -> Result<Transition, sw_domain::DomainError>,
+    ) -> Result<Incident, StoreError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transition = reducer(get_incident(&tx, incident)?)?;
+        update_incident(&tx, &transition)?;
+        tx.commit()?;
+        self.notify.send_replace(());
+        Ok(transition.incident)
+    }
+}
+
+pub(crate) fn verify_camera_scope(conn: &Connection, scope: SourceScope) -> Result<(), StoreError> {
+    let current = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM cameras WHERE id = ? AND source_epoch = ? AND scene_revision = ? AND enabled = 1 AND deleted = 0)",
+        params![id(&scope.camera_id), sql_counter(scope.epoch)?, sql_counter(scope.scene_revision)?], |r| r.get::<_, bool>(0),
+    )?;
+    if current {
+        Ok(())
+    } else {
+        Err(sw_domain::DomainError::Stale.into())
+    }
+}
+
+pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
+    let application_id: i64 = conn.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    match (application_id, version) {
+        (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
+        (APPLICATION_ID, 1..=6) => {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if version == 1 {
+                tx.execute_batch(include_str!("migrations/002.sql"))?;
+            }
+            if version <= 2 {
+                tx.execute_batch(include_str!("migrations/003.sql"))?;
+            }
+            if version <= 3 {
+                tx.execute_batch(include_str!("migrations/004.sql"))?;
+            }
+            if version <= 4 {
+                tx.execute_batch(include_str!("migrations/005.sql"))?;
+            }
+            if version <= 5 {
+                tx.execute_batch(include_str!("migrations/006.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/007.sql"))?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+            Ok(())
+        }
+        (0, 0) => {
+            let tables: i64 = conn.query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE type = 'table'",
+                [],
+                |row| row.get(0),
+            )?;
+            if tables != 0 {
+                return Err(StoreError::Schema);
+            }
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("migrations/001.sql"))?;
+            tx.execute_batch(include_str!("migrations/002.sql"))?;
+            tx.execute_batch(include_str!("migrations/003.sql"))?;
+            tx.execute_batch(include_str!("migrations/004.sql"))?;
+            tx.execute_batch(include_str!("migrations/005.sql"))?;
+            tx.execute_batch(include_str!("migrations/006.sql"))?;
+            tx.execute_batch(include_str!("migrations/007.sql"))?;
+            tx.execute(
+                "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
+                params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],
+            )?;
+            tx.pragma_update(None, "application_id", APPLICATION_ID)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.commit()?;
+            Ok(())
+        }
+        _ => Err(StoreError::Schema),
+    }
+}
+
+pub(crate) fn read_identity(conn: &Connection) -> Result<Identity, StoreError> {
+    let (instance, generation) = conn.query_row(
+        "SELECT instance_id, stream_generation FROM core_identity WHERE singleton = 1",
+        [],
+        |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+    )?;
+    Ok(Identity {
+        instance_id: Uuid::from_slice(&instance).map_err(|_| StoreError::Schema)?,
+        generation: Uuid::from_slice(&generation).map_err(|_| StoreError::Schema)?,
+    })
+}
+
+pub(crate) fn private_dir(path: &Path) -> Result<(), StoreError> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(StoreError::Invalid);
+    }
+    Ok(())
+}
+
+pub(crate) fn get_incident(conn: &Connection, incident: Uuid) -> Result<Incident, StoreError> {
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM incidents WHERE id = ?",
+            [id(&incident)],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or(StoreError::NotFound)?;
+    Ok(serde_json::from_str(&state)?)
+}
+
+pub(crate) fn update_incident(
+    tx: &Transaction<'_>,
+    transition: &Transition,
+) -> Result<(i64, String), StoreError> {
+    let incident = &transition.incident;
+    let state = serde_json::to_string(incident)?;
+    let revision = sql_counter(incident.revision)?;
+    let written = tx.execute(
+        "UPDATE incidents SET revision = ?, updated_at = ?, resolved = ?, attention = ?, state = ? WHERE id = ? AND revision = ?",
+        params![revision, incident.updated_at, incident.resolution.is_some(), attention(incident.attention), state, id(&incident.id), revision - 1],
+    )?;
+    if written != 1 {
+        return Err(StoreError::Invalid);
+    }
+    let sequence = append_change(tx, transition, false, &state)?;
+    Ok((sequence, state))
+}
+
+pub(crate) fn append_change(
+    tx: &Transaction<'_>,
+    transition: &Transition,
+    opened: bool,
+    state: &str,
+) -> Result<i64, StoreError> {
+    let incident = &transition.incident;
+    let incident_id = id(&incident.id);
+    let cycle = sql_counter(incident.attention_cycle)?;
+    tx.execute(
+        "INSERT INTO change_events(incident_id, revision, occurred_at, opened, incident) VALUES (?, ?, ?, ?, ?)",
+        params![incident_id, sql_counter(incident.revision)?, incident.updated_at, opened, state],
+    )?;
+    let sequence = tx.last_insert_rowid();
+    if incident.resolution.is_some() || transition.notification.is_some() {
+        tx.execute("UPDATE notification_outbox SET state = 'expired' WHERE incident_id = ? AND state = 'queued'", [incident_id])?;
+        tx.execute(
+            "DELETE FROM alert_silences WHERE incident_id = ?",
+            [incident_id],
+        )?;
+    }
+    if let Some(level) = transition.notification {
+        tx.execute(
+            "INSERT INTO notification_outbox(incident_id, attention_cycle, attention, state, created_at, expires_at, next_attempt_at)
+             VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+            params![incident_id, cycle, attention(level), incident.updated_at, incident.updated_at.saturating_add(ALERT_TTL), incident.updated_at],
+        )?;
+    }
+    if let Some(silence) = transition.silence {
+        tx.execute(
+            "INSERT INTO alert_silences VALUES (?, ?, ?, ?) ON CONFLICT(incident_id, device_id) DO UPDATE SET attention_cycle = excluded.attention_cycle, until_utc = excluded.until_utc",
+            params![incident_id, id(&silence.device_id), sql_counter(silence.attention_cycle)?, silence.until],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM change_events WHERE sequence <= ?",
+        [sequence - MAX_CHANGES as i64],
+    )?;
+    Ok(sequence)
+}
+
+fn bounds(conn: &Connection) -> Result<(u64, u64), StoreError> {
+    Ok(conn.query_row(
+        "SELECT max(change_floor, coalesce((SELECT min(sequence)-1 FROM change_events), 0)),
+                coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'change_events'), 0)
+         FROM core_identity WHERE singleton = 1",
+        [],
+        |row| Ok((row_counter(row, 0)?, row_counter(row, 1)?)),
+    )?)
+}
+
+pub(crate) fn id(id: &Uuid) -> &[u8] {
+    id.as_bytes()
+}
+
+pub(crate) fn sql_counter(value: u64) -> Result<i64, StoreError> {
+    i64::try_from(value).map_err(|_| StoreError::Invalid)
+}
+
+pub(crate) fn row_counter(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<u64> {
+    u64::try_from(row.get::<_, i64>(column)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Integer,
+            Box::new(error),
+        )
+    })
+}
+
+fn attention(level: Attention) -> i64 {
+    match level {
+        Attention::Info => 0,
+        Attention::Review => 1,
+        Attention::Urgent => 2,
+    }
+}
+
+fn validate_page(limit: usize) -> Result<(), StoreError> {
+    if (1..=MAX_PAGE).contains(&limit) {
+        Ok(())
+    } else {
+        Err(StoreError::Invalid)
+    }
+}
+
+fn digest(value: &impl Serialize) -> Result<[u8; 32], StoreError> {
+    Ok(Sha256::digest(serde_json::to_vec(value)?).into())
+}

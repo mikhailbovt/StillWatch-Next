@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PairingRequest",
+  "type": "object",
+  "properties": {
+    "camera_ids": {
+      "description": "An empty list grants access to all cameras for an owner and none for other roles.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "role": {
+      "$ref": "#/$defs/DeviceRole"
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeviceScope"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "role",
+    "camera_ids",
+    "scopes"
+  ],
+  "$defs": {
+    "DeviceRole": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "operator",
+        "viewer"
+      ]
+    },
+    "DeviceScope": {
+      "type": "string",
+      "enum": [
+        "cameras_write",
+        "events_ack",
+        "evidence_read",
+        "streams_read",
+        "provider_evaluate"
+      ]
+    }
+  }
+}

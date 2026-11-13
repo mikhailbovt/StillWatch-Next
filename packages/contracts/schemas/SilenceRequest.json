@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SilenceRequest",
+  "type": "object",
+  "properties": {
+    "duration_seconds": {
+      "type": "integer",
+      "format": "uint32",
+      "maximum": 3600,
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "duration_seconds"
+  ]
+}

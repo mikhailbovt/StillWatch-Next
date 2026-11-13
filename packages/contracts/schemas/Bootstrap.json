@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bootstrap",
+  "type": "object",
+  "properties": {
+    "instance_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "version": {
+      "$ref": "#/$defs/ApiVersion"
+    }
+  },
+  "required": [
+    "instance_id",
+    "version"
+  ],
+  "$defs": {
+    "ApiVersion": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ]
+    }
+  }
+}

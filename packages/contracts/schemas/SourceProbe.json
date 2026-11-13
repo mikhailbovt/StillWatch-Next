@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SourceProbe",
+  "type": "object",
+  "properties": {
+    "dimensions": {
+      "$ref": "#/$defs/Dimensions"
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "native_pts": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "dimensions",
+    "live",
+    "native_pts"
+  ],
+  "$defs": {
+    "Dimensions": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    }
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "evaluation": "Controlled flame scene comparison",
+  "annotation": "One reviewer inspected sampled source frames before evaluation and labeled a polygon around the expected flame enclosure in each stationary view. These clips are expected controlled sources. There is no independent grading of smoke or growth within them. Frames were resized to at most 960 pixels wide and transcoded without audio.",
+  "thresholds": {
+    "before_onset_tolerance_s": 2,
+    "max_delay_s": 8
+  },
+  "clips": [
+    {
+      "file": "candle.mp4",
+      "group": "controlled_fire_candle",
+      "scene": "candle",
+      "duration_s": 24.0,
+      "onset_s": null,
+      "sha256": "208f42c47e566626e07ab93c8e7b78af67bffd4958561a4459313bd00cd66026",
+      "cloud_consent": false,
+      "source_page": "https://commons.wikimedia.org/wiki/File:Blue_candle_burning.webm",
+      "source_download": "https://upload.wikimedia.org/wikipedia/commons/4/4f/Blue_candle_burning.webm",
+      "source_sha256": "58c7134d0e990f303b01a2e13c85a4ebf2a59544528efc1b536dafa6361de884",
+      "author": "Jahobr",
+      "license": "CC0-1.0",
+      "seek_s": 0,
+      "requested_seconds": 24,
+      "controlled_fire_regions": [
+        {
+          "source": "candle",
+          "mode": "steady",
+          "polygon": [
+            {
+              "x": 3600,
+              "y": 2200
+            },
+            {
+              "x": 6600,
+              "y": 2200
+            },
+            {
+              "x": 6600,
+              "y": 7500
+            },
+            {
+              "x": 3600,
+              "y": 7500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "hearth.mp4",
+      "group": "controlled_fire_hearth",
+      "scene": "hearth",
+      "duration_s": 239.973067,
+      "onset_s": null,
+      "sha256": "2356f3c3224b7e7eeb0255e55242627ef1a2923d132f9e227b7646e433bd1d08",
+      "cloud_consent": false,
+      "source_page": "https://commons.wikimedia.org/wiki/File:Mount_Rainier_Holiday_Hearth.webm",
+      "source_download": "https://upload.wikimedia.org/wikipedia/commons/d/d4/Mount_Rainier_Holiday_Hearth.webm",
+      "source_sha256": "70c519b353ddd51845314788317c8faf8f635b296a07b041f8a346285588c539",
+      "author": "Mount Rainier National Park",
+      "license": "CC-BY-3.0",
+      "seek_s": 180,
+      "requested_seconds": 240,
+      "controlled_fire_regions": [
+        {
+          "source": "fireplace",
+          "mode": "steady",
+          "polygon": [
+            {
+              "x": 1600,
+              "y": 1100
+            },
+            {
+              "x": 8500,
+              "y": 1100
+            },
+            {
+              "x": 8500,
+              "y": 8950
+            },
+            {
+              "x": 1600,
+              "y": 8950
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "fireplace.mp4",
+      "group": "controlled_fire_fireplace",
+      "scene": "fireplace",
+      "duration_s": 15.0,
+      "onset_s": null,
+      "sha256": "34a48e217835497592fa0ad28d83561132bed6933565251c12891d574c2bee36",
+      "cloud_consent": false,
+      "source_page": "https://commons.wikimedia.org/wiki/File:Fireplace_1_2021-02-14.webm",
+      "source_download": "https://upload.wikimedia.org/wikipedia/commons/0/04/Fireplace_1_2021-02-14.webm",
+      "source_sha256": "e19ff964538e9bb0831ae396070f0ea29cee7e95d563b8dab05af92355302fe1",
+      "author": "Fastily",
+      "license": "CC-BY-SA-4.0",
+      "seek_s": 0,
+      "requested_seconds": 15,
+      "controlled_fire_regions": [
+        {
+          "source": "fireplace",
+          "mode": "steady",
+          "polygon": [
+            {
+              "x": 350,
+              "y": 1100
+            },
+            {
+              "x": 9050,
+              "y": 1100
+            },
+            {
+              "x": 9050,
+              "y": 9450
+            },
+            {
+              "x": 350,
+              "y": 9450
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "grill.mp4",
+      "group": "controlled_fire_grill",
+      "scene": "grill",
+      "duration_s": 60.0,
+      "onset_s": null,
+      "sha256": "f3f9a3967f96fc39ffd5f3ce53a015a808fc128699b341a84bf82d3b6e117473",
+      "cloud_consent": false,
+      "source_page": "https://commons.wikimedia.org/wiki/File:Grilled_entrecote_20190119_2.webm",
+      "source_download": "https://upload.wikimedia.org/wikipedia/commons/d/dc/Grilled_entrecote_20190119_2.webm",
+      "source_sha256": "1a688cadcc7229a5c4f0096cb2cf033fcb9052e215e8c249412646abb5c2ee75",
+      "author": "Georges Seguin (Okki)",
+      "license": "CC-BY-SA-4.0",
+      "seek_s": 0,
+      "requested_seconds": 60,
+      "controlled_fire_regions": [
+        {
+          "source": "grill",
+          "mode": "intermittent",
+          "polygon": [
+            {
+              "x": 800,
+              "y": 1900
+            },
+            {
+              "x": 8800,
+              "y": 1900
+            },
+            {
+              "x": 8800,
+              "y": 9850
+            },
+            {
+              "x": 800,
+              "y": 9850
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

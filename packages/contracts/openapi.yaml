@@ -1,0 +1,594 @@
+openapi: 3.1.1
+info:
+  title: StillWatch Core API
+  version: 2.0.0
+  description: |
+    Operator commands use Idempotency-Key and a strong ETag in If-Match.
+    Retry the same body, key and ETag to recover the original committed response.
+    Changes are retained by generation and sequence. After cursor_expired,
+    fetch a new snapshot and reconnect from its cursor.
+security:
+  - deviceBearer: []
+paths:
+  /health/live:
+    get:
+      operationId: liveness
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+  /health/ready:
+    get:
+      operationId: readiness
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+        '503': { $ref: '#/components/responses/Health' }
+  /api/v2/semantic-status:
+    get:
+      operationId: semanticStatus
+      responses:
+        '200':
+          description: Semantic worker availability, configured SDK and consumed request budget.
+          content:
+            application/json:
+              schema: { $ref: schemas/SemanticStatus.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/status:
+    get:
+      operationId: coreStatus
+      responses:
+        '200':
+          description: Build version, local inference worker state, and media router capability.
+          content:
+            application/json:
+              schema: { $ref: schemas/CoreStatus.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/pairing:
+    post:
+      operationId: issuePairing
+      parameters:
+        - name: profile
+          in: query
+          description: Select the advertised listener. Defaults to the request listener, or LAN then proxy from the host.
+          schema: { type: string, enum: [lan, proxy] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/PairingRequest.json }
+      responses:
+        '201':
+          description: One-time pairing offer with the pinned TLS identity.
+          content:
+            application/json:
+              schema: { $ref: schemas/PairingOffer.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/pairing/finish:
+    post:
+      operationId: finishPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/PairingFinish.json }
+      responses:
+        '201':
+          description: Device enrolled and a scoped session issued.
+          content:
+            application/json:
+              schema: { $ref: schemas/DeviceCredentials.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/device-session/refresh:
+    post:
+      operationId: refreshDevice
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/RefreshRequest.json }
+      responses:
+        '200':
+          description: Rotated device session.
+          content:
+            application/json:
+              schema: { $ref: schemas/DeviceCredentials.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/devices:
+    get:
+      operationId: listTrustedDevices
+      responses:
+        '200':
+          description: Device enrollment and revocation status.
+          content:
+            application/json:
+              schema: { $ref: schemas/Devices.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/devices/{id}:
+    delete:
+      operationId: revokeDevice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: The device session was revoked. }
+        default: { $ref: '#/components/responses/Problem' }
+  /bootstrap/info:
+    get:
+      operationId: bootstrap
+      security: []
+      responses:
+        '200':
+          description: Limited identity and API version for connection bootstrap.
+          content:
+            application/json:
+              schema: { $ref: schemas/Bootstrap.json }
+  /api/v2/cameras:
+    get:
+      operationId: listCameras
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: after
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Configured sources and current capture state.
+          content:
+            application/json:
+              schema: { $ref: schemas/CameraPage.json }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createCamera
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/CameraConfig.json }
+      responses:
+        '201': { $ref: '#/components/responses/Camera' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/cameras/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CameraId'
+    get:
+      operationId: getCamera
+      responses:
+        '200': { $ref: '#/components/responses/Camera' }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: patchCamera
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/CameraPatch.json }
+      responses:
+        '200': { $ref: '#/components/responses/Camera' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteCamera
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204': { description: Source removed from the active registry. }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/source-probes:
+    post:
+      operationId: probeSource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/SourceProbeRequest.json }
+      responses:
+        '200':
+          description: First decoded frame metadata from the configured host source.
+          content:
+            application/json:
+              schema: { $ref: schemas/SourceProbe.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/capture-devices:
+    get:
+      operationId: listCaptureDevices
+      responses:
+        '200':
+          description: Video input devices on the Core host.
+          content:
+            application/json:
+              schema: { $ref: schemas/CaptureDevices.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/onvif/discovery:
+    post:
+      operationId: discoverOnvif
+      description: Owner requests a bounded WS-Discovery probe from the configured Core interface. Results are unverified hints.
+      responses:
+        '200':
+          description: Observed ONVIF device endpoints and their configured authorization state.
+          content:
+            application/json:
+              schema: { $ref: schemas/OnvifDevices.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/onvif/profiles:
+    post:
+      operationId: listOnvifProfiles
+      description: Owner lists video profiles from an explicitly authorized ONVIF device endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/OnvifProfilesRequest.json }
+      responses:
+        '200':
+          description: ONVIF Media or Media2 video profiles.
+          content:
+            application/json:
+              schema: { $ref: schemas/OnvifProfiles.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/onvif/stream:
+    post:
+      operationId: resolveOnvifStream
+      description: Owner resolves a media profile to a sanitized RTSP descriptor. Ordinary source probe and camera creation still apply.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/OnvifStreamRequest.json }
+      responses:
+        '200':
+          description: RTSP source and its configured peer authorization state.
+          content:
+            application/json:
+              schema: { $ref: schemas/OnvifStream.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/replay-uploads:
+    post:
+      operationId: uploadReplay
+      description: Owner uploads a bounded video for non-live replay. Use the returned file in a replay source.
+      parameters:
+        - in: header
+          name: Content-Length
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 134217728 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '201':
+          description: Uploaded video passed a native frame probe and is available for replay.
+          content:
+            application/json:
+              schema: { $ref: schemas/ReplayUpload.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/cameras/{id}/analysis-status:
+    get:
+      operationId: getCameraAnalysisStatus
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Local inference readiness and recent observation counts for this source epoch.
+          content:
+            application/json:
+              schema: { $ref: schemas/AnalysisStatus.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/cameras/{id}/snapshot.jpg:
+    get:
+      operationId: cameraSnapshot
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Latest privacy-masked JPEG with age in milliseconds.
+          headers:
+            X-Frame-Age-Ms:
+              schema: { type: string, pattern: '^[0-9]+$' }
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/stream-sessions:
+    post:
+      operationId: createStreamSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/StreamRequest.json }
+      responses:
+        '201':
+          description: Short-lived authorization for a redacted stream.
+          content:
+            application/json:
+              schema: { $ref: schemas/StreamGrant.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/stream-sessions/{id}/whep:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: offerWhep
+      requestBody:
+        required: true
+        content:
+          application/sdp:
+            schema: { type: string }
+      responses:
+        '201':
+          description: WHEP SDP answer.
+          headers:
+            Location:
+              schema: { type: string }
+            ETag:
+              schema: { type: string }
+          content:
+            application/sdp:
+              schema: { type: string }
+        default: { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: trickleWhep
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/trickle-ice-sdpfrag:
+            schema: { type: string }
+      responses:
+        '204': { description: Trickle ICE candidates accepted. }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: closeWhep
+      responses:
+        '204': { description: WHEP session closed. }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents:
+    get:
+      operationId: listIncidents
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: after
+          in: query
+          description: Pagination cursor from the previous page.
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: Incidents ordered by created time and ID, newest first.
+          content:
+            application/json:
+              schema: { $ref: schemas/IncidentPage.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+    get:
+      operationId: getIncident
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}/evidence/{packet}:
+    get:
+      operationId: readEvidencePacket
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+        - name: packet
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Evidence context and image availability.
+          content:
+            application/json:
+              schema: { $ref: schemas/EvidencePacket.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}/evidence/{packet}/{ordinal}:
+    get:
+      operationId: readEvidenceImage
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+        - name: packet
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: ordinal
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0, maximum: 15 }
+      responses:
+        '200':
+          description: Persisted evidence image.
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}/acknowledgements:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      operationId: acknowledgeIncident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/AcknowledgeRequest.json }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}/feedback:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      operationId: leaveFeedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/FeedbackRequest.json }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/incidents/{id}/resolution:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      operationId: resolveIncident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/ResolveRequest.json }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/alerts:
+    get:
+      operationId: listActiveAlerts
+      description: Active, unacknowledged and unsilenced notification intents scoped to the authenticated device.
+      responses:
+        '200':
+          description: Current alert feed
+          content:
+            application/json:
+              schema: { $ref: schemas/AlertFeed.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/alerts/{alert}/seen:
+    post:
+      operationId: recordAlertSeen
+      description: Record the first client receipt for this device and alert cycle.
+      parameters:
+        - name: alert
+          in: path
+          required: true
+          schema: { $ref: schemas/Counter.json }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/AlertReceipt.json }
+      responses:
+        '204': { description: Client receipt recorded }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/alerts/{id}/silence:
+    parameters:
+      - $ref: '#/components/parameters/IncidentId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/IfMatch'
+    post:
+      operationId: silenceAlert
+      description: Silence the authenticated device for the current attention cycle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/SilenceRequest.json }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/snapshot:
+    get:
+      operationId: getSnapshot
+      responses:
+        '200':
+          description: Open incidents and the resume cursor from a single database snapshot.
+          content:
+            application/json:
+              schema: { $ref: schemas/Snapshot.json }
+        default: { $ref: '#/components/responses/Problem' }
+  /api/v2/changes:
+    get:
+      operationId: subscribeChanges
+      parameters:
+        - name: cursor
+          in: query
+          schema: { $ref: schemas/Cursor.json }
+        - name: Last-Event-ID
+          in: header
+          schema: { $ref: schemas/Cursor.json }
+      responses:
+        '200':
+          description: EventSource stream. Each event data field is a JSON Change document.
+          content:
+            text/event-stream:
+              schema: { type: string }
+              x-data-schema: { $ref: schemas/Change.json }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    deviceBearer: { type: http, scheme: bearer }
+  parameters:
+    CameraId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IncidentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, pattern: '^[a-zA-Z0-9._-]{1,128}$' }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string, pattern: '^"(0|[1-9][0-9]{0,19})"$' }
+  responses:
+    Camera:
+      description: Committed camera configuration with current capture status.
+      headers:
+        ETag:
+          required: true
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: schemas/Camera.json }
+    Health:
+      description: Core process health.
+      content:
+        application/json:
+          schema: { $ref: schemas/Health.json }
+    Incident:
+      description: Authoritative incident revision.
+      headers:
+        ETag:
+          required: true
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: schemas/Incident.json }
+    Problem:
+      description: A machine-readable RFC 9457 response.
+      content:
+        application/problem+json:
+          schema: { $ref: schemas/Problem.json }

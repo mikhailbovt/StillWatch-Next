@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_Device",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/Device"
+  },
+  "$defs": {
+    "Device": {
+      "type": "object",
+      "properties": {
+        "camera_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "label": {
+          "type": "string"
+        },
+        "paired_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "revoked_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/DeviceRole"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DeviceScope"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "role",
+        "camera_ids",
+        "scopes",
+        "paired_at"
+      ]
+    },
+    "DeviceRole": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "operator",
+        "viewer"
+      ]
+    },
+    "DeviceScope": {
+      "type": "string",
+      "enum": [
+        "cameras_write",
+        "events_ack",
+        "evidence_read",
+        "streams_read",
+        "provider_evaluate"
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

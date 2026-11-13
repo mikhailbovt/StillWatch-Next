@@ -1,0 +1,22 @@
+[package]
+name = "stillwatch-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+percent-encoding = "=2.3.2"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sw-capture.workspace = true
+sw-domain.workspace = true
+sw-inference.workspace = true
+sw-protocol = { workspace = true, features = ["worker"] }
+uuid.workspace = true
+
+[lints]
+workspace = true

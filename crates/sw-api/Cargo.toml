@@ -1,0 +1,31 @@
+[package]
+name = "sw-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+async-stream.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+sw-domain.workspace = true
+sw-engine.workspace = true
+sw-protocol.workspace = true
+sw-storage.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

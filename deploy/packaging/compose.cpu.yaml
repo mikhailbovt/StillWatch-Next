@@ -1,0 +1,23 @@
+services:
+  stillwatch:
+    image: stillwatch-core:0.1.0-cpu
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp
+    environment:
+      STILLWATCH_MODEL_DIR: /opt/stillwatch-models
+      STILLWATCH_MODEL_SHA256: ${STILLWATCH_MODEL_SHA256:?Set the authorized model manifest SHA-256}
+      STILLWATCH_LAN_LISTEN: ${STILLWATCH_LAN_LISTEN:-}
+      STILLWATCH_ICE_UDP: ${STILLWATCH_ICE_UDP:-}
+    volumes:
+      - stillwatch-data:/var/lib/stillwatch
+      - type: bind
+        source: ${STILLWATCH_MODEL_DIR:?Set the authorized model directory}
+        target: /opt/stillwatch-models
+        read_only: true
+    restart: unless-stopped
+volumes:
+  stillwatch-data:

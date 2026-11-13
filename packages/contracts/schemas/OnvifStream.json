@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OnvifStream",
+  "type": "object",
+  "properties": {
+    "authorized": {
+      "type": "boolean"
+    },
+    "source": {
+      "$ref": "#/$defs/CameraSource"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "authorized"
+  ],
+  "$defs": {
+    "CameraSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "pace": {
+              "type": "boolean"
+            },
+            "repeat": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "replay"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file",
+            "pace"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "credential_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "peer": {
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            },
+            "stream_path": {
+              "type": "string"
+            },
+            "transport": {
+              "$ref": "#/$defs/RtspTransport"
+            },
+            "type": {
+              "type": "string",
+              "const": "rtsp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "peer",
+            "stream_path",
+            "secure",
+            "transport"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "usb"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "device_id"
+          ]
+        }
+      ]
+    },
+    "RtspTransport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    }
+  }
+}

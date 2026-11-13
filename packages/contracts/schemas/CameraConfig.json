@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CameraConfig",
+  "type": "object",
+  "properties": {
+    "cloud_consent": {
+      "description": "Allows semantic evidence from this camera to be sent to Firebase AI Logic.",
+      "type": "boolean"
+    },
+    "controlled_fire_regions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ControlledFireRegion"
+      },
+      "maxItems": 16
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "name": {
+      "type": "string"
+    },
+    "privacy_masks": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/MaskRect"
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/CameraSource"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "enabled",
+    "source"
+  ],
+  "$defs": {
+    "CameraSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "pace": {
+              "type": "boolean"
+            },
+            "repeat": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "replay"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file",
+            "pace"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "credential_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "peer": {
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            },
+            "stream_path": {
+              "type": "string"
+            },
+            "transport": {
+              "$ref": "#/$defs/RtspTransport"
+            },
+            "type": {
+              "type": "string",
+              "const": "rtsp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "peer",
+            "stream_path",
+            "secure",
+            "transport"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "usb"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "device_id"
+          ]
+        }
+      ]
+    },
+    "ControlledFireRegion": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ControlledMode"
+        },
+        "polygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RegionPoint"
+          },
+          "maxItems": 16,
+          "minItems": 3
+        },
+        "source": {
+          "$ref": "#/$defs/ControlledSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "mode",
+        "polygon"
+      ]
+    },
+    "ControlledMode": {
+      "type": "string",
+      "enum": [
+        "steady",
+        "intermittent"
+      ]
+    },
+    "ControlledSource": {
+      "type": "string",
+      "enum": [
+        "burner",
+        "candle",
+        "fireplace",
+        "grill"
+      ]
+    },
+    "MaskRect": {
+      "type": "object",
+      "properties": {
+        "bottom": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "left": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "right": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "top": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ]
+    },
+    "RegionPoint": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 10000,
+          "minimum": 0
+        },
+        "y": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 10000,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "RtspTransport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RefreshRequest",
+  "type": "object",
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "nonce": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "refresh_token": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "device_id",
+    "refresh_token",
+    "nonce",
+    "signature"
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CoreStatus",
+  "type": "object",
+  "properties": {
+    "inference": {
+      "$ref": "#/$defs/InferenceStatus"
+    },
+    "media": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MediaStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "inference"
+  ],
+  "$defs": {
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "InferenceBackend": {
+      "type": "string",
+      "enum": [
+        "cpu",
+        "cuda",
+        "unrecognized"
+      ]
+    },
+    "InferenceFailure": {
+      "type": "string",
+      "enum": [
+        "model_pack_unavailable",
+        "model_initialization_failed",
+        "runtime_unavailable",
+        "worker_unavailable",
+        "worker_timeout",
+        "worker_failed",
+        "evidence_backpressure",
+        "unrecognized"
+      ]
+    },
+    "InferenceStatus": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceBackend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configured_workers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ready_workers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        }
+      },
+      "required": [
+        "state",
+        "ready_workers",
+        "configured_workers"
+      ]
+    },
+    "MediaStatus": {
+      "type": "object",
+      "properties": {
+        "redacted_transcode": {
+          "type": "boolean"
+        },
+        "router_ready": {
+          "type": "boolean"
+        },
+        "video_codec": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "router_ready",
+        "video_codec",
+        "redacted_transcode"
+      ]
+    }
+  }
+}

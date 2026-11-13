@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FeedbackRequest",
+  "type": "object",
+  "properties": {
+    "classification": {
+      "$ref": "#/$defs/FeedbackClassification"
+    },
+    "evidence_version": {
+      "$ref": "#/$defs/Counter"
+    },
+    "reason": {
+      "$ref": "#/$defs/Reason"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "classification",
+    "evidence_version",
+    "reason"
+  ],
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "FeedbackClassification": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "false_alarm"
+      ]
+    },
+    "Reason": {
+      "type": "string",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  }
+}

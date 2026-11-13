@@ -1,0 +1,21 @@
+services:
+  stillwatch:
+    gpus:
+      - driver: nvidia
+        device_ids: ["${STILLWATCH_GPU_ID:-0}"]
+    environment:
+      STILLWATCH_RUNTIME_DIR: /opt/stillwatch-ort-cuda
+      STILLWATCH_CUDA_LIB_DIR: /opt/stillwatch-cuda-libs
+      STILLWATCH_CUDA_DEVICE: "0"
+      STILLWATCH_ORT_SHA256: "${STILLWATCH_CUDA_ORT_SHA256:?Set the trusted CUDA ORT digest}"
+      STILLWATCH_CUDA_PROVIDER_SHA256: "${STILLWATCH_CUDA_PROVIDER_SHA256:?Set the trusted CUDA provider digest}"
+      STILLWATCH_CUDA_SHARED_SHA256: "${STILLWATCH_CUDA_SHARED_SHA256:?Set the trusted ORT support library digest}"
+    volumes:
+      - type: bind
+        source: ${STILLWATCH_CUDA_ORT_DIR:?Set the path to the verified ORT CUDA libraries}
+        target: /opt/stillwatch-ort-cuda
+        read_only: true
+      - type: bind
+        source: ${STILLWATCH_CUDA_LIB_DIR:?Set the authorized CUDA and cuDNN library directory}
+        target: /opt/stillwatch-cuda-libs
+        read_only: true

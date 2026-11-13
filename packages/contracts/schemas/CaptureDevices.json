@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_CaptureDevice",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/CaptureDevice"
+  },
+  "$defs": {
+    "CaptureDevice": {
+      "type": "object",
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "device_id",
+        "name"
+      ]
+    }
+  }
+}

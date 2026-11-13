@@ -1,0 +1,1006 @@
+{
+  "manifest_sha256": "d57b202601849250f2ba0d44c3efafefe1ddcc8de7c13379e9702254546a0bee",
+  "core_sha256": "300c3406cc79a7513183aeb99f2d7bcdb5352bc0cb64c9a23f39da3f79f5c7ce",
+  "worker_sha256": "c21d114cb335f86a83ba84966f153dcca374f946b74edf9a65660a174007fa36",
+  "model_manifest_sha256": "b1389a94fc0c90d68a49277906e1a4c8b427217b6b2301883b9c0f5dfcb23a8c",
+  "ort_sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c",
+  "inference_threads_per_replay_lane": 3,
+  "parallel_lanes": 3,
+  "rust": {
+    "controlled_fire": {
+      "clips": 1,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.008360202777777779,
+      "events_in_negative_clips": {
+        "review": 4,
+        "urgent": 0
+      },
+      "descriptive_events_per_camera_hour": {
+        "review": 478.4572941977417,
+        "urgent": 0.0
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {
+        "urgent": 358.33248943637284
+      }
+    },
+    "fire_no_flame": {
+      "clips": 1,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.0031605586111111113,
+      "events_in_negative_clips": {
+        "review": 0,
+        "urgent": 0
+      },
+      "descriptive_events_per_camera_hour": {
+        "review": 0.0,
+        "urgent": 0.0
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {
+        "review": 947.8489856262546,
+        "urgent": 947.8489856262546
+      }
+    },
+    "fire_visible": {
+      "clips": 2,
+      "positive_episodes": 2,
+      "matched": 1,
+      "missed_files": [
+        "furg/house1.mp4"
+      ],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 5,
+      "median_delay_s": 0.5005,
+      "recall_wilson_95_iid_descriptive": [
+        0.09453120573423457,
+        0.9054687942657654
+      ],
+      "negative_camera_hours": 0.0
+    },
+    "medical_adl": {
+      "clips": 10,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.031055555555555555,
+      "events_in_negative_clips": {
+        "review": 5,
+        "urgent": 0
+      },
+      "descriptive_events_per_camera_hour": {
+        "review": 161.00178890876566,
+        "urgent": 0.0
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {
+        "urgent": 96.46365102678325
+      }
+    },
+    "medical_fall": {
+      "clips": 9,
+      "positive_episodes": 9,
+      "matched": 9,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": 0.8199999999999998,
+      "recall_wilson_95_iid_descriptive": [
+        0.7008549515804674,
+        1
+      ],
+      "negative_camera_hours": 0.0
+    }
+  },
+  "per_clip_rust": {
+    "caucafall/HopS8.avi": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 41,
+        "fire_frames_max_sampled": 17,
+        "samples": 28,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/HopS9.avi": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 1.0,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "medical",
+          "opened_source_s": 5.4,
+          "attention": "review",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 52,
+        "fire_frames_max_sampled": 21,
+        "samples": 36,
+        "analysis_unready_fraction": 0.027777777777777776
+      }
+    },
+    "caucafall/KneelS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.0,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 63,
+        "fire_frames_max_sampled": 26,
+        "samples": 43,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/KneelS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 3.4,
+          "attention": "review",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 53,
+        "fire_frames_max_sampled": 22,
+        "samples": 36,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/PickupobjectS8.avi": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 66,
+        "fire_frames_max_sampled": 27,
+        "samples": 45,
+        "analysis_unready_fraction": 0.022222222222222223
+      }
+    },
+    "caucafall/PickupobjectS9.avi": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 1.0,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "medical",
+          "opened_source_s": 3.2,
+          "attention": "review",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 54,
+        "fire_frames_max_sampled": 22,
+        "samples": 36,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/SitDownS8.avi": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 51,
+        "fire_frames_max_sampled": 21,
+        "samples": 35,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/SitDownS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.8,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 58,
+        "fire_frames_max_sampled": 24,
+        "samples": 40,
+        "analysis_unready_fraction": 0.025
+      }
+    },
+    "caucafall/WalkS8.avi": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 54,
+        "fire_frames_max_sampled": 22,
+        "samples": 37,
+        "analysis_unready_fraction": 0.02702702702702703
+      }
+    },
+    "caucafall/WalkS9.avi": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 57,
+        "fire_frames_max_sampled": 23,
+        "samples": 40,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/FallBackwardsS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.6,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 52,
+        "fire_frames_max_sampled": 21,
+        "samples": 37,
+        "analysis_unready_fraction": 0.02702702702702703
+      }
+    },
+    "caucafall/FallForwardS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.2,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 30,
+        "fire_frames_max_sampled": 12,
+        "samples": 21,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/FallForwardS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.0,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 36,
+        "fire_frames_max_sampled": 15,
+        "samples": 25,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/FallLeftS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.8,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 49,
+        "fire_frames_max_sampled": 20,
+        "samples": 34,
+        "analysis_unready_fraction": 0.029411764705882353
+      }
+    },
+    "caucafall/FallLeftS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.6,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 51,
+        "fire_frames_max_sampled": 21,
+        "samples": 36,
+        "analysis_unready_fraction": 0.027777777777777776
+      }
+    },
+    "caucafall/FallRightS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.4,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 57,
+        "fire_frames_max_sampled": 23,
+        "samples": 38,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/FallRightS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.4,
+          "attention": "review",
+          "reason": "suspected_fall"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 3.5,
+          "attention": "review",
+          "reason": "visible_smoke"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 47,
+        "fire_frames_max_sampled": 19,
+        "samples": 32,
+        "analysis_unready_fraction": 0.03125
+      }
+    },
+    "caucafall/FallSittingS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 3.6,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 57,
+        "fire_frames_max_sampled": 23,
+        "samples": 38,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "caucafall/FallSittingS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.6,
+          "attention": "review",
+          "reason": "suspected_fall"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 53,
+        "fire_frames_max_sampled": 22,
+        "samples": 36,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "furg/house1.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 13.013013,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 20.053386,
+          "attention": "review",
+          "reason": "visible_flame"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 149,
+        "fire_frames_max_sampled": 60,
+        "samples": 102,
+        "analysis_unready_fraction": 0.00980392156862745
+      }
+    },
+    "furg/case2_house.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 0.5005,
+          "attention": "review",
+          "reason": "visible_flame"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 22.022022,
+          "attention": "review",
+          "reason": "visible_flame"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 23.023023,
+          "attention": "review",
+          "reason": "visible_flame"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 27.527527,
+          "attention": "review",
+          "reason": "visible_flame"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 150,
+        "fire_frames_max_sampled": 60,
+        "samples": 102,
+        "analysis_unready_fraction": 0.0
+      }
+    },
+    "furg/barbecue.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 0.0,
+          "attention": "review",
+          "reason": "visible_flame"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 1.001001,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 13.046379,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 18.118118,
+          "attention": "review",
+          "reason": "visible_flame"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 149,
+        "fire_frames_max_sampled": 60,
+        "samples": 105,
+        "analysis_unready_fraction": 0.009523809523809525
+      }
+    },
+    "furg/non_fire_patrolbot_onboard.mp4": {
+      "events": [],
+      "coverage": {
+        "pose_frames_max_sampled": 55,
+        "fire_frames_max_sampled": 22,
+        "samples": 38,
+        "analysis_unready_fraction": 0.0
+      }
+    }
+  },
+  "controlled_without_regions": {
+    "furg/barbecue.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 0.0,
+          "attention": "review",
+          "reason": "visible_flame"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 1.001001,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 13.079746,
+          "attention": "review",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 17.58425,
+          "attention": "review",
+          "reason": "visible_flame"
+        }
+      ],
+      "coverage": {
+        "pose_frames_max_sampled": 148,
+        "fire_frames_max_sampled": 60,
+        "samples": 109,
+        "analysis_unready_fraction": 0.0
+      }
+    }
+  },
+  "legacy": {
+    "controlled_fire": {
+      "clips": 1,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.008360202777777779,
+      "events_in_negative_clips": {
+        "legacy_candidate": 3
+      },
+      "descriptive_events_per_camera_hour": {
+        "legacy_candidate": 358.8429706483063
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {}
+    },
+    "fire_no_flame": {
+      "clips": 1,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.0031605586111111113,
+      "events_in_negative_clips": {
+        "legacy_candidate": 0
+      },
+      "descriptive_events_per_camera_hour": {
+        "legacy_candidate": 0.0
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {
+        "legacy_candidate": 947.8489856262546
+      }
+    },
+    "fire_visible": {
+      "clips": 2,
+      "positive_episodes": 2,
+      "matched": 1,
+      "missed_files": [
+        "furg/house1.mp4"
+      ],
+      "duplicates_in_window": 1,
+      "early_events": 0,
+      "late_events": 6,
+      "median_delay_s": 0.5005005005005005,
+      "recall_wilson_95_iid_descriptive": [
+        0.09453120573423457,
+        0.9054687942657654
+      ],
+      "negative_camera_hours": 0.0
+    },
+    "medical_adl": {
+      "clips": 10,
+      "positive_episodes": 0,
+      "matched": 0,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": null,
+      "recall_wilson_95_iid_descriptive": null,
+      "negative_camera_hours": 0.031055555555555555,
+      "events_in_negative_clips": {
+        "legacy_candidate": 5
+      },
+      "descriptive_events_per_camera_hour": {
+        "legacy_candidate": 161.00178890876566
+      },
+      "zero_event_poisson_upper_95_per_camera_hour": {}
+    },
+    "medical_fall": {
+      "clips": 9,
+      "positive_episodes": 9,
+      "matched": 9,
+      "missed_files": [],
+      "duplicates_in_window": 0,
+      "early_events": 0,
+      "late_events": 0,
+      "median_delay_s": 0.8200000000000003,
+      "recall_wilson_95_iid_descriptive": [
+        0.7008549515804674,
+        1
+      ],
+      "negative_camera_hours": 0.0
+    }
+  },
+  "legacy_provenance": {
+    "config_hash": "0d8cfceebe40d271",
+    "implementation_hash": "232740098f8ea6ee",
+    "replay_sha256": "8c08deaf3e664af6e3319d93d7973ac6193e84aacd837059ff4731b5cf9b4e5d"
+  },
+  "per_clip_legacy": {
+    "caucafall/HopS8.avi": {
+      "events": [],
+      "inference_calls": {
+        "pose": 42,
+        "fire": 17
+      },
+      "trace_sha256": "be3b9f397eaf087730724587ae96403ae063a49bfd05e498f65f823cd3a58ce1"
+    },
+    "caucafall/HopS9.avi": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 1.0,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "medical",
+          "opened_source_s": 5.4,
+          "attention": "legacy_candidate",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "inference_calls": {
+        "pose": 53,
+        "fire": 22
+      },
+      "trace_sha256": "bbfd59142a7549ef8ffb03f7945192948e518a40c8fd8892e08d78f205256edc"
+    },
+    "caucafall/KneelS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.0,
+          "attention": "legacy_candidate",
+          "reason": "view_lost_after_suspicion"
+        }
+      ],
+      "inference_calls": {
+        "pose": 64,
+        "fire": 26
+      },
+      "trace_sha256": "793c975565e62cebebe8498ed10f5c29fb68f16434f47903e7e3375f6d2e1f04"
+    },
+    "caucafall/KneelS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 3.4000000000000004,
+          "attention": "legacy_candidate",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "inference_calls": {
+        "pose": 54,
+        "fire": 22
+      },
+      "trace_sha256": "22c5215b87021923b4b4b501a0bc87962bc2cd67479fa2a38dff28464cd876bf"
+    },
+    "caucafall/PickupobjectS8.avi": {
+      "events": [],
+      "inference_calls": {
+        "pose": 67,
+        "fire": 27
+      },
+      "trace_sha256": "550f5462db6db45440a1beb43cac0fe8a1ec514beccc6e384ecb90074d5ef264"
+    },
+    "caucafall/PickupobjectS9.avi": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 1.0,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "medical",
+          "opened_source_s": 3.2,
+          "attention": "legacy_candidate",
+          "reason": "slow_posture_descent"
+        }
+      ],
+      "inference_calls": {
+        "pose": 55,
+        "fire": 22
+      },
+      "trace_sha256": "3c7dc4081a8ef6bf918b4bb01b6595dcebbb110bacb87376615a0728f2dc7b31"
+    },
+    "caucafall/SitDownS8.avi": {
+      "events": [],
+      "inference_calls": {
+        "pose": 53,
+        "fire": 22
+      },
+      "trace_sha256": "d588a39f9801095c9aec8c010b34ec07d59b9c094ca92e0f9f8d8729089b6545"
+    },
+    "caucafall/SitDownS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.8000000000000003,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 60,
+        "fire": 24
+      },
+      "trace_sha256": "252c48a3ec56fc5571b01d841f2fa33a07c988d741b0879f34343c23be2dbba0"
+    },
+    "caucafall/WalkS8.avi": {
+      "events": [],
+      "inference_calls": {
+        "pose": 54,
+        "fire": 22
+      },
+      "trace_sha256": "256d26d5eeec033eb50ba0b7d373b171d10b97763324fb09e358702a71be2df0"
+    },
+    "caucafall/WalkS9.avi": {
+      "events": [],
+      "inference_calls": {
+        "pose": 59,
+        "fire": 24
+      },
+      "trace_sha256": "ecb7e2962e19d6e68438767d757c41ff0643fffb51a96984c57bf6d7387ea40c"
+    },
+    "caucafall/FallBackwardsS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.6,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 53,
+        "fire": 22
+      },
+      "trace_sha256": "392315283f949b2610c0e9df23549b3043aec4b44d3691c6d932d45dcca02b2d"
+    },
+    "caucafall/FallForwardS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.2000000000000002,
+          "attention": "legacy_candidate",
+          "reason": "view_lost_after_suspicion"
+        }
+      ],
+      "inference_calls": {
+        "pose": 31,
+        "fire": 13
+      },
+      "trace_sha256": "d1282390e2414fe7c89025f421f0bfc221d017d68766a637eca01036b391351b"
+    },
+    "caucafall/FallForwardS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.0,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 37,
+        "fire": 15
+      },
+      "trace_sha256": "269df39fb8cf9d187e7c1f68746c0e21423f44f36056a5022ad5e57fa8ae844c"
+    },
+    "caucafall/FallLeftS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.8,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 51,
+        "fire": 21
+      },
+      "trace_sha256": "90fa545d85c55aee34a0f8b8fa40bb42f188e5e4bd54be439c223a4ac190b42e"
+    },
+    "caucafall/FallLeftS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 1.6,
+          "attention": "legacy_candidate",
+          "reason": "view_lost_after_suspicion"
+        }
+      ],
+      "inference_calls": {
+        "pose": 52,
+        "fire": 21
+      },
+      "trace_sha256": "fd34a78c0f380e62d3cf6706a66714218bf56c1e24e22f698274b880fa09cd36"
+    },
+    "caucafall/FallRightS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.4000000000000004,
+          "attention": "legacy_candidate",
+          "reason": "view_lost_after_suspicion"
+        }
+      ],
+      "inference_calls": {
+        "pose": 58,
+        "fire": 23
+      },
+      "trace_sha256": "b1bb5021bd431455b9eb4047804b67a0e6630bc96994ceb95f214adeae0bd164"
+    },
+    "caucafall/FallRightS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.4000000000000004,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 3.5,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        }
+      ],
+      "inference_calls": {
+        "pose": 48,
+        "fire": 19
+      },
+      "trace_sha256": "676556ea7b21bc95f9455f2804cfe247835f6868c6577c67c8c6a28ff1b5cc9e"
+    },
+    "caucafall/FallSittingS8.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 3.6,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 59,
+        "fire": 24
+      },
+      "trace_sha256": "11184e2464768a1e3454c014993a8cb47411eea7d622a1e6ce1d7343dcc3067b"
+    },
+    "caucafall/FallSittingS9.avi": {
+      "events": [
+        {
+          "category": "medical",
+          "opened_source_s": 2.6,
+          "attention": "legacy_candidate",
+          "reason": "rapid_posture_change"
+        }
+      ],
+      "inference_calls": {
+        "pose": 54,
+        "fire": 22
+      },
+      "trace_sha256": "c08beeb6830a43873698471099680fd3745e357469d11d65280d9ba48acade03"
+    },
+    "furg/house1.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 13.013013013013012,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 19.51951951951952,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        }
+      ],
+      "inference_calls": {
+        "pose": 150,
+        "fire": 60
+      },
+      "trace_sha256": "f5b9d2e12f22d6b1e0980190b828e016567bc3b5e364272c777bed6013fa0220"
+    },
+    "furg/case2_house.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 0.5005005005005005,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 0.5005005005005005,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 10.01001001001001,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 10.51051051051051,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 11.01101101101101,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 11.511511511511513,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        }
+      ],
+      "inference_calls": {
+        "pose": 151,
+        "fire": 61
+      },
+      "trace_sha256": "4b3fd476611a295aa272d122f0a78a4ba9d606be734b675e373d981095171ef0"
+    },
+    "furg/barbecue.mp4": {
+      "events": [
+        {
+          "category": "fire",
+          "opened_source_s": 0.0,
+          "attention": "legacy_candidate",
+          "reason": "visible_fire"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 1.001001001001001,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        },
+        {
+          "category": "fire",
+          "opened_source_s": 13.013013013013012,
+          "attention": "legacy_candidate",
+          "reason": "visible_smoke"
+        }
+      ],
+      "inference_calls": {
+        "pose": 151,
+        "fire": 61
+      },
+      "trace_sha256": "ce5b193c9c116831c3388f985f2449cc9a5dfbe6c52f84987fab1e4d705b97c8"
+    },
+    "furg/non_fire_patrolbot_onboard.mp4": {
+      "events": [],
+      "inference_calls": {
+        "pose": 57,
+        "fire": 23
+      },
+      "trace_sha256": "ef668bac932670939191c6cfc6d86c619f52bc2a55cb8daa186e066abcf52153"
+    }
+  }
+}

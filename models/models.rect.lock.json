@@ -1,0 +1,191 @@
+{
+  "baseline": "b0d20a20d38a5bbc22178d150999e57cc9e7bfb3",
+  "baseline_lock_sha256": "20f7e93bd5c7291795c622e66a41f9b7491a54f0629dc9ea0cf4e1f459acca6a",
+  "execution_provider": "cpu",
+  "exporter": {
+    "dependency_lock_sha256": "42aafc352679ca582f689d87ffa3876e5d1414f6d70731161e172aaeaf64a01c",
+    "dynamo": false,
+    "fused": true,
+    "onnx": "1.23.2",
+    "python": "3.12.14",
+    "source_sha256": "535082b900a8298f128632f236ffe10cf98db652185df955ddca7e083bfff57c",
+    "torch": "2.14.1+cpu",
+    "ultralytics": "8.4.177"
+  },
+  "models": {
+    "fire": {
+      "artifact": "fire.onnx",
+      "byte_length": 12102707,
+      "external_data": [],
+      "input": {
+        "centered_letterbox": true,
+        "colour": "rgb",
+        "divisor": 255,
+        "dtype": "float32",
+        "layout": "nchw",
+        "name": "images",
+        "padding": 114,
+        "resize": "opencv_inter_linear",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "opset": 17,
+      "output": {
+        "dtype": "float32",
+        "keypoint_map": null,
+        "layout": "fire_xywh_class_scores",
+        "legacy_confidence": 0.2,
+        "legacy_iou": 0.7,
+        "name": "output0",
+        "nms": "class_aware",
+        "shape": [
+          1,
+          6,
+          -1
+        ]
+      },
+      "sha256": "14dfbb5c4e6e4e6ee157dd7362febc98ab70779eb66792ae909d2a2e1a80ed44",
+      "source": {
+        "classes": {
+          "0": "smoke",
+          "1": "fire"
+        },
+        "filename": "best.pt",
+        "identity_activations": [
+          "model.9.cv1.act"
+        ],
+        "license": "AGPL-3.0",
+        "license_url": "https://huggingface.co/rabahdev/fire-smoke-yolov8n#license",
+        "local_path": "models/fire.safetensors",
+        "module_types_sha256": "963c7a83dafb46a72fd876474bc23a926fe15e3841cc788bfcce6afd8ee6c092",
+        "revision": "13017fe8af477c25f5298d168e2dfede4b000753",
+        "sha256": "b91633799ceb052c814b4f8b77a37efc9a40f002d528df97d74463585fa4f28f",
+        "size": 6229802,
+        "source": "https://huggingface.co/rabahdev/fire-smoke-yolov8n",
+        "status": "candidate",
+        "task": "detect",
+        "tensor_sha256": "35d819bf2b3af8be56aa65b1b296b29863b160bd5816c0107b468025377fc93f",
+        "training_data": "D-Fire, as stated by the model author; source-data rights need separate review",
+        "url": "https://huggingface.co/rabahdev/fire-smoke-yolov8n/resolve/13017fe8af477c25f5298d168e2dfede4b000753/best.pt"
+      }
+    },
+    "pose": {
+      "artifact": "pose.onnx",
+      "byte_length": 11835192,
+      "external_data": [],
+      "input": {
+        "centered_letterbox": true,
+        "colour": "rgb",
+        "divisor": 255,
+        "dtype": "float32",
+        "layout": "nchw",
+        "name": "images",
+        "padding": 114,
+        "resize": "opencv_inter_linear",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "opset": 17,
+      "output": {
+        "dtype": "float32",
+        "keypoint_map": "coco17_xy_confidence",
+        "layout": "pose_xywh_keypoints",
+        "legacy_confidence": 0.15,
+        "legacy_iou": 0.5,
+        "name": "output0",
+        "nms": "class_aware",
+        "shape": [
+          1,
+          56,
+          -1
+        ]
+      },
+      "sha256": "bef2f9cff3df319be3eb704126234195a6ea01ab504a2f033122d986631d3701",
+      "source": {
+        "classes": {
+          "0": "person"
+        },
+        "filename": "yolo26n-pose.pt",
+        "license": "AGPL-3.0",
+        "license_url": "https://www.ultralytics.com/license",
+        "local_path": "models/pose.safetensors",
+        "module_types_sha256": "d63b549374e9aede17809dc77411554f7ff62998d19b63196ce30c14ecd43569",
+        "revision": "v8.4.0",
+        "sha256": "eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9",
+        "size": 7878574,
+        "source": "https://github.com/ultralytics/assets",
+        "status": "candidate",
+        "task": "pose",
+        "tensor_sha256": "c35c2d12d2f47473cb8b7bd1164de13f8ffb86f213ff9cc0f259d793a9f79ee7",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n-pose.pt"
+      }
+    },
+    "pose_balanced": {
+      "artifact": "pose_balanced.onnx",
+      "byte_length": 41568376,
+      "external_data": [],
+      "input": {
+        "centered_letterbox": true,
+        "colour": "rgb",
+        "divisor": 255,
+        "dtype": "float32",
+        "layout": "nchw",
+        "name": "images",
+        "padding": 114,
+        "resize": "opencv_inter_linear",
+        "shape": [
+          1,
+          3,
+          -1,
+          -1
+        ]
+      },
+      "opset": 17,
+      "output": {
+        "dtype": "float32",
+        "keypoint_map": "coco17_xy_confidence",
+        "layout": "pose_xywh_keypoints",
+        "legacy_confidence": 0.15,
+        "legacy_iou": 0.5,
+        "name": "output0",
+        "nms": "class_aware",
+        "shape": [
+          1,
+          56,
+          -1
+        ]
+      },
+      "sha256": "1ce877d65ddff71caf04a51c16702860ffb36f2feda3113b07274ecf39a51d09",
+      "source": {
+        "classes": {
+          "0": "person"
+        },
+        "filename": "yolo26s-pose.pt",
+        "license": "AGPL-3.0",
+        "license_url": "https://www.ultralytics.com/license",
+        "local_path": "models/pose-balanced.safetensors",
+        "module_types_sha256": "d63b549374e9aede17809dc77411554f7ff62998d19b63196ce30c14ecd43569",
+        "revision": "v8.4.0",
+        "sha256": "a083adb42303728ae14c4bd6bd56d80da46f82fb2564dbd6f31dcc92ea321646",
+        "size": 24151790,
+        "source": "https://github.com/ultralytics/assets",
+        "status": "candidate",
+        "task": "pose",
+        "tensor_sha256": "ea02cac449e9ea28bc37e1d154a768e79f38baf04d1cd6c0d00addbce5a99b0a",
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s-pose.pt"
+      }
+    }
+  },
+  "onnxruntime": "1.31.0",
+  "parity_report_sha256": "1b5ec2a8069a949e79dd0c856109c896af2b463afb34c95c99a2fc9177de7871",
+  "profile": "cpu_fp32_rect_640",
+  "schema_version": 2
+}

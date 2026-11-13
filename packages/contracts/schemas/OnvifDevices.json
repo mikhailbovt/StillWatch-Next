@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Array_of_OnvifDevice",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/OnvifDevice"
+  },
+  "$defs": {
+    "OnvifDevice": {
+      "type": "object",
+      "properties": {
+        "authorized": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "authorized"
+      ]
+    }
+  }
+}

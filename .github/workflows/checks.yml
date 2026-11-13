@@ -1,0 +1,181 @@
+name: Core checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: 0.12.5
+      - name: Set up Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy --component rustfmt
+      - name: Set up Windows native dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/dev/native-windows.ps1
+      - name: Set up Ubuntu native dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libclang-dev libavformat-dev libavcodec-dev libavutil-dev libavdevice-dev libswscale-dev ffmpeg
+          bash tools/dev/native-linux.sh
+      - name: Check formatting, tests and lints
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --all-features
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Check API contracts
+        run: |
+          cargo xtask contracts --check
+          uvx --python 3.12.14 --from openapi-spec-validator==0.9.0 openapi-spec-validator packages/contracts/openapi.yaml
+      - name: Build host executables
+        run: cargo build --locked --workspace
+      - name: Check Windows replay and restart
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          uv run --no-project --python 3.12.14 python -B tests/e2e/replay_core.py --core target/debug/stillwatch-core.exe --worker target/debug/stillwatch-worker.exe --ffmpeg (Join-Path $env:FFMPEG_DIR 'bin/ffmpeg.exe')
+      - name: Check Linux replay and restart
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          uv run --no-project --python 3.12.14 python -B tests/e2e/replay_core.py --core target/debug/stillwatch-core --worker target/debug/stillwatch-worker --ffmpeg "$(command -v ffmpeg)"
+      - name: Check ONVIF camera operations
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix='.exe'; fi
+          uv run --no-project --python 3.12.14 python -B tests/e2e/onvif_core.py \
+            --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" --multicast
+      - name: Check redacted diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix='.exe'; fi
+          uv run --no-project --python 3.12.14 python -B tests/e2e/core_diagnostics.py \
+            --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
+            --cli "target/debug/stillwatch-cli$suffix"
+      - name: Check alarm startup and delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix='.exe'; fi
+          uv run --no-project --python 3.12.14 python -B tests/e2e/alarm_agent.py \
+            --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
+            --cli "target/debug/stillwatch-cli$suffix" --agent "target/debug/stillwatch-alarm-agent$suffix"
+      - name: Check the HTTPS reverse proxy
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          cd "$scratch"
+          apt-get download nginx
+          dpkg-deb -x nginx_*.deb "$scratch"
+          cd "$GITHUB_WORKSPACE"
+          uv run --no-project --python 3.12.14 python -B tests/e2e/proxy_core.py \
+            --core target/debug/stillwatch-core --worker target/debug/stillwatch-worker \
+            --nginx "$scratch/usr/sbin/nginx" --openssl "$(command -v openssl)"
+      - name: Check legacy migration on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          uv run --no-project --python 3.12.14 python -B tests/e2e/migrate_core.py --core target/debug/stillwatch-core.exe --worker target/debug/stillwatch-worker.exe --cli target/debug/stillwatch-cli.exe --ffmpeg (Join-Path $env:FFMPEG_DIR 'bin/ffmpeg.exe')
+      - name: Check legacy migration on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          uv run --no-project --python 3.12.14 python -B tests/e2e/migrate_core.py --core target/debug/stillwatch-core --worker target/debug/stillwatch-worker --cli target/debug/stillwatch-cli --ffmpeg "$(command -v ffmpeg)"
+      - name: SDK dependency isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_tree=$(cargo tree --locked -p stillwatch-sdk --edges normal --all-features)
+          if grep -E '(sw-engine|sw-inference|sw-capture|ffmpeg-next|ort) v' <<< "$sdk_tree"; then
+            exit 1
+          fi
+
+  typescript:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Check pinned TypeScript build and generated API
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --remote-name https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-x64.tar.xz
+          curl --fail --silent --show-error --location --remote-name https://nodejs.org/dist/v24.15.0/SHASUMS256.txt
+          grep '  node-v24.15.0-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum --check
+          tar -xf node-v24.15.0-linux-x64.tar.xz
+          export PATH="$RUNNER_TEMP/node-v24.15.0-linux-x64/bin:$PATH"
+          cd "$GITHUB_WORKSPACE/packages/stillwatch-typescript"
+          npm ci
+          npm test
+
+  companion:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux
+          - os: windows-2025
+            target: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install locked Flutter framework
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/stillwatch-flutter"
+          git -C "$RUNNER_TEMP/stillwatch-flutter" remote add origin https://github.com/flutter/flutter.git
+          git -C "$RUNNER_TEMP/stillwatch-flutter" fetch --depth 1 origin refs/tags/3.50.0:refs/tags/3.50.0
+          test "$(git -C "$RUNNER_TEMP/stillwatch-flutter" rev-parse '3.50.0^{commit}')" = ab2912035e160d9cad6306df307576da6128ebdb
+          git -C "$RUNNER_TEMP/stillwatch-flutter" checkout --detach 3.50.0
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            cygpath -w "$RUNNER_TEMP/stillwatch-flutter/bin" >> "$GITHUB_PATH"
+          else
+            echo "$RUNNER_TEMP/stillwatch-flutter/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Linux desktop dependencies
+        if: matrix.target == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev libjsoncpp-dev
+      - name: Verify Windows C++ ATL
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $install = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.ATL -property installationPath
+          if (-not $install) { throw 'The Flutter Windows plugins require C++ ATL for the v143 x86/x64 tools.' }
+      - name: Analyze and test Companion
+        shell: bash
+        working-directory: apps/companion
+        run: |
+          flutter --version
+          flutter pub get --enforce-lockfile
+          flutter analyze --fatal-infos
+          flutter test --no-pub
+      - name: Build desktop
+        shell: bash
+        working-directory: apps/companion
+        run: flutter build "${{ matrix.target }}" --release --no-pub
+  ios:
+    uses: ./.github/workflows/ios.yml

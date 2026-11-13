@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EvidencePacket",
+  "type": "object",
+  "properties": {
+    "camera_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "context": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvidenceContext"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidence_version": {
+      "$ref": "#/$defs/Counter"
+    },
+    "expires_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EvidenceImageMetadata"
+      }
+    },
+    "incident_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "packet_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scene_revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "source_epoch": {
+      "$ref": "#/$defs/Counter"
+    }
+  },
+  "required": [
+    "schema_version",
+    "packet_id",
+    "incident_id",
+    "camera_id",
+    "source_epoch",
+    "evidence_version",
+    "scene_revision",
+    "category",
+    "images",
+    "expires_at"
+  ],
+  "$defs": {
+    "Category": {
+      "type": "string",
+      "enum": [
+        "medical",
+        "fire",
+        "overview"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "EvidenceContext": {
+      "type": "object",
+      "properties": {
+        "coverage": {
+          "$ref": "#/$defs/EvidenceCoverage"
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceLimitation"
+          }
+        },
+        "local_facts": {
+          "$ref": "#/$defs/LocalFacts"
+        },
+        "observed_interval": {
+          "$ref": "#/$defs/EvidenceInterval"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "prompt_version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "observed_interval",
+        "coverage",
+        "local_facts",
+        "limitations",
+        "policy_version",
+        "prompt_version"
+      ]
+    },
+    "EvidenceCoverage": {
+      "type": "object",
+      "properties": {
+        "expected_samples": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "max_gap_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "received_samples": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "expected_samples",
+        "received_samples",
+        "max_gap_ms"
+      ]
+    },
+    "EvidenceImageAvailability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "unavailable"
+      ]
+    },
+    "EvidenceImageKind": {
+      "type": "string",
+      "enum": [
+        "overview",
+        "crop"
+      ]
+    },
+    "EvidenceImageMetadata": {
+      "type": "object",
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/EvidenceImageAvailability"
+        },
+        "image_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EvidenceImageKind"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "ordinal": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_s": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "image_id",
+        "ordinal",
+        "source_s",
+        "kind",
+        "mime",
+        "availability"
+      ]
+    },
+    "EvidenceInterval": {
+      "type": "object",
+      "properties": {
+        "end_source_s": {
+          "type": "number",
+          "format": "double"
+        },
+        "start_source_s": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start_source_s",
+        "end_source_s"
+      ]
+    },
+    "EvidenceLimitation": {
+      "type": "string",
+      "enum": [
+        "partial_visibility",
+        "sparse_coverage",
+        "source_changed",
+        "pre_event_unavailable",
+        "non_live"
+      ]
+    },
+    "EvidenceVisibility": {
+      "type": "string",
+      "enum": [
+        "good",
+        "limited",
+        "poor"
+      ]
+    },
+    "LocalFacts": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "apparent_growth": {
+              "type": "boolean"
+            },
+            "continuity_samples": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "controlled_region_overlap": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "detector_confidence": {
+              "type": "number",
+              "format": "double"
+            },
+            "escaped_controlled_region": {
+              "type": "boolean"
+            },
+            "flame_visible": {
+              "type": "boolean"
+            },
+            "smoke_growth": {
+              "type": "boolean"
+            },
+            "smoke_visible": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "fire"
+            },
+            "visibility": {
+              "$ref": "#/$defs/EvidenceVisibility"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "flame_visible",
+            "smoke_visible",
+            "apparent_growth",
+            "smoke_growth",
+            "escaped_controlled_region",
+            "continuity_samples",
+            "detector_confidence",
+            "visibility"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "clear_eligible": {
+              "type": "boolean"
+            },
+            "episode_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "identity_uncertain": {
+              "type": "boolean"
+            },
+            "onset_observed": {
+              "type": "boolean"
+            },
+            "previous_episode_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "recovery_seconds": {
+              "type": "number",
+              "format": "double"
+            },
+            "track_id": {
+              "$ref": "#/$defs/Counter"
+            },
+            "type": {
+              "type": "string",
+              "const": "medical"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "track_id",
+            "episode_id",
+            "onset_observed",
+            "identity_uncertain",
+            "recovery_seconds",
+            "clear_eligible"
+          ]
+        }
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

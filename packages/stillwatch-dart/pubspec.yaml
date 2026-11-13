@@ -1,0 +1,11 @@
+name: stillwatch_sdk
+description: Client for the StillWatch Core v2 HTTP API on Dart native runtimes.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.12.0 <4.0.0'
+dependencies:
+  crypto: 3.0.8
+  cryptography: 2.9.0
+dev_dependencies:
+  test: 1.31.2

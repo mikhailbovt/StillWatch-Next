@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OnvifStreamRequest",
+  "type": "object",
+  "properties": {
+    "credential_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "device_endpoint": {
+      "type": "string"
+    },
+    "media": {
+      "$ref": "#/$defs/OnvifMedia"
+    },
+    "token": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "device_endpoint",
+    "media",
+    "token"
+  ],
+  "$defs": {
+    "OnvifMedia": {
+      "type": "string",
+      "enum": [
+        "media1",
+        "media2"
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="StillWatch Companion" Manufacturer="StillWatch" Version="0.1.0"
+           UpgradeCode="6E46707C-CE68-44DE-B850-8E3949A6962B" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of StillWatch Companion is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="InstallFolder" Name="StillWatch Companion">
+        <Component Id="CompanionApplication">
+          <File Id="CompanionBinary" Source="$(var.Payload)\stillwatch_companion.exe" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="CompanionShortcut" Guid="41F1F7E4-A126-4447-BE17-38ECC5E14A54">
+        <Shortcut Id="StartMenu" Name="StillWatch Companion" Target="[#CompanionBinary]" WorkingDirectory="InstallFolder">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="StillWatch.Companion" />
+        </Shortcut>
+        <RegistryValue Root="HKLM" Key="Software\StillWatch\Companion" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+    <Feature Id="Companion" Title="StillWatch Companion" Level="1">
+      <ComponentRef Id="CompanionApplication" />
+      <ComponentRef Id="CompanionShortcut" />
+      <ComponentGroupRef Id="NativePayload" />
+    </Feature>
+  </Package>
+</Wix>

@@ -1,0 +1,12 @@
+CREATE INDEX incidents_resolved_retention ON incidents(updated_at, id) WHERE resolved = 1;
+CREATE INDEX operator_actions_incident ON operator_actions(incident_id);
+CREATE INDEX alert_outbox_expiry ON notification_outbox(expires_at);
+CREATE INDEX semantic_attempts_incident ON semantic_attempts(incident_id);
+CREATE INDEX legacy_assessments_incident ON legacy_assessments(incident_id);
+CREATE INDEX legacy_feedback_incident ON legacy_feedback(incident_id);
+CREATE INDEX legacy_packets_incident ON legacy_packets(incident_id);
+CREATE INDEX trust_audit_retention ON trust_audit(occurred_at, sequence);
+CREATE INDEX revoked_devices_retention ON trusted_devices(revoked_at, id) WHERE revoked_at IS NOT NULL;
+CREATE INDEX camera_versions_retention ON camera_config_versions(changed_at, camera_id, revision);
+CREATE INDEX evidence_artifact_lookup ON evidence_images(digest) WHERE digest IS NOT NULL;
+ALTER TABLE core_identity ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0 CHECK (change_floor >= 0);

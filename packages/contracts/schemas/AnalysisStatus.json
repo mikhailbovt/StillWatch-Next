@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AnalysisStatus",
+  "type": "object",
+  "properties": {
+    "fire_frames": {
+      "$ref": "#/$defs/Counter"
+    },
+    "fire_regions": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "last_analysis_age_ms": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_worker_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "people": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "pose_frames": {
+      "$ref": "#/$defs/Counter"
+    },
+    "smoke_regions": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "source_epoch": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/AnalysisState"
+    }
+  },
+  "required": [
+    "state",
+    "pose_frames",
+    "fire_frames"
+  ],
+  "$defs": {
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+[package]
+name = "sw-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+digest_auth = "=0.3.1"
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
+getrandom.workspace = true
+jpeg-encoder.workspace = true
+process-wrap.workspace = true
+reqwest = { workspace = true, features = ["rustls-no-provider"] }
+ring = "=0.17.14"
+roxmltree = { version = "=0.21.1", default-features = false, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+socket2 = "=0.6.5"
+sw-domain.workspace = true
+sw-protocol = { workspace = true, features = ["worker"] }
+sw-storage.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+uuid.workspace = true
+
+[lints]
+workspace = true
