@@ -24,6 +24,8 @@ The evidence below follows §23.1 of the Russian technical plan. `IMPLEMENTATION
 
 `tests/e2e/model_activation.py` verified square and rectangular CPU packs on Windows and Ubuntu. The worker checked all graphs before creating sessions, qualified both packs on the reference fixtures, and published a new model selection atomically. Failed validation preserved the previous selection. Running workers kept the previous pack until the Core restarted. Incidents retained their original model and policy identifiers across the change and rollback.
 
+`tests/e2e/analysis_core.py --source-freeze` verified an uninterrupted RTSP feed with increasing timestamps on Windows and Ubuntu. Repeated decoded frames made the source unavailable and hid current observations. Moving frames restored inference with a fresh source epoch.
+
 ## Release artifacts
 
 The latest qualified packages and SHA-256 hashes are recorded alongside the dated results in `IMPLEMENTATION_STATUS.md`. Binary packages, private test configuration, runtime data, and original video datasets are kept outside version control. QA signing proves artifact integrity for the test signer. Production signing requires the appropriate deployment identity.
