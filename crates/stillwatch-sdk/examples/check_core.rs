@@ -23,8 +23,7 @@ async fn next_change(changes: &mut ChangeStream) -> anyhow::Result<Box<Change>> 
                 Error::Transport
                 | Error::Deadline
                 | Error::Http {
-                    status: 502 | 503 | 504,
-                    ..
+                    status: 502..=504, ..
                 },
             ) => {}
             other => anyhow::bail!("expected a scoped change, received {other:?}"),
