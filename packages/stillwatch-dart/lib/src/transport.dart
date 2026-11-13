@@ -63,11 +63,11 @@ final class Transport {
     if (der != null) {
       context = SecurityContext(withTrustedRoots: false)
         ..minimumTlsProtocolVersion = TlsProtocolVersion.tls1_3;
-      final certificate = Platform.isIOS
-          ? der
-          : ascii.encode(
-              '-----BEGIN CERTIFICATE-----\n${base64.encode(der)}\n-----END CERTIFICATE-----\n',
-            );
+      // The pinned Dart VM accepts PEM on Apple targets as well. The original
+      // DER bytes are still used for the fingerprint comparison.
+      final certificate = ascii.encode(
+        '-----BEGIN CERTIFICATE-----\n${base64.encode(der)}\n-----END CERTIFICATE-----\n',
+      );
       try {
         context.setTrustedCertificatesBytes(certificate);
       } on TlsException {

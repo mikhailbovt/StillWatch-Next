@@ -7,17 +7,82 @@ import 'package:stillwatch_sdk/stillwatch_sdk.dart';
 
 enum LinkState { connecting, connected, offline, untrusted, revoked }
 
+enum IncidentAction {
+  acknowledge('Acknowledge'),
+  silence('Silence for 5 min'),
+  falseAlarm('False alarm'),
+  resolve('Resolve');
+
+  const IncidentAction(this.label);
+  final String label;
+}
+
+final class PendingIncidentAction {
+  PendingIncidentAction._(
+    this.action,
+    this._reviewed,
+    this._streamGeneration,
+    this._reason,
+  );
+
+  static const lifetime = Duration(minutes: 2);
+  final IncidentAction action;
+  final Incident _reviewed;
+  final String _streamGeneration;
+  final String _reason;
+  final String _key = operationId();
+  final DateTime _expires = DateTime.now().add(lifetime);
+  final Stopwatch _age = Stopwatch()..start();
+  late final Timer _timer;
+  bool _sending = false;
+  bool get sending => _sending;
+  bool get _expired =>
+      _age.elapsed >= lifetime || !_expires.isAfter(DateTime.now());
+
+  bool _matches(Incident current, String? generation) =>
+      generation == _streamGeneration &&
+      current.id == _reviewed.id &&
+      current.cameraId == _reviewed.cameraId &&
+      current.revision == _reviewed.revision &&
+      current.evidenceVersion == _reviewed.evidenceVersion &&
+      current.packetId == _reviewed.packetId &&
+      current.lifecycle == 'open' &&
+      (action != IncidentAction.acknowledge || !current.acknowledged) &&
+      (action != IncidentAction.falseAlarm || current.packetId != null);
+
+  Future<Incident> _apply(StillWatchClient client) => switch (action) {
+    IncidentAction.acknowledge => client.acknowledge(_reviewed, _key),
+    IncidentAction.silence => client.silence(_reviewed, 300, _key),
+    IncidentAction.falseAlarm => client.feedback(
+      _reviewed,
+      'false_alarm',
+      _reason,
+      _key,
+    ),
+    IncidentAction.resolve => client.resolve(_reviewed, _reason, _key),
+  };
+}
+
 final class CoreProfile {
-  CoreProfile(this.name, this.core, this.seed, this.credentials, this._save) {
-    client = StillWatchClient.paired(
-      core,
-      seed: seed,
-      credentials: credentials,
-      save: (value) async {
-        await _save(this, value);
-        credentials = value;
-      },
-    );
+  CoreProfile(
+    this.name,
+    this.core,
+    this.seed,
+    this.credentials,
+    this._save, {
+    StillWatchClient? client,
+  }) {
+    this.client =
+        client ??
+        StillWatchClient.paired(
+          core,
+          seed: seed,
+          credentials: credentials,
+          save: (value) async {
+            await _save(this, value);
+            credentials = value;
+          },
+        );
   }
 
   final String name;
@@ -98,9 +163,12 @@ final class ConsoleState extends ChangeNotifier {
   Json? health;
   String? error;
   DateTime? lastSync;
+  String? _streamGeneration;
+  String? get streamGeneration => _streamGeneration;
   bool loading = true;
   bool foreground = true;
 
+  final _pendingActions = <(CoreProfile, String), PendingIncidentAction>{};
   int _generation = 0;
   bool _disposed = false;
   bool _fetching = false;
@@ -151,12 +219,14 @@ final class ConsoleState extends ChangeNotifier {
     }
     profiles = [...profiles.where((item) => item.id != profile.id), profile]
       ..sort((a, b) => a.name.compareTo(b.name));
+    if (previous != null) _clearPendingActions(previous);
     await select(profile);
     previous?.client.close();
   }
 
   Future<void> forget(CoreProfile profile) async {
     await store.remove(profile);
+    _clearPendingActions(profile);
     profiles = profiles
         .where((item) => item.id != profile.id)
         .toList(growable: false);
@@ -175,6 +245,7 @@ final class ConsoleState extends ChangeNotifier {
     health = null;
     error = null;
     lastSync = null;
+    _streamGeneration = null;
     link = LinkState.connecting;
     notifyListeners();
     await _stopEvents();
@@ -186,6 +257,9 @@ final class ConsoleState extends ChangeNotifier {
   Future<void> setForeground(bool value) async {
     if (_disposed || foreground == value) return;
     foreground = value;
+    if (value && selected != null && link == LinkState.connected) {
+      link = LinkState.connecting;
+    }
     final generation = ++_generation;
     _cancelTimers();
     notifyListeners();
@@ -201,6 +275,10 @@ final class ConsoleState extends ChangeNotifier {
     if (profile == null || !foreground) return;
     final generation = ++_generation;
     _cancelTimers();
+    if (link == LinkState.connected) {
+      link = LinkState.connecting;
+      notifyListeners();
+    }
     await _stopEvents();
     if (_current(generation)) await _connect(profile, generation);
   }
@@ -231,6 +309,7 @@ final class ConsoleState extends ChangeNotifier {
       }
       incidents = _sort(merged.values);
       historyCursor = history.next;
+      _streamGeneration = snapshot.cursor.generation;
       health = results[2] as Json;
       lastSync = DateTime.now();
       link = LinkState.connected;
@@ -323,6 +402,156 @@ final class ConsoleState extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool canViewCachedIncidents(CoreProfile profile) =>
+      selected == profile &&
+      link != LinkState.revoked &&
+      link != LinkState.untrusted;
+
+  bool _actionOnline(CoreProfile profile) =>
+      selected == profile && foreground && link == LinkState.connected;
+
+  PendingIncidentAction? pendingAction(CoreProfile profile, String id) =>
+      _pendingActions[(profile, id)];
+
+  Future<void> queueIncidentAction(
+    CoreProfile profile,
+    Incident reviewed,
+    String? reviewedGeneration,
+    IncidentAction action, {
+    String reason = '',
+  }) async {
+    if (_disposed ||
+        !foreground ||
+        !canViewCachedIncidents(profile) ||
+        !profile.can('events_ack')) {
+      throw const StillWatchException('forbidden');
+    }
+    final slot = (profile, reviewed.id);
+    if (_pendingActions.containsKey(slot)) {
+      throw const StillWatchException('incident_action_pending');
+    }
+    if (_pendingActions.length >= 32) {
+      throw const StillWatchException('incident_action_capacity');
+    }
+    if (reviewedGeneration == null || reviewedGeneration != streamGeneration) {
+      throw const StillWatchException('revision_conflict');
+    }
+    final online = _actionOnline(profile);
+    final pending = PendingIncidentAction._(
+      action,
+      reviewed,
+      reviewedGeneration,
+      reason,
+    );
+    final latest = incidents
+        .where((item) => item.id == reviewed.id)
+        .firstOrNull;
+    if (!pending._matches(latest ?? reviewed, streamGeneration)) {
+      throw const StillWatchException('revision_conflict');
+    }
+    pending._timer = Timer(PendingIncidentAction.lifetime, () {
+      if (!_disposed && !pending.sending) {
+        discardIncidentAction(profile, reviewed.id);
+      }
+    });
+    _pendingActions[slot] = pending;
+    notifyListeners();
+    if (online) await sendPendingAction(profile, reviewed.id);
+  }
+
+  Future<void> sendPendingAction(CoreProfile profile, String id) async {
+    final slot = (profile, id);
+    final pending = _pendingActions[slot];
+    if (_disposed ||
+        pending == null ||
+        pending.sending ||
+        !_actionOnline(profile)) {
+      return;
+    }
+    final generation = _generation;
+    bool current() =>
+        _current(generation) &&
+        _actionOnline(profile) &&
+        _pendingActions[slot] == pending;
+    void clear() {
+      if (_pendingActions[slot] == pending) _removePendingAction(slot);
+    }
+
+    pending._sending = true;
+    notifyListeners();
+    var refreshOnConflict = true;
+    try {
+      if (!current()) return;
+      if (!profile.can('events_ack')) {
+        throw const StillWatchException('forbidden');
+      }
+      if (pending._expired) {
+        throw const StillWatchException('incident_action_expired');
+      }
+      final snapshot = await profile.client.snapshot();
+      if (!current()) return;
+      final latestGeneration = snapshot.cursor.generation;
+      if (latestGeneration != streamGeneration) {
+        throw const StillWatchException('revision_conflict');
+      }
+      // A pending action always targets an incident that was open at review.
+      final latest = snapshot.incidents
+          .where((item) => item.id == id)
+          .firstOrNull;
+      if (latest == null) throw const StillWatchException('revision_conflict');
+      replaceIncident(latest);
+      if (!current()) return;
+      if (pending._expired) {
+        throw const StillWatchException('incident_action_expired');
+      }
+      if (!pending._matches(latest, latestGeneration)) {
+        refreshOnConflict = false;
+        throw const StillWatchException('revision_conflict');
+      }
+      final updated = await pending._apply(profile.client);
+      clear();
+      if (_current(generation) && selected == profile) replaceIncident(updated);
+    } on StillWatchException catch (failure) {
+      if (!failure.canReconnect) clear();
+      if (!_current(generation)) return;
+      switch (failure.code) {
+        case 'transport' ||
+            'deadline' ||
+            'unauthorized' ||
+            'credentials' ||
+            'endpoint' ||
+            'identity':
+          _linkFailure(failure, generation);
+        case 'revision_conflict' when refreshOnConflict:
+          unawaited(reconnect());
+        default:
+          if (failure.status == 401) _linkFailure(failure, generation);
+      }
+      rethrow;
+    } finally {
+      pending._sending = false;
+      if (pending._expired) clear();
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  void discardIncidentAction(CoreProfile profile, String id) {
+    if (_disposed || pendingAction(profile, id)?.sending == true) return;
+    _removePendingAction((profile, id));
+    notifyListeners();
+  }
+
+  void _removePendingAction((CoreProfile, String) slot) {
+    _pendingActions.remove(slot)?._timer.cancel();
+  }
+
+  void _clearPendingActions(CoreProfile profile) {
+    for (final slot
+        in _pendingActions.keys.where((slot) => slot.$1 == profile).toList()) {
+      _removePendingAction(slot);
+    }
+  }
+
   void _linkFailure(Object failure, int generation) {
     if (!_current(generation)) return;
     final code = failure is StillWatchException ? failure.code : 'transport';
@@ -336,9 +565,12 @@ final class ConsoleState extends ChangeNotifier {
     _cancelTimers();
     unawaited(_stopEvents());
     if (link == LinkState.revoked || link == LinkState.untrusted) {
+      final profile = selected;
+      if (profile != null) _clearPendingActions(profile);
       cameras = const [];
       incidents = const [];
       historyCursor = null;
+      _streamGeneration = null;
     }
     if (link == LinkState.offline && foreground) {
       _reconnect = Timer(
@@ -365,6 +597,10 @@ final class ConsoleState extends ChangeNotifier {
     _disposed = true;
     _cancelTimers();
     unawaited(_stopEvents());
+    for (final pending in _pendingActions.values) {
+      pending._timer.cancel();
+    }
+    _pendingActions.clear();
     for (final profile in profiles) {
       profile.client.close();
     }
@@ -389,6 +625,11 @@ String describeFailure(Object error) {
     'forbidden' => 'This action is restricted by the Core access policy.',
     'revision_conflict' =>
       'The Core has a newer revision. Refresh and review it before retrying.',
+    'incident_action_pending' => 'This incident already has a pending action.',
+    'incident_action_capacity' =>
+      'Send or discard a pending action to make room.',
+    'incident_action_expired' =>
+      'The pending action expired. Review the incident again.',
     'transport' || 'deadline' =>
       'The Core is unreachable. Check the network or VPN and try again.',
     'capacity_exceeded' => 'The Core reached capacity for this operation.',

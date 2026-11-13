@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:material_ui/material_ui.dart';
@@ -118,13 +117,16 @@ class _IncidentHistoryState extends State<IncidentHistory> {
                       subtitle: Text(
                         '${cameraNames[item.cameraId] ?? 'Camera ${item.cameraId.substring(0, 8)}'} · ${item.lifecycle == 'resolved' ? 'Resolved' : readable(item.attention)}',
                       ),
-                      trailing: Text(shortTime(item.updatedAt)),
+                      trailing: console.pendingAction(profile, item.id) == null
+                          ? Text(shortTime(item.updatedAt))
+                          : const Text('Pending action'),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => _IncidentDetail(
                             console: console,
                             profile: profile,
                             initial: item,
+                            generation: console.streamGeneration,
                             cameraName: cameraNames[item.cameraId],
                           ),
                         ),
@@ -143,11 +145,13 @@ class _IncidentDetail extends StatefulWidget {
     required this.console,
     required this.profile,
     required this.initial,
+    required this.generation,
     this.cameraName,
   });
   final ConsoleState console;
   final CoreProfile profile;
   final Incident initial;
+  final String? generation;
   final String? cameraName;
 
   @override
@@ -156,12 +160,15 @@ class _IncidentDetail extends StatefulWidget {
 
 class _IncidentDetailState extends State<_IncidentDetail> {
   late Incident _item = widget.initial;
+  late String? _streamGeneration = widget.generation;
   Future<Json>? _evidence;
   String? _packet;
-  bool _busy = false;
+  String? _evidenceGeneration;
+
+  bool get _visible => widget.console.canViewCachedIncidents(widget.profile);
 
   bool get _online =>
-      widget.console.selected == widget.profile &&
+      _visible &&
       widget.console.foreground &&
       widget.console.link == LinkState.connected;
 
@@ -177,14 +184,17 @@ class _IncidentDetailState extends State<_IncidentDetail> {
         .where((item) => item.id == _item.id)
         .firstOrNull;
     setState(() {
-      if (current != null && widget.console.selected == widget.profile) {
+      if (current != null && _visible) {
         _item = current;
+        _streamGeneration = widget.console.streamGeneration;
       }
       final packet = _online && widget.profile.can('evidence_read')
           ? _item.packetId
           : null;
-      if (_packet != packet) {
+      if (_packet != packet ||
+          (packet != null && _evidenceGeneration != _streamGeneration)) {
         _packet = packet;
+        _evidenceGeneration = _streamGeneration;
         _evidence = packet == null
             ? null
             : widget.profile.client.evidence(_item.id, packet);
@@ -192,39 +202,37 @@ class _IncidentDetailState extends State<_IncidentDetail> {
     });
   }
 
-  Future<void> _apply(
-    Future<Incident> Function(Incident item, String key) command,
-  ) async {
-    if (_busy || !_online) return;
-    setState(() => _busy = true);
+  Future<void> _apply(IncidentAction action, Incident item) async {
+    final generation = _streamGeneration;
+    final needsReason =
+        action == IncidentAction.resolve || action == IncidentAction.falseAlarm;
+    final reason = needsReason
+        ? await showDialog<String>(
+            context: context,
+            builder: (_) =>
+                _ReasonDialog(resolve: action == IncidentAction.resolve),
+          )
+        : '';
+    if (!mounted || reason == null) return;
     try {
-      final item = await command(_item, operationId());
-      if (!mounted) return;
-      if (widget.console.selected == widget.profile) {
-        widget.console.replaceIncident(item);
-      }
+      await widget.console.queueIncidentAction(
+        widget.profile,
+        item,
+        generation,
+        action,
+        reason: reason,
+      );
     } catch (error) {
-      if (!mounted) return;
-      showFailure(context, error);
-      if (error is StillWatchException && error.code == 'revision_conflict') {
-        unawaited(widget.console.reconnect());
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) showFailure(context, error);
     }
   }
 
-  Future<void> _reason({required bool resolve}) async {
-    final reason = await showDialog<String>(
-      context: context,
-      builder: (_) => _ReasonDialog(resolve: resolve),
-    );
-    if (reason == null || !mounted) return;
-    await _apply(
-      (item, key) => resolve
-          ? widget.profile.client.resolve(item, reason, key)
-          : widget.profile.client.feedback(item, 'false_alarm', reason, key),
-    );
+  Future<void> _sendPending() async {
+    try {
+      await widget.console.sendPendingAction(widget.profile, _item.id);
+    } catch (error) {
+      if (mounted) showFailure(context, error);
+    }
   }
 
   @override
@@ -235,12 +243,21 @@ class _IncidentDetailState extends State<_IncidentDetail> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_visible) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Incident')),
+        body: const Center(child: Text('This Core session is unavailable.')),
+      );
+    }
     final theme = Theme.of(context);
     final item = _item;
+    final pending = widget.console.pendingAction(widget.profile, item.id);
     final mayAct =
-        _online &&
-        !_busy &&
+        widget.console.foreground &&
+        pending == null &&
         widget.profile.can('events_ack') &&
+        _streamGeneration != null &&
+        _streamGeneration == widget.console.streamGeneration &&
         item.lifecycle == 'open';
     final evidence = _evidence;
     return Scaffold(
@@ -292,7 +309,8 @@ class _IncidentDetailState extends State<_IncidentDetail> {
                   child: Text('Offline · last synchronized incident.'),
                 ),
               if (widget.profile.can('events_ack') &&
-                  item.lifecycle == 'open') ...[
+                  item.lifecycle == 'open' &&
+                  pending == null) ...[
                 const SizedBox(height: 18),
                 Wrap(
                   spacing: 8,
@@ -300,37 +318,52 @@ class _IncidentDetailState extends State<_IncidentDetail> {
                   children: [
                     FilledButton(
                       onPressed: mayAct && !item.acknowledged
-                          ? () => _apply(widget.profile.client.acknowledge)
+                          ? () => _apply(IncidentAction.acknowledge, item)
                           : null,
-                      child: const Text('Acknowledge'),
+                      child: Text(IncidentAction.acknowledge.label),
                     ),
-                    OutlinedButton(
-                      onPressed: mayAct
-                          ? () => _apply(
-                              (item, key) =>
-                                  widget.profile.client.silence(item, 300, key),
-                            )
-                          : null,
-                      child: const Text('Silence for 5 min'),
-                    ),
-                    OutlinedButton(
-                      onPressed: mayAct && item.packetId != null
-                          ? () => _reason(resolve: false)
-                          : null,
-                      child: const Text('False alarm'),
-                    ),
-                    OutlinedButton(
-                      onPressed: mayAct ? () => _reason(resolve: true) : null,
-                      child: const Text('Resolve'),
-                    ),
+                    for (final action in const [
+                      IncidentAction.silence,
+                      IncidentAction.falseAlarm,
+                      IncidentAction.resolve,
+                    ])
+                      OutlinedButton(
+                        onPressed:
+                            mayAct &&
+                                (action != IncidentAction.falseAlarm ||
+                                    item.packetId != null)
+                            ? () => _apply(action, item)
+                            : null,
+                        child: Text(action.label),
+                      ),
                   ],
                 ),
               ],
-              if (_busy)
-                const Padding(
-                  padding: EdgeInsets.only(top: 14),
-                  child: LinearProgressIndicator(),
-                ),
+              if (pending != null) ...[
+                const SizedBox(height: 18),
+                Text('${pending.action.label} · Pending'),
+                if (pending.sending)
+                  const LinearProgressIndicator()
+                else ...[
+                  const Text('Pending actions expire after two minutes.'),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      FilledButton(
+                        onPressed: _online ? _sendPending : null,
+                        child: const Text('Verify and send'),
+                      ),
+                      TextButton(
+                        onPressed: () => widget.console.discardIncidentAction(
+                          widget.profile,
+                          item.id,
+                        ),
+                        child: const Text('Discard pending action'),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
               const SizedBox(height: 28),
               Text('Evidence', style: theme.textTheme.titleLarge),
               const SizedBox(height: 8),
@@ -340,7 +373,7 @@ class _IncidentDetailState extends State<_IncidentDetail> {
                 )
               else
                 FutureBuilder<Json>(
-                  key: ValueKey(_packet),
+                  key: ValueKey((_packet, _evidenceGeneration)),
                   future: evidence,
                   builder: (context, snapshot) {
                     if (snapshot.hasError) {
@@ -405,6 +438,14 @@ class _EvidenceImageState extends State<_EvidenceImage> {
           widget.ordinal,
         )
       : null;
+  MemoryImage? _image;
+
+  @override
+  void dispose() {
+    final image = _image;
+    if (image != null) PaintingBinding.instance.imageCache.evict(image);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -425,7 +466,10 @@ class _EvidenceImageState extends State<_EvidenceImage> {
                   : FutureBuilder<Uint8List>(
                       future: bytes,
                       builder: (context, snapshot) => snapshot.hasData
-                          ? Image.memory(snapshot.data!, fit: BoxFit.contain)
+                          ? Image(
+                              image: _image ??= MemoryImage(snapshot.data!),
+                              fit: BoxFit.contain,
+                            )
                           : Center(
                               child: snapshot.hasError
                                   ? const Text('Unavailable')

@@ -2,6 +2,8 @@
 
 Connect to a running StillWatch Core to view cameras, inspect incidents and acknowledge alerts. Enroll with a one-time pairing offer from the Core host. Desktop clients can paste the offer JSON. Android and iOS can scan the QR code.
 
+Incident actions queued while offline stay pending in the current app session for up to two minutes. Use **Verify and send** after reconnecting. Companion checks the updated incident revision and evidence before submitting the action to the Core.
+
 Use Flutter 3.50.0 and the checked-in package lock for development.
 
 ~~~sh
