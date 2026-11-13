@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::Deserialize;
 
 use crate::{
-    MedicalCandidate, MedicalReason, MotionEvidence, Observation, PoseTracker, Posture,
-    TrackingError,
+    HazardPolicy, MedicalCandidate, MedicalReason, MotionEvidence, Observation, PoseTracker,
+    Posture, TrackingError,
     motion::{MAX_TRACKS, MotionClassifier},
     pose::{Pose, cropped_translation, displacement, standing_bend},
 };
@@ -51,6 +51,24 @@ pub struct MedicalRules {
     tracker: PoseTracker,
     motion: MotionClassifier,
     subjects: BTreeMap<u64, Subject>,
+}
+
+pub struct MedicalSample {
+    pub observations: Vec<Observation>,
+    pub source_seconds: f64,
+    pub source_epoch: u64,
+}
+
+impl HazardPolicy<MedicalSample> for MedicalRules {
+    type Outcome = Result<Vec<MedicalCandidate>, TrackingError>;
+
+    fn assess(&mut self, sample: MedicalSample) -> Self::Outcome {
+        self.update(
+            sample.observations,
+            sample.source_seconds,
+            sample.source_epoch,
+        )
+    }
 }
 
 #[derive(Default)]

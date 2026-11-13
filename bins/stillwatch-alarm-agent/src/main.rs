@@ -1,5 +1,6 @@
 mod private_file;
 mod sound;
+mod transport;
 
 use std::{
     fs::{self, OpenOptions},
@@ -16,6 +17,7 @@ use stillwatch_sdk::{
     Client, DeviceKey, DeviceSession, Error, PairedEndpoint, SessionPersistence, enroll,
     protocol::{AlertDelivery, Attention, Counter, DeviceCredentials, PairingOffer},
 };
+use transport::{LogOutput, NotificationTransport};
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -117,7 +119,11 @@ async fn main() -> Result<()> {
         Command::Run { state, audible } => {
             let _lock = lock(&state)?;
             let (client, instance) = open_client(state)?;
-            watch(client, instance, audible).await
+            if audible {
+                watch(client, instance, sound::Output::new()?).await
+            } else {
+                watch(client, instance, LogOutput).await
+            }
         }
         Command::Monitor {
             state,
@@ -215,8 +221,7 @@ async fn monitor(client: Client, core: Uuid, period: Duration, threshold: u8) ->
     }
 }
 
-async fn watch(client: Client, core: Uuid, audible: bool) -> Result<()> {
-    let output = audible.then(sound::Output::new).transpose()?;
+async fn watch(client: Client, core: Uuid, output: impl NotificationTransport) -> Result<()> {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ringing: Option<(Counter, Instant)> = None;
@@ -268,12 +273,9 @@ async fn watch(client: Client, core: Uuid, audible: bool) -> Result<()> {
         if let Some(alert) = urgent.clone().find(|alert| alert.client_seen_at.is_none()) {
             let already_played = ringing.is_some_and(|(id, _)| id == alert.id);
             if !already_played {
-                eprintln!("StillWatch urgent incident {}", alert.incident_id);
                 let start = Instant::now();
-                if let Some(output) = &output
-                    && output.play().await.is_err()
-                {
-                    eprintln!("StillWatch audio output is unavailable");
+                if let Err(error) = output.present(alert).await {
+                    eprintln!("StillWatch notification: {error}");
                     continue;
                 }
                 ringing = Some((alert.id, start));
@@ -281,12 +283,10 @@ async fn watch(client: Client, core: Uuid, audible: bool) -> Result<()> {
             let _ = client.alert_seen(alert.id, alert.attention_cycle).await;
         } else if let Some((id, start)) = ringing
             && start.elapsed() < Duration::from_secs(30)
-            && urgent.any(|alert| alert.id == id)
+            && let Some(alert) = urgent.find(|alert| alert.id == id)
         {
-            if let Some(output) = &output
-                && output.play().await.is_err()
-            {
-                eprintln!("StillWatch audio output is unavailable");
+            if let Err(error) = output.repeat(alert).await {
+                eprintln!("StillWatch notification: {error}");
             }
         } else {
             ringing = None;

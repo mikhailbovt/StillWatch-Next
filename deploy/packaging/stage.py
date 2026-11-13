@@ -110,9 +110,11 @@ def main(args):
     copy(ROOT / "NOTICE", out / "licenses/stillwatch-NOTICE")
     copy(LOCK, out / "licenses/native-deps.lock.json")
     copy(ROOT / "docs/operations.md", out / "docs/operations.md")
-    for doc in ("firebase-worker.md", "remote.md"):
+    for doc in ("firebase-worker.md", "remote.md", "worker-protocol.md"):
         copy(ROOT / "docs" / doc, out / "docs" / doc)
     copy(ROOT / "deploy/nginx/stillwatch.conf", out / "docs/nginx/stillwatch.conf")
+    for name in ("CaptureRequest.json", "InferenceConfig.json", "InferenceResult.json"):
+        copy(ROOT / "packages/contracts/workers/v1" / name, out / "docs/worker-protocol/v1" / name)
     worker = (out / "bin" / ("stillwatch-worker" + suffix)).resolve()
     report = subprocess.run([str(worker), "capture-doctor"], timeout=10, check=True, text=True, capture_output=True)
     if json.loads(report.stdout).get("rtsp_peer_confined") is not True:
@@ -155,7 +157,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("binaries", "native", "mediamtx", "encoder", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--version", default="0.1.0")
+    with (ROOT / "Cargo.toml").open("rb") as cargo_manifest:
+        release_version = tomllib.load(cargo_manifest)["workspace"]["package"]["version"]
+    parser.add_argument("--version", default=release_version)
     parser.add_argument("--capture-libav", type=Path, required=True)
     parser.add_argument("--capture-source", type=Path, required=True)
     parser.add_argument("--vc-runtime", type=Path)

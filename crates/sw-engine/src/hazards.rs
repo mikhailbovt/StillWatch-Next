@@ -6,8 +6,8 @@ use std::{
 
 use sw_domain::{
     Assessment, Box2d, Category, DomainError, EvidenceStamp, FireDecision, FireEpisode, FirePolicy,
-    FireSample, FireSettings, MedicalCandidate, MedicalReason, MedicalRules, MotionPhase,
-    NewIncident, SourceScope, Visibility,
+    FireSample, FireSettings, HazardPolicy, MedicalCandidate, MedicalReason, MedicalRules,
+    MedicalSample, MotionPhase, NewIncident, SourceScope, Visibility,
 };
 use sw_protocol::{
     Counter, Dimensions, EvidenceContext, EvidenceInterval, EvidenceLimitation, EvidenceVisibility,
@@ -90,10 +90,11 @@ impl HazardPolicies {
             } else {
                 people
             };
-            if let Ok(candidates) =
-                self.medical
-                    .update(people, at as f64 / 1_000_000.0, frame.scope.epoch)
-            {
+            if let Ok(candidates) = self.medical.assess(MedicalSample {
+                observations: people,
+                source_seconds: at as f64 / 1_000_000.0,
+                source_epoch: frame.scope.epoch,
+            }) {
                 for candidate in candidates {
                     if let Some(hazard) = Hazard::medical(candidate, at) {
                         hazards.push(hazard);
@@ -123,7 +124,7 @@ impl HazardPolicies {
                 width: header.width,
                 height: header.height,
             };
-            let reports = self.fire.update(FireSample {
+            let reports = self.fire.assess(FireSample {
                 scope: frame.scope,
                 source_us: at,
                 dimensions: (header.width, header.height),

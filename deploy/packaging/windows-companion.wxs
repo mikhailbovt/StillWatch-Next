@@ -1,5 +1,5 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="StillWatch Companion" Manufacturer="StillWatch" Version="0.1.0"
+  <Package Name="StillWatch Companion" Manufacturer="StillWatch" Version="$(var.ProductVersion)"
            UpgradeCode="6E46707C-CE68-44DE-B850-8E3949A6962B" Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of StillWatch Companion is already installed." />
     <MediaTemplate EmbedCab="yes" />

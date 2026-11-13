@@ -4,8 +4,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
+use sw_domain::Observation;
 use sw_inference::{
-    CudaProvider, Image, InferenceError, ModelId, ModelPack, Preprocessor, Runtime, decode,
+    CudaProvider, Image, InferenceError, Letterbox, ModelId, ModelPack, PerceptionBackend,
+    Preprocessor, Runtime, decode,
 };
 use sw_protocol::worker::{
     CONFIG_MAX_BYTES, CudaConfig, FrameHeader, HEADER_LEN, INFERENCE_READY, InferenceConfig,
@@ -60,7 +62,9 @@ pub fn run() -> Result<()> {
         pixels.resize(640 * 360 * 3, 0);
         let (tensor, geometry) = prepare.prepare(Image::rgb(640, 360, &pixels)?);
         let size = geometry.tensor_size();
-        if pose.run(size, tensor, |_| ()).is_err() || fire.run(size, tensor, |_| ()).is_err() {
+        if pose.evaluate(size, tensor, |_| ()).is_err()
+            || fire.evaluate(size, tensor, |_| ()).is_err()
+        {
             return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED);
         }
     }
@@ -90,16 +94,26 @@ pub fn run() -> Result<()> {
         let image = Image::rgb(header.width, header.height, &pixels)?;
         let (tensor, geometry) = prepare.prepare(image);
         let people = if tasks.pose() {
-            Some(pose.run(geometry.tensor_size(), tensor, |values| {
-                decode(ModelId::PoseBalanced, values, image, geometry, capture_ts)
-            })??)
+            Some(observe(
+                &mut pose,
+                ModelId::PoseBalanced,
+                tensor,
+                image,
+                geometry,
+                capture_ts,
+            )?)
         } else {
             None
         };
         let hazards = if tasks.fire() {
-            Some(fire.run(geometry.tensor_size(), tensor, |values| {
-                decode(ModelId::Fire, values, image, geometry, capture_ts)
-            })??)
+            Some(observe(
+                &mut fire,
+                ModelId::Fire,
+                tensor,
+                image,
+                geometry,
+                capture_ts,
+            )?)
         } else {
             None
         };
@@ -118,6 +132,19 @@ pub fn run() -> Result<()> {
         output.write_all(&payload)?;
         output.flush()?;
     }
+}
+
+fn observe(
+    backend: &mut impl PerceptionBackend,
+    model: ModelId,
+    tensor: &[f32],
+    image: Image<'_>,
+    geometry: Letterbox,
+    capture_ts: f64,
+) -> Result<Vec<Observation>, InferenceError> {
+    backend.evaluate(geometry.tensor_size(), tensor, |values| {
+        decode(model, values, image, geometry, capture_ts)
+    })?
 }
 
 fn startup_failure(output: &mut impl Write, marker: [u8; 4]) -> Result<()> {

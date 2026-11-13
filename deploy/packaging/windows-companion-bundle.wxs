@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-  <Bundle Name="StillWatch Companion" Manufacturer="StillWatch" Version="0.1.0"
+  <Bundle Name="StillWatch Companion" Manufacturer="StillWatch" Version="$(var.ProductVersion)"
           UpgradeCode="9095D1C4-7158-4B94-AE8C-C9259B4D52B1" Compressed="yes">
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication LicenseUrl="" Theme="hyperlinkLicense" />

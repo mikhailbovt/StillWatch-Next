@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Box2d {
     pub x1: f64,
     pub y1: f64,
@@ -55,6 +56,7 @@ impl Box2d {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationLabel {
     Person,
@@ -63,6 +65,7 @@ pub enum ObservationLabel {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Keypoint(pub f64, pub f64, pub f64);
 
 impl Keypoint {
@@ -72,6 +75,7 @@ impl Keypoint {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Observation {
     pub capture_ts: f64,
     #[serde(rename = "box")]

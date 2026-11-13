@@ -18,5 +18,7 @@ pub use capture_process::{
 pub use media::{MediaAnswer, MediaConfig, MediaError, MediaService, TurnConfig};
 pub use onvif::{OnvifConfig, OnvifError};
 pub use registry::{CameraFrame, CameraRegistry, RegistryError, SourceConfig};
-pub use semantic::{SemanticConfig, SemanticSupervisor};
+pub use semantic::{
+    FirebaseProvider, SemanticConfig, SemanticProvider, SemanticProviderError, SemanticSupervisor,
+};
 pub use vision::VisionScheduler;

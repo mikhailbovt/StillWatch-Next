@@ -32,14 +32,48 @@ pub struct SemanticConfig {
     pub include_replay: bool,
 }
 
-pub struct SemanticSupervisor {
-    transport: HttpProvider,
+/// The provider receives a bounded evidence packet and masked JPEGs only.
+/// The supervisor owns consent, expiry, assessment validation and persistence.
+pub trait SemanticProvider: Send + Sync {
+    fn capabilities(
+        &self,
+    ) -> impl Future<Output = Result<ProviderCapabilities, SemanticProviderError>> + Send;
+
+    fn evaluate(
+        &self,
+        packet: Vec<u8>,
+    ) -> impl Future<Output = Result<SemanticReport, SemanticProviderError>> + Send;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SemanticProviderError {
+    #[error("semantic provider unavailable")]
+    Unavailable,
+    #[error("invalid semantic provider response")]
+    Invalid,
+    #[error("semantic provider timed out")]
+    Deadline,
+}
+
+impl From<SemanticProviderError> for SemanticOutcome {
+    fn from(value: SemanticProviderError) -> Self {
+        match value {
+            SemanticProviderError::Unavailable => Self::Unavailable,
+            SemanticProviderError::Invalid => Self::Invalid,
+            SemanticProviderError::Deadline => Self::Deadline,
+        }
+    }
+}
+
+pub struct SemanticSupervisor<P = FirebaseProvider> {
+    transport: P,
     config: SemanticConfig,
     store: Store,
     status: RwLock<SemanticStatus>,
 }
 
-struct HttpProvider {
+/// Loopback transport for the allowlisted StillWatch Firebase worker.
+pub struct FirebaseProvider {
     endpoint: String,
     token: String,
     http: reqwest::Client,
@@ -120,7 +154,7 @@ impl SemanticSupervisor {
             .build()
             .map_err(io::Error::other)?;
         Ok(Arc::new(Self {
-            transport: HttpProvider {
+            transport: FirebaseProvider {
                 endpoint: format!("http://{}", config.address),
                 token: token.into(),
                 http: client,
@@ -138,14 +172,6 @@ impl SemanticSupervisor {
             store,
         }))
     }
-
-    pub fn status(&self) -> SemanticStatus {
-        self.status
-            .read()
-            .map(|value| value.clone())
-            .unwrap_or_else(|_| Self::disabled())
-    }
-
     pub fn disabled() -> SemanticStatus {
         SemanticStatus {
             state: SemanticState::Disabled,
@@ -156,6 +182,15 @@ impl SemanticSupervisor {
             used_today: 0,
             daily_request_limit: 0,
         }
+    }
+}
+
+impl<P: SemanticProvider> SemanticSupervisor<P> {
+    pub fn status(&self) -> SemanticStatus {
+        self.status
+            .read()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| SemanticSupervisor::disabled())
     }
 
     pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
@@ -170,7 +205,7 @@ impl SemanticSupervisor {
             if refresh_at <= Instant::now() {
                 capabilities = tokio::select! {
                     _ = stop.wait_for(|stopping| *stopping) => return,
-                    outcome = self.transport.capabilities() => outcome.ok(),
+                    outcome = self.transport.capabilities() => outcome.ok().filter(compatible),
                 };
                 self.refresh(capabilities.as_ref()).await;
                 refresh_at = Instant::now() + REFRESH;
@@ -355,8 +390,8 @@ impl SemanticSupervisor {
     }
 }
 
-impl HttpProvider {
-    async fn capabilities(&self) -> Result<ProviderCapabilities, SemanticOutcome> {
+impl SemanticProvider for FirebaseProvider {
+    async fn capabilities(&self) -> Result<ProviderCapabilities, SemanticProviderError> {
         let response = self
             .http
             .get(format!("{}/health", self.endpoint))
@@ -364,22 +399,12 @@ impl HttpProvider {
             .timeout(Duration::from_secs(2))
             .send()
             .await
-            .map_err(|_| SemanticOutcome::Unavailable)?;
+            .map_err(|_| SemanticProviderError::Unavailable)?;
         let bytes = read_response(response).await?;
-        let info: ProviderCapabilities =
-            serde_json::from_slice(&bytes).map_err(|_| SemanticOutcome::Invalid)?;
-        if !info.semantic_evaluation
-            || info.sdk_version != SDK
-            || info.model != CLOUD_MODEL
-            || info.max_images != 5
-            || info.max_bytes != PACKET_LIMIT
-        {
-            return Err(SemanticOutcome::Invalid);
-        }
-        Ok(info)
+        serde_json::from_slice(&bytes).map_err(|_| SemanticProviderError::Invalid)
     }
 
-    async fn evaluate(&self, body: Vec<u8>) -> Result<SemanticReport, SemanticOutcome> {
+    async fn evaluate(&self, body: Vec<u8>) -> Result<SemanticReport, SemanticProviderError> {
         let response = self
             .http
             .post(format!("{}/evaluate", self.endpoint))
@@ -388,34 +413,42 @@ impl HttpProvider {
             .body(body)
             .send()
             .await
-            .map_err(|_| SemanticOutcome::Unavailable)?;
+            .map_err(|_| SemanticProviderError::Unavailable)?;
         let bytes = read_response(response).await?;
-        serde_json::from_slice(&bytes).map_err(|_| SemanticOutcome::Invalid)
+        serde_json::from_slice(&bytes).map_err(|_| SemanticProviderError::Invalid)
     }
 }
 
-async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, SemanticOutcome> {
+fn compatible(info: &ProviderCapabilities) -> bool {
+    info.semantic_evaluation
+        && info.sdk_version == SDK
+        && info.model == CLOUD_MODEL
+        && info.max_images == 5
+        && info.max_bytes == PACKET_LIMIT
+}
+
+async fn read_response(mut response: reqwest::Response) -> Result<Vec<u8>, SemanticProviderError> {
     if !response.status().is_success() {
         return Err(if response.status() == 504 {
-            SemanticOutcome::Deadline
+            SemanticProviderError::Deadline
         } else {
-            SemanticOutcome::Unavailable
+            SemanticProviderError::Unavailable
         });
     }
     if response
         .content_length()
         .is_some_and(|length| length > RESPONSE_LIMIT as u64)
     {
-        return Err(SemanticOutcome::Invalid);
+        return Err(SemanticProviderError::Invalid);
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| SemanticOutcome::Unavailable)?
+        .map_err(|_| SemanticProviderError::Unavailable)?
     {
         if bytes.len() + chunk.len() > RESPONSE_LIMIT {
-            return Err(SemanticOutcome::Invalid);
+            return Err(SemanticProviderError::Invalid);
         }
         bytes.extend_from_slice(&chunk);
     }

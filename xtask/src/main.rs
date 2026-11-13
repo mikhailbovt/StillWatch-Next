@@ -12,6 +12,7 @@ use sw_protocol::{
     PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest, ReplayUpload,
     ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe, SourceProbeRequest,
     StreamGrant, StreamRequest,
+    worker::{CaptureRequest, InferenceConfig, InferenceResult},
 };
 
 fn main() -> Result<()> {
@@ -67,6 +68,13 @@ fn contracts(check: bool) -> Result<()> {
     write_schema::<AlertFeed>(&root, "AlertFeed", check)?;
     write_schema::<AlertReceipt>(&root, "AlertReceipt", check)?;
     write_schema::<Problem>(&root, "Problem", check)?;
+    let workers = root.join("../workers/v1");
+    if !check {
+        fs::create_dir_all(&workers)?;
+    }
+    write_schema::<CaptureRequest>(&workers, "CaptureRequest", check)?;
+    write_schema::<InferenceConfig>(&workers, "InferenceConfig", check)?;
+    write_schema::<InferenceResult>(&workers, "InferenceResult", check)?;
     Ok(())
 }
 

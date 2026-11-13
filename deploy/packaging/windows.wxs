@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
-  <Package Name="StillWatch Core" Manufacturer="StillWatch" Version="0.1.0"
+  <Package Name="StillWatch Core" Manufacturer="StillWatch" Version="$(var.ProductVersion)"
            UpgradeCode="7333E77A-338A-4314-B199-DC975F111C66" Scope="perMachine">
     <MajorUpgrade DowngradeErrorMessage="A newer version of StillWatch Core is already installed." />
     <MediaTemplate EmbedCab="yes" />

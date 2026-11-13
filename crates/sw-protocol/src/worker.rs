@@ -1,4 +1,4 @@
-//! Private, versioned capture IPC. Independent of HTTP and native libraries.
+//! Versioned capture and inference IPC for trusted supervised workers.
 
 use std::{io, net::SocketAddr, path::PathBuf, time::Duration};
 
@@ -32,6 +32,7 @@ pub fn inference_startup_failure(marker: [u8; 4]) -> Option<InferenceFailure> {
 }
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CaptureRequest {
     pub source: CaptureSource,
@@ -39,6 +40,7 @@ pub struct CaptureRequest {
 }
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CaptureSource {
     Replay {
@@ -64,6 +66,7 @@ impl CaptureSource {
 }
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CameraCredentials {
     pub username: String,
@@ -71,6 +74,7 @@ pub struct CameraCredentials {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct InferenceConfig {
     pub library: PathBuf,
@@ -83,6 +87,7 @@ pub struct InferenceConfig {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CudaConfig {
     pub device: u16,
@@ -124,6 +129,7 @@ impl Tasks {
 }
 
 #[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct InferenceResult {
     pub request: uuid::Uuid,

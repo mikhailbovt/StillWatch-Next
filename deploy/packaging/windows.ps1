@@ -21,6 +21,14 @@ $swEntry = if ($Companion) { 'stillwatch_companion.exe' } else { 'bin/stillwatch
 $swTemplate = if ($Companion) { 'windows-companion.wxs' } else { 'windows.wxs' }
 $swManifest = Get-Content -Raw -LiteralPath (Join-Path $swPayload 'manifest.json') | ConvertFrom-Json -AsHashtable
 if ($swManifest.target -ne 'windows-x64' -or -not $swManifest.files.Contains($swEntry)) { throw 'Invalid Windows payload' }
+$swVersion = $swManifest.version
+if ($swVersion -isnot [string] -or $swVersion -cnotmatch '\A(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,2})\.(?:0|[1-9][0-9]{0,4})\z') {
+    throw 'The payload must declare a three-part MSI product version.'
+}
+$swNumbers = $swVersion.Split('.')
+if ([int]$swNumbers[0] -gt 255 -or [int]$swNumbers[1] -gt 255 -or [int]$swNumbers[2] -gt 65535) {
+    throw 'MSI product version components exceed 255.255.65535.'
+}
 $swXml = [Xml.XmlDocument]::new()
 $swNs = 'http://wixtoolset.org/schemas/v4/wxs'
 $swRoot = $swXml.AppendChild($swXml.CreateElement('Wix', $swNs))
@@ -64,13 +72,14 @@ foreach ($swPath in $swPaths) {
 }
 $swGenerated = [IO.Path]::ChangeExtension($swOutput, '.payload.wxs')
 $swXml.Save($swGenerated)
-$swBuild = @('build', '-arch', 'x64', '-b', $PSScriptRoot, '-d', "Payload=$swPayload")
+$swBuild = @('build', '-arch', 'x64', '-b', $PSScriptRoot, '-d', "Payload=$swPayload", '-d', "ProductVersion=$swVersion")
 if (-not $Companion) { $swBuild += @('-ext', 'WixToolset.Util.wixext/5.0.2') }
 & $swWix @swBuild (Join-Path $PSScriptRoot $swTemplate) $swGenerated -out $swMsi
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($swBundle) {
     & $swWix build -arch x64 -ext WixToolset.BootstrapperApplications.wixext/5.0.2 `
-        -d "CompanionMsi=$swMsi" (Join-Path $PSScriptRoot 'windows-companion-bundle.wxs') -out $swOutput
+        -d "CompanionMsi=$swMsi" -d "ProductVersion=$swVersion" `
+        (Join-Path $PSScriptRoot 'windows-companion-bundle.wxs') -out $swOutput
 }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Get-FileHash -LiteralPath $swOutput -Algorithm SHA256

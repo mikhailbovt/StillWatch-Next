@@ -94,6 +94,23 @@ pub struct RgbFrame {
     pub rgb: Vec<u8>,
 }
 
+/// One authorized source within a capture worker. `None` denotes end of stream.
+/// Implementations return owned RGB frames with source timestamps and honor the
+/// decoder's read limits. The supervisor owns cancellation at the process boundary.
+pub trait SourceAdapter {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn read_rgb(&mut self) -> Result<Option<RgbFrame>, Self::Error>;
+}
+
+impl SourceAdapter for Decoder {
+    type Error = CaptureError;
+
+    fn read_rgb(&mut self) -> Result<Option<RgbFrame>, CaptureError> {
+        self.next_frame()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

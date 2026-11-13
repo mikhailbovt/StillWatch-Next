@@ -24,6 +24,8 @@ stillwatch-worker doctor ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256
 
 The Windows Core build uses WiX 5.0.2 and its `WixToolset.Util.wixext/5.0.2` extension. Use `wix extension add -g WixToolset.Util.wixext/5.0.2` on the packaging machine. The minimal Windows libav build uses the Win32-thread variant of the x64 MinGW compiler.
 
+Windows installers take the three-component product version from the staged manifest. For major upgrades, install a strictly higher version with the same product family after taking an offline backup. Keep the prior installer and compatible data together for rollback. If rolling back, stop and remove the newer product, restore the compatible backup, and install the earlier version.
+
 ## Enroll a device
 
 Set lan_listen to a specific reachable private IP and port in core.json. Enable lan_advertise if clients on the same network should discover the Core. On Linux set STILLWATCH_SETTINGS_FILE to the absolute path of core.json. A reachable VPN address can also be used for pairing. Keep the maintenance endpoint on loopback.
@@ -82,7 +84,7 @@ Resolved incidents and their related metadata age out after 30 days by default. 
 - Use the platform's notification settings to verify Companion permissions. The Companion uses foreground polling in this profile. Test the operating system's sound route and interruption behavior for each actual device.
 - The documented short CPU replay runs cover the tested machine and workload. Use measured results for sizing. Event recall and false-alert rates require independently labeled scenes.
 
-For Firebase configuration, see firebase-worker.md in the source docs. For private VPN and Coturn configuration, see remote.md.
+For Firebase configuration, see firebase-worker.md. For private VPN, outbound relay and Coturn configuration, see remote.md. For process adapter integration, see worker-protocol.md.
 
 ## Desktop alarm agent
 

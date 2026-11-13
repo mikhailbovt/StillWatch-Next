@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{Box2d, Observation, ObservationLabel, SourceScope};
+use crate::{Box2d, HazardPolicy, Observation, ObservationLabel, SourceScope};
 
 const MAX_REGIONS: usize = 64;
 const CONTINUITY_US: i64 = 1_500_000;
@@ -104,6 +104,14 @@ struct Cluster {
     smoke: Option<Box2d>,
     combined: Box2d,
     confidence: f64,
+}
+
+impl<'a> HazardPolicy<FireSample<'a>> for FirePolicy {
+    type Outcome = Vec<FireEpisode>;
+
+    fn assess(&mut self, sample: FireSample<'a>) -> Self::Outcome {
+        self.update(sample)
+    }
 }
 
 impl FirePolicy {

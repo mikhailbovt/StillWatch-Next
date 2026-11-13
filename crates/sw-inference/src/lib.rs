@@ -158,6 +158,28 @@ pub struct Model {
     profile: InputProfile,
 }
 
+/// Synchronous tensor evaluation inside an isolated inference worker.
+/// Output is borrowed for the duration of `consume` and must never escape it.
+pub trait PerceptionBackend {
+    fn evaluate<T>(
+        &mut self,
+        size: TensorSize,
+        input: &[f32],
+        consume: impl FnOnce(&[f32]) -> T,
+    ) -> Result<T, InferenceError>;
+}
+
+impl PerceptionBackend for Model {
+    fn evaluate<T>(
+        &mut self,
+        size: TensorSize,
+        input: &[f32],
+        consume: impl FnOnce(&[f32]) -> T,
+    ) -> Result<T, InferenceError> {
+        self.run(size, input, consume)
+    }
+}
+
 impl Model {
     fn open(
         runtime: &Runtime,

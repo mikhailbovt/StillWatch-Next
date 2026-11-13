@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use sw_capture::{Decoder, PtsQuality as SourceQuality, ReadLimits, RgbFrame};
+use sw_capture::{Decoder, PtsQuality as SourceQuality, ReadLimits, RgbFrame, SourceAdapter};
 use sw_protocol::RtspTransport;
 use sw_protocol::worker::{
     CONFIG_MAX_BYTES, CaptureRequest, CaptureSource, FrameHeader, MASK_UNITS, MaskRect, PtsQuality,
@@ -33,7 +33,7 @@ pub fn run() -> Result<()> {
     let mut output = BufWriter::new(io::stdout().lock());
     let mut first = None;
     let mut frame_id = 0u64;
-    while let Some(mut frame) = source.next_frame()? {
+    while let Some(mut frame) = source.read_rgb()? {
         frame_id = frame_id
             .checked_add(1)
             .context("capture sequence exhausted")?;
@@ -88,7 +88,7 @@ pub fn devices() -> Result<()> {
     Ok(())
 }
 
-fn open(source: CaptureSource) -> Result<(Decoder, bool)> {
+fn open(source: CaptureSource) -> Result<(impl SourceAdapter, bool)> {
     let mut limits = ReadLimits::default();
     if source.uses_schannel() {
         limits.open_timeout = WINDOWS_RTSPS_OPEN_TIMEOUT;

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InferenceConfig",
+  "type": "object",
+  "properties": {
+    "cuda": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CudaConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "library": {
+      "type": "string"
+    },
+    "library_sha256": {
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "type": "string"
+    },
+    "models": {
+      "type": "string"
+    },
+    "threads": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "library",
+    "library_sha256",
+    "models",
+    "manifest_sha256",
+    "threads"
+  ],
+  "$defs": {
+    "CudaConfig": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "provider_sha256": {
+          "type": "string"
+        },
+        "shared_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "provider_sha256",
+        "shared_sha256"
+      ]
+    }
+  }
+}

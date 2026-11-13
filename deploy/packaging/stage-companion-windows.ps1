@@ -2,13 +2,20 @@ param(
     [Parameter(Mandatory)][string]$Bundle,
     [Parameter(Mandatory)][string]$AlarmAgent,
     [Parameter(Mandatory)][string]$VCRuntime,
-    [Parameter(Mandatory)][string]$Output
+    [Parameter(Mandatory)][string]$Output,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
 $bundleRoot = (Resolve-Path -LiteralPath $Bundle).Path
 $runtimeRoot = (Resolve-Path -LiteralPath $VCRuntime).Path
 $repository = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+if (!$Version) {
+    $pubspec = Get-Content -Raw -LiteralPath (Join-Path $repository 'apps/companion/pubspec.yaml')
+    $match = [regex]::Match($pubspec, '(?m)^version:[ \t]*(\d+\.\d+\.\d+)(?:\+[0-9]+)?[ \t]*\r?$')
+    if (!$match.Success) { throw 'Companion pubspec must declare its release version.' }
+    $Version = $match.Groups[1].Value
+}
 $native = Get-Content -Raw -LiteralPath (Join-Path $repository 'models/native-deps.lock.json') | ConvertFrom-Json -AsHashtable
 $runtime = $native.vc_runtime['windows-x64']
 $outputRoot = [IO.Path]::GetFullPath($Output)
@@ -50,5 +57,5 @@ foreach ($file in (Get-ChildItem -LiteralPath $outputRoot -File -Recurse | Sort-
     $relative = [IO.Path]::GetRelativePath($outputRoot, $file.FullName).Replace('\', '/')
     $inventory[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 }
-[ordered]@{schema_version=1; version='0.1.0'; target='windows-x64'; files=$inventory} |
+[ordered]@{schema_version=1; version=$Version; target='windows-x64'; files=$inventory} |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $outputRoot 'manifest.json') -Encoding utf8

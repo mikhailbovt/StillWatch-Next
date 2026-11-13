@@ -1,11 +1,25 @@
 #[cfg(target_os = "linux")]
 use anyhow::Context;
 use anyhow::{Result, ensure};
+use stillwatch_sdk::protocol::AlertDelivery;
+
+use crate::transport::{NotificationTransport, OutputUnavailable};
 
 pub struct Output {
     wave: Vec<u8>,
     #[cfg(target_os = "linux")]
     player: &'static str,
+}
+
+impl NotificationTransport for Output {
+    async fn present(&self, alert: &AlertDelivery) -> Result<(), OutputUnavailable> {
+        eprintln!("StillWatch urgent incident {}", alert.incident_id);
+        self.repeat(alert).await
+    }
+
+    async fn repeat(&self, _: &AlertDelivery) -> Result<(), OutputUnavailable> {
+        self.play().await.map_err(|_| OutputUnavailable("audio"))
+    }
 }
 
 impl Output {
