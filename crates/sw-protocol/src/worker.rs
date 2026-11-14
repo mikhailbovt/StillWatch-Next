@@ -3,7 +3,7 @@
 use std::{io, net::SocketAddr, path::PathBuf, time::Duration};
 
 use crate::{InferenceFailure, RtspTransport};
-pub use crate::{MaskRect, REGION_UNITS as MASK_UNITS};
+pub use crate::{MAX_HEIGHT, MAX_WIDTH, MaskRect, REGION_UNITS as MASK_UNITS};
 use serde::{Deserialize, Serialize};
 
 pub const CONFIG_MAX_BYTES: usize = 16 * 1024;
@@ -19,8 +19,6 @@ pub const MODEL_INITIALIZATION_FAILED: [u8; 4] = *b"SWIS";
 pub const RUNTIME_UNAVAILABLE: [u8; 4] = *b"SWIR";
 pub const HEADER_LEN: usize = 56;
 pub const CODEC_HEADER_LEN: usize = 36;
-pub const MAX_WIDTH: u32 = 3840;
-pub const MAX_HEIGHT: u32 = 2160;
 pub const MAX_FRAME_BYTES: u32 = MAX_WIDTH * MAX_HEIGHT * 3;
 const MISSING_PTS: i64 = i64::MIN;
 

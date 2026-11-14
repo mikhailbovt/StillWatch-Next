@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sw_domain::{SourceScope, UnixMillis};
 use sw_protocol::{
-    CameraConfig, CameraPatch, CaptureCapacity, Dimensions, IdempotencyKey,
-    worker::{MAX_HEIGHT, MAX_WIDTH},
+    CameraConfig, CameraPatch, CaptureCapacity, Dimensions, IdempotencyKey, MAX_HEIGHT, MAX_WIDTH,
 };
 use uuid::Uuid;
 

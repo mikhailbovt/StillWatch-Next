@@ -6,6 +6,8 @@ use uuid::Uuid;
 use crate::Counter;
 
 pub const REGION_UNITS: u32 = 10_000;
+pub const MAX_WIDTH: u32 = 3840;
+pub const MAX_HEIGHT: u32 = 2160;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
