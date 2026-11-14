@@ -726,7 +726,8 @@ fn evidence_write(
 #[test]
 fn evidence_commit_failure_leaves_a_reconcilable_orphan() {
     let root = tempfile::tempdir().unwrap();
-    let mut db = database(root.path(), 1024);
+    let quota = BLACK.len().max(WHITE.len()) as u64;
+    let mut db = database(root.path(), quota);
     let incident = db.create(incident(), 1_000).unwrap();
     let stamp = EvidenceStamp {
         packet_id: Uuid::new_v4(),
@@ -749,12 +750,24 @@ fn evidence_commit_failure_leaves_a_reconcilable_orphan() {
             .is_none()
     );
     assert_eq!(fs::read_dir(&db.blobs).unwrap().count(), 1);
+    db.conn.execute_batch("DROP TRIGGER fail_incident").unwrap();
+    let blocked = db
+        .persist_evidence(evidence_write(&incident, stamp, &[WHITE]), 2_001)
+        .unwrap();
+    assert!(matches!(blocked, EvidenceOutcome::Failed(result)
+        if result.failures == vec![(0, EvidenceFailure::Quota)]));
     drop(db);
-    let mut reopened = database(root.path(), 1024);
+    let mut reopened = database(root.path(), quota);
     assert_eq!(fs::read_dir(&reopened.blobs).unwrap().count(), 0);
+    let incident = reopened.get(incident.id).unwrap();
+    let stamp = EvidenceStamp {
+        packet_id: Uuid::new_v4(),
+        version: 2,
+        ..stamp
+    };
     assert!(matches!(
         reopened
-            .persist_evidence(evidence_write(&incident, stamp, &[BLACK]), 2_000)
+            .persist_evidence(evidence_write(&incident, stamp, &[BLACK]), 2_002)
             .unwrap(),
         EvidenceOutcome::Persisted(_)
     ));

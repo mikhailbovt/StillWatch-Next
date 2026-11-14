@@ -32,6 +32,7 @@ pub(crate) struct Database {
     pub(crate) identity: Identity,
     pub(crate) blobs: PathBuf,
     pub(crate) quota: u64,
+    pub(crate) blob_bytes: Option<u64>,
     pub(crate) notify: watch::Sender<()>,
     _lock: File,
 }
@@ -74,6 +75,7 @@ impl Database {
             identity,
             blobs,
             quota,
+            blob_bytes: None,
             notify,
             _lock: lock,
         };

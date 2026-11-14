@@ -211,7 +211,9 @@ impl Database {
                 write.stamp.expires_at, request_hash.as_slice(), write.context.as_ref().map(serde_json::to_string).transpose()?],
         )?;
 
-        let mut used = physical_bytes(&self.blobs)?;
+        if self.blob_bytes.is_none() {
+            self.blob_bytes = Some(physical_bytes(&self.blobs)?);
+        }
         let mut result = EvidenceResult {
             packet_id: write.stamp.packet_id,
             incident_revision,
@@ -226,13 +228,22 @@ impl Database {
             let path = blob_path(&self.blobs, &info.digest)?;
             let failure = if path.is_file() {
                 verify_blob(&path, &info).err().map(|_| EvidenceFailure::Io)
-            } else if info.byte_length > self.quota.saturating_sub(used) {
-                Some(EvidenceFailure::Quota)
             } else {
-                used = used.saturating_add(info.byte_length);
-                write_blob(&self.blobs, &path, &image.jpeg)
-                    .err()
-                    .map(|_| EvidenceFailure::Io)
+                match self.blob_bytes {
+                    Some(used) if info.byte_length <= self.quota.saturating_sub(used) => {
+                        if write_blob(&self.blobs, &path, &image.jpeg).is_ok() {
+                            // Charge writes even if the metadata transaction rolls back.
+                            self.blob_bytes = Some(used.saturating_add(info.byte_length));
+                            None
+                        } else {
+                            // A failed directory flush can leave a renamed blob.
+                            self.blob_bytes = None;
+                            Some(EvidenceFailure::Io)
+                        }
+                    }
+                    Some(_) => Some(EvidenceFailure::Quota),
+                    None => Some(EvidenceFailure::Io),
+                }
             };
             let ordinal = ordinal as u8;
             let kind = match image.kind {
@@ -441,6 +452,9 @@ impl Database {
         if changed {
             self.notify.send_replace(());
         }
+        // Recount on the next write after scheduled maintenance, including any
+        // external loss or failed cleanup observed since the last count.
+        self.blob_bytes = None;
         let cleanup = {
             let mut stmt = self
                 .conn
@@ -571,6 +585,7 @@ impl Database {
             update_incident(&tx, &incident.evidence_unavailable(now)?)?;
         }
         tx.commit()?;
+        self.blob_bytes = Some(physical_bytes(&self.blobs)?);
         Ok(())
     }
 }
