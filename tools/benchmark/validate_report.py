@@ -33,6 +33,15 @@ FAULTS = {
 }
 
 
+def canary_matches(incidents, planned):
+    return [incident for incident in incidents
+            if all(incident.get(key) == planned[key] for key in ("category", "camera"))
+            and int(incident["source_epoch"]) == int(planned["source_epoch"])
+            and planned["earliest_source_us"] <= int(incident["source_us"]) <= planned["latest_source_us"]
+            and incident["live"] is True and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
+            and incident["utc_ms"] <= incident["receipt_utc_ms"]]
+
+
 class Validation:
     def __init__(self, root):
         self.root = root.resolve(strict=True)
@@ -348,13 +357,7 @@ class Validation:
             raw = checked_json(checked_evidence(self.root, canary))
             if raw.get("planned") != planned["canary"] or not isinstance(raw.get("incidents"), list):
                 raise ValueError("Canary is missing the frozen event specification or native incident rows")
-            expected_event = planned["canary"]
-            matches = [incident for incident in raw["incidents"]
-                       if all(incident.get(key) == expected_event[key] for key in ("category", "camera"))
-                       and int(incident["source_epoch"]) == int(expected_event["source_epoch"])
-                       and expected_event["earliest_source_us"] <= int(incident["source_us"]) <= expected_event["latest_source_us"]
-                       and incident["live"] and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
-                       and incident["utc_ms"] <= incident["receipt_utc_ms"]]
+            matches = canary_matches(raw["incidents"], planned["canary"])
             if not matches:
                 failed.append({"id": name, "matching_canaries": 0})
                 continue
@@ -370,6 +373,32 @@ class Validation:
             expected.update({"minimum_cameras": cameras, "minimum_cycles_each": each})
             complete = complete and sum(value >= each for value in completed.values()) >= cameras
         return expected, observed, "FAIL" if failed else "PASS" if complete else "INCOMPLETE"
+
+    def final_canary_check(self, proof):
+        schedule = self.artifact(proof, "fault-schedule")
+        source = self.artifact(proof, "sources")
+        workload = self.profile["workload"]
+        if (sha256(schedule) != workload["fault_schedule_digest"] or sha256(source) != workload["source_manifest_digest"]):
+            raise ValueError("Final canary input differs from the frozen workload")
+        planned = checked_json(schedule)["final_canary"]
+        cameras = {row["id"] for row in checked_json(source)["sources"][:workload["camera_count"]]}
+        maximum = self.profile["budgets"]["core_recovery_ms"]
+        expected = {"canary": planned, "ready_cameras": sorted(cameras), "recovery_ms_maximum": maximum,
+                    "sqlite_integrity_and_references": True, "persisted_evidence_and_device_receipt": True}
+        if "native-canary" not in proof["artifacts"]:
+            return expected, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
+        raw = checked_json(self.artifact(proof, "native-canary"))
+        elapsed = raw["elapsed_ms"]
+        if (raw["planned"] != planned or not number(raw["started_utc_ms"]) or not number(elapsed)
+                or elapsed > (proof["finished_s"] - proof["started_s"]) * 1_000):
+            raise ValueError("Invalid final canary identity or observation interval")
+        matching = [row for row in canary_matches(raw["incidents"], planned) if row["utc_ms"] >= raw["started_utc_ms"]]
+        observed = {"ready_cameras": raw["ready_cameras"], "recovery_ms": elapsed, "matching_live_incidents": matching,
+                    "integrity": raw["integrity"], "invalid_references": raw["invalid_references"]}
+        passed = (len(cameras) == workload["camera_count"] and sorted(raw["ready_cameras"]) == sorted(cameras)
+                  and raw["integrity"] == ["ok"] and raw["invalid_references"] == 0
+                  and elapsed <= maximum and len(matching) == 1 and proof["observations"]["exit_code"] == 0)
+        return expected, observed, "PASS" if passed else "FAIL"
 
     def logic_check(self, case, proof):
         catalog = checked_json(self.artifact(proof, "logical-test-binaries"))
@@ -421,6 +450,8 @@ class Validation:
                         expected, observed, result = self.logic_check(case, proof)
                     elif case in FAULTS or case == "pipeline.canary-after-each-fault":
                         expected, observed, result = self.fault_check(case, proof)
+                    elif case == "pipeline.final-live-canary":
+                        expected, observed, result = self.final_canary_check(proof)
                     elif stage == "quiet_load":
                         expected, observed, result = self.steady_check(case, proof)
                     else:

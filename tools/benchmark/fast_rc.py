@@ -363,10 +363,7 @@ class Run:
                    {"sources": source, "settings": capacity_options, "stdout": log}, deadline=observations.get("deadline_exceeded", False))
         if self.args.fault_schedule is None or self.args.node is None:
             return
-        schedule = self.root / "inputs" / "faults.json"
-        shutil.copyfile(self.args.fault_schedule, schedule)
-        if sha256(schedule) != self.profile["workload"]["fault_schedule_digest"]:
-            raise ValueError("The native fault schedule differs from the frozen workload")
+        schedule = self.pinned_fault_schedule()
         settings.update(fault_schedule=str(schedule), monotonic_origin=self.started)
         options = output.parent / "settings.json"
         write_json(options, settings)
@@ -383,10 +380,41 @@ class Run:
                        {"sources": source, "settings": options, "fault-schedule": schedule, "fault-ledger": ledger, "stdout": log},
                        deadline=observations.get("deadline_exceeded", False))
 
+    def pinned_fault_schedule(self):
+        schedule = self.root / "inputs" / "faults.json"
+        if not schedule.exists():
+            shutil.copyfile(self.args.fault_schedule, schedule)
+        if sha256(schedule) != self.profile["workload"]["fault_schedule_digest"]:
+            raise ValueError("The native fault schedule differs from the frozen workload")
+        return schedule
+
+    def final(self):
+        stage = "final"
+        self.logical_binaries(stage)
+        if (not self.verified or self.args.source_manifest is None or self.args.fault_schedule is None
+                or self.args.fixture_ffmpeg is None or self.args.node is None):
+            return
+        schedule = self.pinned_fault_schedule()
+        if "final_canary" not in checked_json(schedule):
+            return
+        source, settings = self.native_settings()
+        output = self.root / "raw" / stage
+        output.mkdir(exist_ok=True)
+        options = output / "canary-settings.json"
+        native = output / "canary.json"
+        write_json(options, settings | {"fault_schedule": str(schedule)})
+        observations, log = self.capture(stage, "live-canary", [sys.executable, "-B", ROOT / "tools/benchmark/qualify.py",
+                                         "--native-final-canary", options, native])
+        artifacts = {"sources": source, "settings": options, "fault-schedule": schedule, "stdout": log}
+        if native.is_file():
+            artifacts["native-canary"] = native
+        self.proof(stage, "pipeline.final-live-canary", observations["started_s"], observations, artifacts,
+                   deadline=observations.get("deadline_exceeded", False))
+
     def execute(self):
         collectors = {"preflight": self.preflight, "logical": self.logical,
                       "faults_and_capacity": self.faults, "storage_and_crash": self.storage, "quiet_load": self.quiet_load,
-                      "final": lambda: self.logical_binaries("final")}
+                      "final": self.final}
         for stage in ("preflight", *self.args.stage):
             if stage not in collectors:
                 continue

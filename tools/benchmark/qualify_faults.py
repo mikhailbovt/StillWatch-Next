@@ -254,6 +254,44 @@ def run(settings, output, evidence_root):
                                           "error": "Recovery did not complete with the pinned live canary"}) + "\n")
 
 
+def final_canary(settings, output):
+    profile = checked_json(Path(settings["profile"]))
+    schedule = Path(settings["fault_schedule"])
+    if sha256(schedule) != profile["workload"]["fault_schedule_digest"]:
+        raise ValueError("Final canary schedule differs from the frozen workload")
+    planned = checked_json(schedule)["final_canary"]
+    limit_ms = profile["budgets"]["core_recovery_ms"]
+    with TemporaryDirectory(prefix="stillwatch-final-") as scratch:
+        root = Path(scratch)
+        database = root / "data/stillwatch.sqlite3"
+        started = time.monotonic()
+        earliest = time.time_ns() // 1_000_000
+        deadline = started + limit_ms / 1_000
+        with native_fixture(settings, root) as fixture:
+            receiver = pair_owner(settings, fixture["local"], root)
+            ready = []
+            verified = None
+            while time.monotonic() <= deadline:
+                states = {name: latest(camera, fixture["local"]) for name, camera in fixture["cameras"].items()}
+                ready = [name for name, row in states.items()
+                         if row["capture_state"] == "streaming" and row["analysis"] and row["analysis"]["state"] == "ready"
+                         and all(int(row["analysis"][key]) > 0 for key in ("pose_frames", "fire_frames"))]
+                if len(ready) == len(states):
+                    verified = canary(database, fixture, receiver, planned, earliest)
+                    if verified is not None:
+                        break
+                time.sleep(0.2)
+            elapsed = (time.monotonic() - started) * 1_000
+            if verified is not None:
+                close_canary(fixture["local"], verified)
+            with closing(sqlite3.connect(database)) as db:
+                integrity = [status for status, in db.execute("PRAGMA integrity_check")]
+                invalid_references = len(db.execute("PRAGMA foreign_key_check").fetchall())
+            write_json(output, {"planned": planned, "started_utc_ms": earliest, "elapsed_ms": elapsed,
+                                "ready_cameras": ready, "integrity": integrity, "invalid_references": invalid_references,
+                                "incidents": verified["incidents"] if verified is not None else []})
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("settings", "out", "evidence-root"):

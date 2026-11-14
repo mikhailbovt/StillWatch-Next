@@ -350,6 +350,14 @@ if __name__ == "__main__":
             raise SystemExit("usage: qualify.py --native-capacity SETTINGS.json")
         capacity(checked_json(Path(sys.argv[2])))
         sys.exit(0)
+    if sys.argv[1:2] == ["--native-final-canary"]:
+        from fast_rc_contract import checked_json
+        from qualify_faults import final_canary
+
+        if len(sys.argv) != 4:
+            raise SystemExit("usage: qualify.py --native-final-canary SETTINGS.json EVIDENCE.json")
+        final_canary(checked_json(Path(sys.argv[2])), Path(sys.argv[3]))
+        sys.exit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("core", "worker", "demo", "models", "runtime", "ffmpeg"):
         parser.add_argument("--" + name, type=lambda path: Path(path).resolve(strict=True), required=True)
