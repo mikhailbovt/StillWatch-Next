@@ -16,6 +16,7 @@ export interface SourceProbe {
   codec?: string | null;
   dimensions: Dimensions;
   live: boolean;
+  main_stream?: MainStreamProbe | null;
   native_pts: boolean;
   [k: string]: unknown;
 }
@@ -29,5 +30,11 @@ export interface CaptureCapacity {
 export interface Dimensions {
   height: number;
   width: number;
+  [k: string]: unknown;
+}
+export interface MainStreamProbe {
+  codec?: string | null;
+  dimensions: Dimensions;
+  native_pts: boolean;
   [k: string]: unknown;
 }

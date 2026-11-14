@@ -112,6 +112,9 @@ pub enum CameraSource {
     Rtsp {
         peer: SocketAddr,
         stream_path: String,
+        /// Optional detail stream on the same camera. Both paths share the camera's masks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        main_stream_path: Option<String>,
         secure: bool,
         transport: RtspTransport,
         credential_ref: Option<Uuid>,
@@ -134,12 +137,35 @@ impl CameraSource {
         !matches!(self, Self::Replay { .. })
     }
 
+    pub fn main_stream(&self) -> Option<Self> {
+        let Self::Rtsp {
+            peer,
+            main_stream_path: Some(stream_path),
+            secure,
+            transport,
+            credential_ref,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        Some(Self::Rtsp {
+            peer: *peer,
+            stream_path: stream_path.clone(),
+            main_stream_path: None,
+            secure: *secure,
+            transport: *transport,
+            credential_ref: *credential_ref,
+        })
+    }
+
     pub fn valid(&self) -> bool {
         match self {
             Self::Replay { file, pace, repeat } => bounded_text(file, 512) && (!*repeat || *pace),
             Self::Rtsp {
                 peer,
                 stream_path,
+                main_stream_path,
                 secure,
                 transport,
                 ..
@@ -164,6 +190,9 @@ impl CameraSource {
                     }
                     && (!*secure || *transport == RtspTransport::Tcp)
                     && valid_rtsp_path(stream_path)
+                    && main_stream_path
+                        .as_ref()
+                        .is_none_or(|path| path != stream_path && valid_rtsp_path(path))
             }
             Self::Usb { device_id } => bounded_text(device_id, 256) && !device_id.contains(':'),
         }
@@ -404,6 +433,17 @@ pub struct SourceProbe {
     pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_capacity: Option<CaptureCapacity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_stream: Option<MainStreamProbe>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MainStreamProbe {
+    pub dimensions: Dimensions,
+    pub native_pts: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -3,6 +3,9 @@
   "title": "Bootstrap",
   "type": "object",
   "properties": {
+    "camera_main_stream": {
+      "type": "boolean"
+    },
     "camera_priority": {
       "type": "boolean"
     },

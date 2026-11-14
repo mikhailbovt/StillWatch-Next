@@ -72,6 +72,27 @@
         "height"
       ]
     },
+    "MainStreamProbe": {
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "native_pts": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dimensions",
+        "native_pts"
+      ]
+    },
     "SourceProbe": {
       "type": "object",
       "properties": {
@@ -96,6 +117,16 @@
         },
         "live": {
           "type": "boolean"
+        },
+        "main_stream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MainStreamProbe"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "native_pts": {
           "type": "boolean"

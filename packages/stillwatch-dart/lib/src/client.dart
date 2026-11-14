@@ -9,6 +9,7 @@ import 'transport.dart';
 import 'wire.dart';
 
 const _cameraSetupTimeout = Duration(seconds: 22);
+const _whepOfferTimeout = Duration(seconds: 28);
 
 final class WhepAnswer {
   const WhepAnswer(this.sdp, this.etag);
@@ -357,6 +358,7 @@ final class StillWatchClient {
       body: utf8.encode(sdp),
       contentType: 'application/sdp',
       limit: 48 * 1024,
+      timeout: _whepOfferTimeout,
     );
     if (headers.value(HttpHeaders.locationHeader) != grant.path ||
         headers.contentType?.mimeType != 'application/sdp') {

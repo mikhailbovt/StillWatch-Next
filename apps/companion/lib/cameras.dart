@@ -197,6 +197,9 @@ class _CameraEditorState extends State<_CameraEditor> {
   late final TextEditingController _reference = TextEditingController(
     text: _initialSource['credential_ref'] as String?,
   );
+  late final TextEditingController _mainPath = TextEditingController(
+    text: _initialSource['main_stream_path'] as String?,
+  );
   late final _regions = <Json>[
     if (_initial['controlled_fire_regions'] is List)
       ...objects(_initial, 'controlled_fire_regions'),
@@ -219,6 +222,10 @@ class _CameraEditorState extends State<_CameraEditor> {
   String? _status;
   bool _error = false;
   bool _recheck = false;
+
+  bool get _supportsMainStream =>
+      widget.console.coreInfo?.cameraMainStream == true ||
+      _initialSource['main_stream_path'] is String;
 
   Future<void> _addMask([int? index]) async {
     final mask = await showDialog<Json>(
@@ -263,6 +270,7 @@ class _CameraEditorState extends State<_CameraEditor> {
 
   Json _source() {
     final path = _path.text.trim();
+    final main = _mainPath.text.trim();
     if (path.isEmpty) throw const FormatException();
     return switch (_type) {
       'replay' => {
@@ -276,6 +284,7 @@ class _CameraEditorState extends State<_CameraEditor> {
         'type': 'rtsp',
         'peer': _address.text.trim(),
         'stream_path': path,
+        if (_supportsMainStream && main.isNotEmpty) 'main_stream_path': main,
         'secure': _secure,
         'transport': _secure ? 'tcp' : _transport,
         'credential_ref': _reference.text.trim().isEmpty
@@ -381,9 +390,28 @@ class _CameraEditorState extends State<_CameraEditor> {
   );
 
   String _describeProbe(Json report) {
+    final main = report['main_stream'];
+    final source = _describeStream(report);
+    final streams = main is Map
+        ? 'Analysis  $source\nLive detail  ${_describeStream(object(main))}'
+        : source;
+    final capacity = report['capture_capacity'];
+    if (capacity is! Map) return streams;
+    final slots = capacity['available_camera_slots'];
+    final available = _mebibytes(capacity['available_raw_bytes'] as int);
+    final required = _mebibytes(capacity['required_raw_bytes'] as int);
+    return [
+      streams,
+      if (capacity['fits'] == false) 'Capture capacity exceeded.',
+      '$slots camera slots available',
+      '$required MiB raw frame memory needed, $available MiB available',
+    ].join('\n');
+  }
+
+  String _describeStream(Json report) {
     final dims = object(report['dimensions']);
     final codec = report['codec'];
-    final source = [
+    return [
       if (codec is String) codec.toUpperCase(),
       '${dims['width']} × ${dims['height']}',
       if (report['native_pts'] == true)
@@ -391,17 +419,6 @@ class _CameraEditorState extends State<_CameraEditor> {
       else
         'no native timestamps',
     ].join(' · ');
-    final capacity = report['capture_capacity'];
-    if (capacity is! Map) return source;
-    final slots = capacity['available_camera_slots'];
-    final available = _mebibytes(capacity['available_raw_bytes'] as int);
-    final required = _mebibytes(capacity['required_raw_bytes'] as int);
-    return [
-      source,
-      if (capacity['fits'] == false) 'Capture capacity exceeded.',
-      '$slots camera slots available',
-      '$required MiB raw frame memory needed, $available MiB available',
-    ].join('\n');
   }
 
   String _mebibytes(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(2);
@@ -448,7 +465,7 @@ class _CameraEditorState extends State<_CameraEditor> {
     }
   });
 
-  Future<void> _onvif() => _perform(() async {
+  Future<void> _onvif({bool main = false}) => _perform(() async {
     final ref = _reference.text.trim();
     final selected = await selectOnvifSource(
       context,
@@ -458,7 +475,24 @@ class _CameraEditorState extends State<_CameraEditor> {
     if (!mounted || selected == null) return;
     final source = object(selected['source']);
     final peer = text(source, 'peer');
+    if (main) {
+      setState(() {
+        _error =
+            selected['authorized'] != true ||
+            peer != _address.text.trim() ||
+            (source['secure'] == true) != _secure;
+        if (!_error) _mainPath.text = text(source, 'stream_path');
+        _status = _error
+            ? 'Select a profile on the same approved camera IP, port and TLS setting.'
+            : 'Live detail stream selected. Probe both paths before enabling monitoring.';
+      });
+      return;
+    }
     setState(() {
+      if (_address.text.trim() != peer ||
+          (source['secure'] == true) != _secure) {
+        _mainPath.clear();
+      }
       _address.text = peer;
       _path.text = text(source, 'stream_path');
       _secure = source['secure'] == true;
@@ -539,6 +573,7 @@ class _CameraEditorState extends State<_CameraEditor> {
     _name.dispose();
     _address.dispose();
     _path.dispose();
+    _mainPath.dispose();
     _reference.dispose();
     super.dispose();
   }
@@ -578,6 +613,7 @@ class _CameraEditorState extends State<_CameraEditor> {
                           setState(() {
                             _type = value;
                             _path.clear();
+                            _mainPath.clear();
                           });
                         }
                       },
@@ -631,12 +667,33 @@ class _CameraEditorState extends State<_CameraEditor> {
                 autocorrect: false,
                 decoration: InputDecoration(
                   labelText: switch (_type) {
-                    'rtsp' => 'RTSP stream path',
+                    'rtsp' =>
+                      _supportsMainStream
+                          ? 'RTSP analysis stream path'
+                          : 'RTSP stream path',
                     'usb' => 'Core capture device ID',
                     _ => 'File within the Core replay directory',
                   },
                 ),
               ),
+              if (_type == 'rtsp' && _supportsMainStream) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _mainPath,
+                  enabled: !_busy,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'RTSP live detail path (optional)',
+                    helperText: 'Use the same view and orientation for both streams. Privacy masks apply to both.',
+                    helperMaxLines: 2,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _busy ? null : () => _onvif(main: true),
+                  icon: const Icon(Icons.videocam_outlined),
+                  label: const Text('Choose ONVIF detail stream'),
+                ),
+              ],
               if (_type == 'replay') ...[
                 TextButton.icon(
                   onPressed: _busy ? null : _upload,

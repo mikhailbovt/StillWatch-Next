@@ -558,6 +558,7 @@ fn stream_source(
             || url.path().to_owned(),
             |query| format!("{}?{query}", url.path()),
         ),
+        main_stream_path: None,
         secure,
         transport: RtspTransport::Tcp,
         credential_ref,

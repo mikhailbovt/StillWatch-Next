@@ -25,6 +25,7 @@ Json = dict[str, Any]
 Save = Callable[[Json], Awaitable[None]]
 TOTAL = 12
 CAMERA_SETUP = 22
+WHEP_OFFER = 28
 IDLE = 25
 MAX_JSON = 4 * 1024 * 1024
 
@@ -289,7 +290,8 @@ class AsyncClient:
     async def offer_whep(self, session: str, sdp: str) -> tuple[str, str | None]:
         path = _whep(session)
         headers, content = await self._request(
-            "POST", path, content=sdp.encode(), headers={"Content-Type": "application/sdp"}, limit=48 * 1024,
+            "POST", path, content=sdp.encode(), headers={"Content-Type": "application/sdp"},
+            limit=48 * 1024, timeout=WHEP_OFFER,
         )
 
         if headers.get("location") != path or headers.get("content-type") != "application/sdp":

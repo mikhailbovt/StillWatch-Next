@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     fs::{self, File},
     io::{self, Read, Write},
     net::{IpAddr, SocketAddr},
@@ -15,20 +15,27 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sw_domain::SourceScope;
 use sw_protocol::{
-    Counter, IceServer, MediaStatus, StreamGrant, StreamProfile, StreamRequest, UtcTimestamp,
+    CameraConfig, CameraSource, Counter, Dimensions, IceServer, MediaStatus, StreamGrant,
+    StreamProfile, StreamRequest, UtcTimestamp, worker::FrameHeader,
 };
-use sw_storage::Store;
+use sw_storage::{CameraRecord, Store};
 use tempfile::TempDir;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     process::ChildStdin,
-    sync::{Semaphore, watch},
+    sync::{OwnedSemaphorePermit, Semaphore, watch},
 };
 use uuid::Uuid;
 
-use crate::{CameraFrame, CameraRegistry, capture_process::reap, child_process::command};
+use crate::{
+    CameraFrame, CameraRegistry, CaptureProcess, CaptureRead, Frame, FrameBudget,
+    capture_process::reap,
+    child_process::command,
+    registry::{FRAME_TIMEOUT, FrameClock, RepeatedFrames, same_aspect_ratio},
+    scene,
+};
 
 const SDP_LIMIT: usize = 48 * 1024;
 const MAX_SESSIONS: usize = 32;
@@ -40,6 +47,9 @@ const ROUTER_CONFIG: &str = "mediamtx.json";
 const GRANT_TTL: Duration = Duration::from_secs(20);
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 const STALE: Duration = Duration::from_secs(3);
+const MAIN_STARTUP: Duration = Duration::from_secs(18);
+
+type MainFrames = watch::Receiver<Option<(Instant, Arc<Frame>)>>;
 
 #[derive(Debug, Error)]
 pub enum MediaError {
@@ -67,6 +77,7 @@ pub struct MediaConfig {
     pub ice_udp: SocketAddr,
     pub ice_tcp: Option<SocketAddr>,
     pub advertised_ip: IpAddr,
+    pub detail_frame_bytes: u32,
     pub turn: Option<TurnConfig>,
 }
 
@@ -151,8 +162,30 @@ enum ViewerPhase {
 
 struct Publisher {
     path: String,
+    startup: Option<watch::Receiver<MainStartup>>,
     stop: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainStartup {
+    Opening,
+    Ready,
+    Capacity,
+}
+
+enum VideoFrame {
+    Analysis(Arc<CameraFrame>),
+    Main(Arc<Frame>),
+}
+
+impl VideoFrame {
+    fn frame(&self) -> &Frame {
+        match self {
+            Self::Analysis(frame) => &frame.frame,
+            Self::Main(frame) => frame,
+        }
+    }
 }
 
 struct State {
@@ -177,6 +210,8 @@ pub struct MediaService {
     read_secret: String,
     http: reqwest::Client,
     snapshots: Arc<Semaphore>,
+    encoders: Arc<Semaphore>,
+    detail_frames: FrameBudget,
     state: Mutex<State>,
 }
 
@@ -264,6 +299,8 @@ impl MediaService {
             .timeout(Duration::from_secs(8))
             .build()
             .map_err(io::Error::other)?;
+        let detail_frames =
+            FrameBudget::new(config.detail_frame_bytes).map_err(|_| MediaError::Invalid)?;
         let service = Arc::new(Self {
             config,
             encoder,
@@ -275,6 +312,8 @@ impl MediaService {
             read_secret,
             http,
             snapshots: Arc::new(Semaphore::new(MAX_SNAPSHOT_ENCODERS)),
+            encoders: Arc::new(Semaphore::new(MAX_ENCODERS)),
+            detail_frames,
             state: Mutex::new(State {
                 ready: false,
                 viewers: HashMap::new(),
@@ -399,7 +438,15 @@ impl MediaService {
             .latest(request.camera_id)
             .and_then(|frame| usable(&frame).then_some(frame.scope))
             .ok_or(MediaError::Unavailable)?;
-        self.check_camera_scope(scope).await?;
+        let current = self.camera_for_scope(scope).await?;
+        let main = request.profile == StreamProfile::Detail
+            && matches!(
+                &current.config.source,
+                CameraSource::Rtsp {
+                    main_stream_path: Some(_),
+                    ..
+                }
+            );
         let key = StreamKey {
             scope,
             profile: request.profile,
@@ -418,18 +465,36 @@ impl MediaService {
         {
             return Err(MediaError::Capacity);
         }
-        if !state.publishers.contains_key(&key) {
-            if state.publishers.len() >= MAX_ENCODERS {
-                return Err(MediaError::Capacity);
-            }
+        if let Entry::Vacant(entry) = state.publishers.entry(key) {
+            let encoder = Arc::clone(&self.encoders)
+                .try_acquire_owned()
+                .map_err(|_| MediaError::Capacity)?;
             let (stop, shutdown) = watch::channel(false);
             let service = self.clone();
             let path = format!("cam-{}", random_token()?);
             let target = path.clone();
+            let (startup_status, startup) = if main {
+                let (status, startup) = watch::channel(MainStartup::Opening);
+                (Some(status), Some(startup))
+            } else {
+                (None, None)
+            };
             let task = tokio::spawn(async move {
-                service.publish(key, &target, shutdown).await;
+                let _encoder = encoder;
+                if let Some(status) = startup_status {
+                    service
+                        .publish_main(key, &target, current.config, status, shutdown)
+                        .await;
+                } else {
+                    service.publish(key, &target, None, shutdown).await;
+                }
             });
-            state.publishers.insert(key, Publisher { path, stop, task });
+            entry.insert(Publisher {
+                path,
+                startup,
+                stop,
+                task,
+            });
         }
         let id = Uuid::new_v4();
         state.viewers.insert(
@@ -472,7 +537,7 @@ impl MediaService {
         if sdp.len() > SDP_LIMIT || !sdp.starts_with("v=0") || !sdp.contains("\nm=video ") {
             return Err(MediaError::Invalid);
         }
-        let (key, path) = {
+        let (key, path, startup) = {
             let mut state = self.state.lock().map_err(|_| MediaError::Unavailable)?;
             let viewer = authorized(&mut state, actor, id)?;
             if !matches!(viewer.phase, ViewerPhase::Granted) {
@@ -480,14 +545,25 @@ impl MediaService {
             }
             viewer.phase = ViewerPhase::Negotiating;
             let key = viewer.key;
-            let publisher = state
-                .publishers
-                .get(&key)
-                .filter(|publisher| !publisher.task.is_finished())
-                .ok_or(MediaError::Unavailable)?;
-            (key, publisher.path.clone())
+            let publisher = state.publishers.get(&key).ok_or(MediaError::Unavailable)?;
+            (key, publisher.path.clone(), publisher.startup.clone())
         };
-        let result = self.negotiate(key, &path, sdp).await;
+        let result = async {
+            if let Some(mut status) = startup {
+                let progress = tokio::time::timeout(
+                    MAIN_STARTUP,
+                    status.wait_for(|state| *state != MainStartup::Opening),
+                )
+                .await
+                .map_err(|_| MediaError::Unavailable)?
+                .map_err(|_| MediaError::Unavailable)?;
+                if *progress == MainStartup::Capacity {
+                    return Err(MediaError::Capacity);
+                }
+            }
+            self.negotiate(key, &path, sdp).await
+        }
+        .await;
         match result {
             Ok((route, answer)) => {
                 if let Err(error) = self.check_camera_scope(key.scope).await {
@@ -515,9 +591,7 @@ impl MediaService {
                 }
             }
             Err(error) => {
-                if let Ok(mut state) = self.state.lock() {
-                    state.viewers.remove(&id);
-                }
+                let _ = self.close(actor, id).await;
                 Err(error)
             }
         }
@@ -531,13 +605,19 @@ impl MediaService {
     ) -> Result<(String, MediaAnswer), MediaError> {
         self.check_camera_scope(key.scope).await?;
         let url = format!("http://{}/{path}/whep", self.webrtc);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
         for attempt in 0..12 {
             if !self.camera_frame(key).is_some_and(|frame| usable(&frame)) {
+                return Err(MediaError::Unavailable);
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
                 return Err(MediaError::Unavailable);
             }
             let mut response = self
                 .http
                 .post(&url)
+                .timeout(remaining)
                 .basic_auth("stillwatch-reader", Some(&self.read_secret))
                 .header("Content-Type", "application/sdp")
                 .body(sdp.clone())
@@ -629,17 +709,29 @@ impl MediaService {
     }
 
     pub async fn close(&self, actor: Uuid, id: Uuid) -> Result<(), MediaError> {
-        let viewer = {
+        let (viewer, unused) = {
             let mut state = self.state.lock().map_err(|_| MediaError::Unavailable)?;
-            authorized(&mut state, actor, id)?;
-            state.viewers.remove(&id)
+            let key = authorized(&mut state, actor, id)?.key;
+            let viewer = state.viewers.remove(&id);
+            let unused = if state.viewers.values().any(|viewer| viewer.key == key) {
+                None
+            } else {
+                state.publishers.remove(&key)
+            };
+            (viewer, unused)
         };
+        if let Some(publisher) = &unused {
+            publisher.stop.send_replace(true);
+        }
         if let Some(Viewer {
             phase: ViewerPhase::Started { route, .. },
             ..
         }) = viewer
         {
             self.delete_route(&route).await;
+        }
+        if let Some(publisher) = unused {
+            let _ = publisher.task.await;
         }
         Ok(())
     }
@@ -704,6 +796,10 @@ impl MediaService {
     }
 
     async fn check_camera_scope(&self, scope: SourceScope) -> Result<(), MediaError> {
+        self.camera_for_scope(scope).await.map(|_| ())
+    }
+
+    async fn camera_for_scope(&self, scope: SourceScope) -> Result<CameraRecord, MediaError> {
         let current = self
             .store
             .camera(scope.camera_id)
@@ -718,7 +814,7 @@ impl MediaService {
         {
             return Err(MediaError::Unavailable);
         }
-        Ok(())
+        Ok(current)
     }
 
     fn camera_frame(&self, key: StreamKey) -> Option<Arc<CameraFrame>> {
@@ -742,7 +838,13 @@ impl MediaService {
                 let failed = state
                     .publishers
                     .iter()
-                    .filter(|(_, publisher)| publisher.task.is_finished())
+                    .filter(|(_, publisher)| {
+                        publisher.task.is_finished()
+                            && publisher
+                                .startup
+                                .as_ref()
+                                .is_none_or(|status| *status.borrow() == MainStartup::Ready)
+                    })
                     .map(|(&key, _)| key)
                     .collect::<HashSet<_>>();
                 let scopes = state
@@ -799,7 +901,7 @@ impl MediaService {
                 .collect();
             let in_use: HashSet<_> = state.viewers.values().map(|viewer| viewer.key).collect();
             state.publishers.retain(|key, publisher| {
-                let keep = in_use.contains(key) && !publisher.task.is_finished();
+                let keep = in_use.contains(key);
                 if !keep {
                     publisher.stop.send_replace(true);
                 }
@@ -831,13 +933,121 @@ impl MediaService {
         .await;
     }
 
-    async fn publish(&self, key: StreamKey, path: &str, mut stop: watch::Receiver<bool>) {
-        let Some(frame) = self.camera_frame(key) else {
+    async fn publish_main(
+        &self,
+        key: StreamKey,
+        path: &str,
+        config: CameraConfig,
+        startup: watch::Sender<MainStartup>,
+        mut stop: watch::Receiver<bool>,
+    ) {
+        let process = tokio::select! {
+            biased;
+            _ = stop.wait_for(|stop| *stop) => return,
+            process = self.cameras.open_main_stream(&config) => process,
+        };
+        let Ok(mut process) = process else { return };
+        let (latest, frames) = watch::channel(None);
+        // Keep the global reservation until the encoder drops its last frame.
+        let mut allocation = None;
+        tokio::join!(
+            self.read_main_frames(
+                key,
+                !config.privacy_masks.is_empty(),
+                &mut process,
+                &mut allocation,
+                startup,
+                latest
+            ),
+            self.publish(key, path, Some(frames), stop),
+        );
+        let _ = process.stop().await;
+    }
+
+    async fn read_main_frames(
+        &self,
+        key: StreamKey,
+        masked: bool,
+        process: &mut CaptureProcess,
+        allocation: &mut Option<(OwnedSemaphorePermit, FrameBudget)>,
+        startup: watch::Sender<MainStartup>,
+        latest: watch::Sender<Option<(Instant, Arc<Frame>)>>,
+    ) {
+        let mut clock = FrameClock::default();
+        let mut content = RepeatedFrames::default();
+        loop {
+            let read = tokio::select! {
+                biased;
+                _ = latest.closed() => return,
+                read = process.next_with(FRAME_TIMEOUT, |length| {
+                    if allocation.is_none() {
+                        let bytes = length * 3;
+                        let Some(reserve) = self.detail_frames.try_reserve(bytes) else {
+                            startup.send_replace(MainStartup::Capacity);
+                            return None;
+                        };
+                        *allocation = Some((reserve, FrameBudget::new(bytes).ok()?));
+                    }
+                    allocation.as_ref()?.1.try_reserve(length)
+                }) => read,
+            };
+            let Ok(CaptureRead::Frame(frame)) = read else {
+                return;
+            };
+            let now = Instant::now();
+            let (reset, _, advances) = clock.observe(frame.header, now);
+            if reset {
+                // A different geometry or a discontinuous clock requires a new publisher.
+                return;
+            }
+            if !advances {
+                continue;
+            }
+            if masked
+                && self.camera_frame(key).is_none_or(|analysis| {
+                    !same_aspect_ratio(dimensions(analysis.frame.header), dimensions(frame.header))
+                })
+            {
+                return;
+            }
+            content.observe(&frame.rgb, scene::measure(&frame).fingerprint, now);
+            if content.holding {
+                return;
+            }
+            latest.send_replace(Some((now, Arc::new(frame))));
+            startup.send_if_modified(|state| {
+                if *state == MainStartup::Opening {
+                    *state = MainStartup::Ready;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
+    async fn publish(
+        &self,
+        key: StreamKey,
+        path: &str,
+        mut main: Option<MainFrames>,
+        mut stop: watch::Receiver<bool>,
+    ) {
+        let header = if let Some(incoming) = &mut main {
+            tokio::select! {
+                biased;
+                _ = stop.wait_for(|stop| *stop) => return,
+                first = incoming.wait_for(Option::is_some) => {
+                    first.ok().and_then(|value| value.as_ref().map(|(_, frame)| frame.header))
+                }
+            }
+        } else {
+            self.camera_frame(key).map(|frame| frame.frame.header)
+        };
+        let Some(header) = header else {
             return;
         };
-        let header = frame.frame.header;
         let dimensions = format!("{}x{}", header.width, header.height);
-        drop(frame);
         let (fps, scale, bitrate) = match key.profile {
             StreamProfile::Preview => (
                 5,
@@ -894,7 +1104,8 @@ impl MediaService {
             return;
         };
         if let Some(mut stdin) = child.stdin().take() {
-            self.write_frames(key, fps, &mut stdin, &mut stop).await;
+            self.write_frames(key, header, fps, main, &mut stdin, &mut stop)
+                .await;
         }
         let _ = reap(&mut *child).await;
     }
@@ -902,7 +1113,9 @@ impl MediaService {
     async fn write_frames(
         &self,
         key: StreamKey,
+        header: FrameHeader,
         fps: u64,
+        main: Option<MainFrames>,
         stdin: &mut ChildStdin,
         stop: &mut watch::Receiver<bool>,
     ) {
@@ -910,18 +1123,35 @@ impl MediaService {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                biased;
                 _ = stop.wait_for(|stop| *stop) => return,
                 _ = tick.tick() => {},
             }
-            let Some(frame) = self.camera_frame(key).filter(|frame| usable(frame)) else {
+            let frame = match &main {
+                Some(incoming) if incoming.has_changed().is_ok() => incoming
+                    .borrow()
+                    .as_ref()
+                    .filter(|(received, _)| received.elapsed() <= STALE)
+                    .map(|(_, frame)| VideoFrame::Main(frame.clone())),
+                Some(_) => None,
+                None => self
+                    .camera_frame(key)
+                    .filter(|frame| usable(frame))
+                    .map(VideoFrame::Analysis),
+            };
+            let Some(frame) = frame else {
                 return;
             };
-            if !matches!(
-                tokio::time::timeout(Duration::from_secs(1), stdin.write_all(&frame.frame.rgb))
-                    .await,
-                Ok(Ok(()))
-            ) {
+            let frame = frame.frame();
+            if dimensions(frame.header) != dimensions(header) {
                 return;
+            }
+            tokio::select! {
+                biased;
+                _ = stop.wait_for(|stop| *stop) => return,
+                result = tokio::time::timeout(Duration::from_secs(1), stdin.write_all(&frame.rgb)) => {
+                    if !matches!(result, Ok(Ok(()))) { return; }
+                }
             }
         }
     }
@@ -1015,6 +1245,13 @@ fn authorized(state: &mut State, actor: Uuid, id: Uuid) -> Result<&mut Viewer, M
 
 fn usable(frame: &CameraFrame) -> bool {
     frame.usable_for_analysis && frame.captured_at.elapsed() <= STALE
+}
+
+fn dimensions(header: FrameHeader) -> Dimensions {
+    Dimensions {
+        width: header.width,
+        height: header.height,
+    }
 }
 
 async fn delete_upstream(http: &reqwest::Client, url: String, secret: &str) {

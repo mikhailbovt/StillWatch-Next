@@ -117,6 +117,13 @@
               ],
               "format": "uuid"
             },
+            "main_stream_path": {
+              "description": "Optional detail stream on the same camera. Both paths share the camera's masks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "peer": {
               "type": "string"
             },

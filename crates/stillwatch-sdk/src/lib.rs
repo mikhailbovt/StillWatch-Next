@@ -27,6 +27,7 @@ use sw_protocol::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const CAMERA_SETUP_TIMEOUT: Duration = Duration::from_secs(22);
+const WHEP_OFFER_TIMEOUT: Duration = Duration::from_secs(28);
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 
 fn health_events_path(before: Option<Counter>, limit: u16, active_only: bool) -> String {
@@ -598,6 +599,11 @@ impl Client {
             || method == Method::PATCH && path.starts_with("/api/v2/cameras/")
         {
             CAMERA_SETUP_TIMEOUT
+        } else if method == Method::POST
+            && path.starts_with("/api/v2/stream-sessions/")
+            && path.ends_with("/whep")
+        {
+            WHEP_OFFER_TIMEOUT
         } else {
             TIMEOUT
         };

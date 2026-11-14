@@ -1,6 +1,7 @@
 // Generated from sw-protocol schemas. Regenerate with npm run generate.
 
 export interface Bootstrap {
+  camera_main_stream?: boolean;
   camera_priority?: boolean;
   camera_probe_capacity?: boolean;
   camera_sampling?: boolean;

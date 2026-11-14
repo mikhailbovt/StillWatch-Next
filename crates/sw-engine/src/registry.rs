@@ -9,9 +9,10 @@ use std::{
 
 use sw_domain::{SourceScope, UnixMillis, Visibility};
 use sw_protocol::{
-    Camera, CameraPriority, CameraRuntime, CameraSampling, CameraSource, CaptureState,
-    ControlledFireRegion, Counter, Dimensions, MaskRect, OnvifDevice, OnvifProfile,
-    OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, SceneReview, SourceProbe,
+    Camera, CameraConfig, CameraPriority, CameraRuntime, CameraSampling, CameraSource,
+    CaptureState, ControlledFireRegion, Counter, Dimensions, MainStreamProbe, MaskRect,
+    OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, SceneReview,
+    SourceProbe,
     worker::{CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality},
 };
 use sw_storage::{
@@ -31,7 +32,7 @@ use crate::{
     scene,
 };
 
-const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
+pub(crate) const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
 const CONTENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(650);
 const CONTENT_HOLD_AFTER: Duration = Duration::from_secs(6);
 
@@ -45,6 +46,8 @@ pub enum RegistryError {
     WorkerUnavailable,
     #[error("capture resources are temporarily exhausted")]
     Busy,
+    #[error("RTSP streams must share the same aspect ratio when using privacy masks")]
+    StreamGeometry,
     #[error("replay upload exceeds the configured storage budget")]
     UploadQuota,
     #[error("replay upload storage is unavailable")]
@@ -423,8 +426,32 @@ impl CameraRegistry {
         source: &CameraSource,
         masks: Vec<MaskRect>,
     ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
+        let Some(main) = source.main_stream() else {
+            let request = self.request(source, masks).await?;
+            return self.probe_request(request, source.is_live()).await;
+        };
+        let masked = !masks.is_empty();
+        let _slots = self
+            .probes
+            .try_acquire_many(2)
+            .map_err(|_| RegistryError::Busy)?;
+        let main = self.request(&main, masks.clone()).await?;
         let request = self.request(source, masks).await?;
-        self.probe_request(request, source.is_live()).await
+        let (analysis, detail) = tokio::join!(
+            self.inspect_source(request, true, true),
+            self.inspect_source(main, true, false),
+        );
+        let (mut analysis, sample) = analysis?;
+        let (detail, _) = detail?;
+        if masked && !same_aspect_ratio(analysis.dimensions, detail.dimensions) {
+            return Err(RegistryError::StreamGeometry);
+        }
+        analysis.main_stream = Some(MainStreamProbe {
+            dimensions: detail.dimensions,
+            codec: detail.codec,
+            native_pts: detail.native_pts,
+        });
+        Ok((analysis, sample))
     }
 
     pub(crate) async fn probe_request(
@@ -433,12 +460,27 @@ impl CameraRegistry {
         live: bool,
     ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
+        self.inspect_source(request, live, true).await
+    }
+
+    async fn inspect_source(
+        &self,
+        request: CaptureRequest,
+        live: bool,
+        measure_scene: bool,
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let worker = self
             .worker
             .as_ref()
             .ok_or(RegistryError::WorkerUnavailable)?;
         let mut process = worker.capture(&request).await?;
-        let result = process.next(&self.budget, FRAME_TIMEOUT).await;
+        let result = process
+            .next_with(FRAME_TIMEOUT, |length| {
+                measure_scene
+                    .then(|| self.budget.try_reserve(length))
+                    .flatten()
+            })
+            .await;
         let codec = process.codec().map(|codec| codec.to_string());
         process.stop().await?;
         let (header, sample) = match result? {
@@ -457,9 +499,23 @@ impl CameraRegistry {
                 native_pts: header.pts_quality == PtsQuality::Native,
                 codec,
                 capture_capacity: None,
+                main_stream: None,
             },
             sample,
         ))
+    }
+
+    pub(crate) async fn open_main_stream(
+        &self,
+        config: &CameraConfig,
+    ) -> Result<CaptureProcess, RegistryError> {
+        let main = config.source.main_stream().ok_or(RegistryError::Invalid)?;
+        let request = self.request(&main, config.privacy_masks.clone()).await?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RegistryError::WorkerUnavailable)?;
+        Ok(worker.capture(&request).await?)
     }
 
     async fn request(
@@ -491,6 +547,7 @@ impl CameraRegistry {
                 secure,
                 transport,
                 credential_ref,
+                ..
             } => {
                 let worker = self
                     .worker
@@ -887,6 +944,10 @@ impl CameraRegistry {
     }
 }
 
+pub(crate) fn same_aspect_ratio(a: Dimensions, b: Dimensions) -> bool {
+    a.width * b.height == b.width * a.height
+}
+
 struct Task {
     revision: u64,
     inference_lane: usize,
@@ -909,12 +970,12 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
 }
 
 #[derive(Default)]
-struct RepeatedFrames {
+pub(crate) struct RepeatedFrames {
     hasher: RandomState,
     fingerprint: Option<[u8; scene::FINGERPRINT_BYTES]>,
     last_sample: Option<Instant>,
     repeat: Option<(u64, Instant)>,
-    holding: bool,
+    pub(crate) holding: bool,
 }
 
 impl RepeatedFrames {
@@ -925,7 +986,12 @@ impl RepeatedFrames {
         self.holding = false;
     }
 
-    fn observe(&mut self, rgb: &[u8], fingerprint: [u8; scene::FINGERPRINT_BYTES], now: Instant) {
+    pub(crate) fn observe(
+        &mut self,
+        rgb: &[u8],
+        fingerprint: [u8; scene::FINGERPRINT_BYTES],
+        now: Instant,
+    ) {
         if self.fingerprint.replace(fingerprint) != Some(fingerprint) {
             self.last_sample = Some(now);
             self.repeat = None;
@@ -952,14 +1018,14 @@ impl RepeatedFrames {
 }
 
 #[derive(Default)]
-struct FrameClock {
+pub(crate) struct FrameClock {
     geometry: Option<(u32, u32)>,
     last_pts: Option<i64>,
     hold_started: Option<Instant>,
 }
 
 impl FrameClock {
-    fn observe(&mut self, header: FrameHeader, now: Instant) -> (bool, bool, bool) {
+    pub(crate) fn observe(&mut self, header: FrameHeader, now: Instant) -> (bool, bool, bool) {
         let geometry = (header.width, header.height);
         let changed = self
             .geometry

@@ -195,6 +195,10 @@ impl FrameBudget {
         }
         Ok(Self(Arc::new(Semaphore::new(bytes as usize))))
     }
+
+    pub(crate) fn try_reserve(&self, bytes: u32) -> Option<OwnedSemaphorePermit> {
+        self.0.clone().try_acquire_many_owned(bytes).ok()
+    }
 }
 
 pub struct Frame {
@@ -234,17 +238,29 @@ impl CaptureProcess {
         budget: &FrameBudget,
         deadline: Duration,
     ) -> Result<CaptureRead, WorkerError> {
+        self.next_with(deadline, |length| budget.try_reserve(length))
+            .await
+    }
+
+    pub(crate) async fn next_with(
+        &mut self,
+        deadline: Duration,
+        reserve: impl FnOnce(u32) -> Option<OwnedSemaphorePermit>,
+    ) -> Result<CaptureRead, WorkerError> {
         let deadline = if self.schannel && self.last_frame == 0 {
             deadline.max(WINDOWS_RTSPS_OPEN_TIMEOUT + Duration::from_secs(1))
         } else {
             deadline
         };
-        tokio::time::timeout(deadline, self.receive(budget))
+        tokio::time::timeout(deadline, self.receive(reserve))
             .await
             .map_err(|_| WorkerError::Deadline)?
     }
 
-    async fn receive(&mut self, budget: &FrameBudget) -> Result<CaptureRead, WorkerError> {
+    async fn receive(
+        &mut self,
+        reserve: impl FnOnce(u32) -> Option<OwnedSemaphorePermit>,
+    ) -> Result<CaptureRead, WorkerError> {
         let mut bytes = [0u8; HEADER_LEN];
         if self.stdout.read(&mut bytes[..1]).await? == 0 {
             let child = self.child.as_mut().ok_or(WorkerError::Exit)?;
@@ -273,7 +289,7 @@ impl CaptureProcess {
         }
         self.last_frame = header.frame;
         let length = header.byte_length()?;
-        if let Ok(permit) = budget.0.clone().try_acquire_many_owned(length) {
+        if let Some(permit) = reserve(length) {
             let mut rgb = vec![0; length as usize];
             self.stdout.read_exact(&mut rgb).await?;
             Ok(CaptureRead::Frame(Frame {

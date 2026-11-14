@@ -30,7 +30,7 @@ from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSession
 
 from lan_core import Client as TlsClient, encode_uuid, sign
 from replay_core import capture_children, run_core, until, workers_alive
-from rtsp_core import launch
+from rtsp_core import check_port, launch
 from sdk_core import issue
 
 
@@ -58,10 +58,11 @@ def request(lan, token, method, path, data=None, content_type=None):
         return response.status, dict(response.headers), response.read(512 * 1024)
 
 
-async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_right=False):
+async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_right=False,
+                  profile="preview", dimensions=(320, 240), offer_status=201):
     token = session["access_token"]
     def issue():
-        status, grant = lan.request("POST", "/api/v2/stream-sessions", {"camera_id": camera, "profile": "preview"}, token)
+        status, grant = lan.request("POST", "/api/v2/stream-sessions", {"camera_id": camera, "profile": profile}, token)
         assert status in (201, 503), (status, grant)
         return grant if status == 201 else None
     grant = await asyncio.to_thread(until, issue, 8)
@@ -94,7 +95,11 @@ async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_righ
             assert {candidate.type for candidate in ice.local_candidates} == {"relay"}
         status, headers, body = await asyncio.to_thread(
             request, lan, token, "POST", grant["whep_path"], peer.localDescription.sdp.encode("utf-8"), "application/sdp")
-        assert status == 201, (status, body.decode(errors="replace"))
+        assert status == offer_status, (status, body.decode(errors="replace"))
+        if status != 201:
+            assert json.loads(body)["title"] == "Stream capacity reached"
+            await peer.close()
+            return None
         assert next(value for key, value in headers.items() if key.lower() == "location") == grant["whep_path"]
         assert b"H264" in body
         await peer.setRemoteDescription(RTCSessionDescription(type="answer", sdp=body.decode("utf-8")))
@@ -111,8 +116,9 @@ async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_righ
         rgb = frame.to_ndarray(format="rgb24")
         if turn_url:
             assert ice._nominated[1].local_candidate.type == "relay"
-        assert frame.width == 320 and frame.height == 240, (frame.width, frame.height)
-        masked, visible = (rgb[:, 190:], rgb[:, :135]) if mask_right else (rgb[:, :135], rgb[:, 190:])
+        assert (frame.width, frame.height) == dimensions, (frame.width, frame.height)
+        left, right = rgb[:, :frame.width * 42 // 100], rgb[:, frame.width * 59 // 100:]
+        masked, visible = (right, left) if mask_right else (left, right)
         assert masked.max() < 25, "Masked region contains source pixels"
         assert visible.max() > 100, "Unmasked region is empty"
         return peer, track, grant
@@ -158,8 +164,8 @@ async def viewers(lan, session, camera, local, turn_url, turn_certificate):
         await b[0].close()
 
 
-async def mask_change(lan, session, camera, local, turn_url, turn_certificate):
-    previous, track, grant = await connect(lan, session, camera, turn_url, turn_certificate)
+async def mask_change(lan, session, camera, local, turn_url, turn_certificate, **playback):
+    previous, track, grant = await connect(lan, session, camera, turn_url, turn_certificate, **playback)
     try:
         old = local.camera(camera)
         status, updated = await asyncio.to_thread(local.call, "PATCH", f"/api/v2/cameras/{camera}", {
@@ -180,7 +186,7 @@ async def mask_change(lan, session, camera, local, turn_url, turn_certificate):
                 raise
         else:
             raise AssertionError("Previous stream continued after the mask changed")
-        replacement, _, current = await connect(lan, session, camera, turn_url, turn_certificate, mask_right=True)
+        replacement, _, current = await connect(lan, session, camera, turn_url, turn_certificate, mask_right=True, **playback)
         try:
             assert current["scene_revision"] == updated["scene_revision"]
             assert current["id"] != grant["id"]
@@ -190,6 +196,75 @@ async def mask_change(lan, session, camera, local, turn_url, turn_certificate):
             await replacement.close()
     finally:
         await previous.close()
+
+
+def dual_sources(stack, args, root, sources, encode):
+    port = free_port("127.0.0.1")
+    peer = f"127.0.0.1:{port}"
+    router_file = root / "camera-router.json"
+    router_file.write_text(json.dumps({
+        "rtspAddress": peer, "rtspTransports": ["tcp"], "logLevel": "error",
+        "rtmp": False, "hls": False, "webrtc": False, "srt": False, "moq": False,
+        "paths": {"analysis": {}, "detail": {}, "wrong_geometry": {}},
+    }), encoding="utf-8")
+    stack.enter_context(launch([str(args.mediamtx), str(router_file)], root / "camera-router.log"))
+    until(lambda: check_port(port))
+    publishers = {}
+    for path, size in {"analysis": "320x240", "detail": "640x480", "wrong_geometry": "640x360"}.items():
+        clip = sources / f"{path}.mp4"
+        subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        f"testsrc2=size={size}:rate=12", "-t", "8", *encode, "-g", "12", "-bf", "0",
+                        str(clip)], check=True)
+        publishers[path] = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
+                            "-i", str(clip), "-c:v", "copy", "-f", "rtsp", "-rtsp_transport", "tcp",
+                            f"rtsp://{peer}/{path}"]
+    for path in ("analysis", "wrong_geometry"):
+        stack.enter_context(launch(publishers[path], root / f"{path}.log"))
+    return {"type": "rtsp", "peer": peer, "stream_path": "/analysis", "main_stream_path": "/detail",
+            "secure": False, "transport": "tcp", "credential_ref": None}, publishers["detail"]
+
+
+async def distinct_detail(lan, session, camera_id, local, core, turn_url, turn_certificate, publisher, check_inference):
+    token = session["access_token"]
+    children = await asyncio.to_thread(capture_children, core.pid)
+    assert local.camera(camera_id)["dimensions"] == {"width": 320, "height": 240}
+
+    for stop_source in (False, True):
+        a = await connect(lan, session, camera_id, turn_url, turn_certificate, profile="detail", dimensions=(640, 480))
+        try:
+            detail_children = await asyncio.to_thread(capture_children, core.pid)
+            assert len(detail_children - children) == (1 if os.name == "nt" else 2), (children, detail_children)
+            b = await connect(lan, session, camera_id, turn_url, turn_certificate, profile="detail", dimensions=(640, 480))
+            try:
+                assert await asyncio.to_thread(capture_children, core.pid) == detail_children
+                status, _, _ = await asyncio.to_thread(request, lan, token, "DELETE", a[2]["whep_path"])
+                assert status == 204
+                await asyncio.wait_for(b[1].recv(), 3)
+                analysis = local.camera(camera_id)
+
+                def same_analysis_keeps_capturing():
+                    current = local.camera(camera_id)
+                    runtime = current["runtime"]
+                    if (runtime["state"] != "streaming" or current["source_epoch"] != analysis["source_epoch"]
+                            or int(runtime["frame"]) <= int(analysis["runtime"]["frame"])):
+                        return False
+                    return not check_inference or all(
+                        int(runtime["analysis"][key]) > int(analysis["runtime"]["analysis"][key])
+                        for key in ("pose_frames", "fire_frames")
+                    )
+
+                if stop_source:
+                    publisher.terminate()
+                    await asyncio.to_thread(publisher.wait, 6)
+                else:
+                    status, _, _ = await asyncio.to_thread(request, lan, token, "DELETE", b[2]["whep_path"])
+                    assert status == 204
+                await asyncio.to_thread(until, lambda: capture_children(core.pid) == children, 12)
+                await asyncio.to_thread(until, same_analysis_keeps_capturing, 6)
+            finally:
+                await b[0].close()
+        finally:
+            await a[0].close()
 
 
 @contextlib.contextmanager
@@ -263,9 +338,11 @@ def run(args):
         encode = ["-c:v", "libx264", "-threads", "1", "-preset", "ultrafast"]
         if args.input_codec == "hevc":
             encode = ["-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "pools=none:frame-threads=1:log-level=error"]
-        subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-                        "testsrc2=size=320x240:rate=12", "-t", "60", *encode,
-                        str(sources / "fixture.mp4")], check=True)
+        source = {"type": "replay", "file": "fixture.mp4", "pace": True}
+        if not args.dual_rtsp:
+            subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "testsrc2=size=320x240:rate=12", "-t", "60", *encode,
+                            str(sources / "fixture.mp4")], check=True)
         lan_port = free_port(args.address)
         ice_port = free_port(args.address, socket.SOCK_DGRAM)
         data = root / "data"
@@ -275,6 +352,10 @@ def run(args):
                 turn_server(args.turnserver, args.address, root, args.turn_tls_openssl),
             )
             flags = ["--lan-listen", f"{args.address}:{lan_port}"]
+            if args.dual_rtsp:
+                source, publish_detail = dual_sources(stack, args, root, sources, encode)
+                flags.extend(["--rtsp-peer", source["peer"]])
+                detail = stack.enter_context(launch(publish_detail, root / "detail.log"))
             if args.nginx:
                 from proxy_core import proxy_profile
 
@@ -287,6 +368,12 @@ def run(args):
                 "--media-encoder-sha256", sha(encoder), "--media-ice-udp", f"{args.address}:{ice_port}",
                 *turn_flags,
             ]
+            if args.detail_budget_test:
+                media_flags.extend(["--media-detail-frame-bytes", str(640 * 480 * 3 * 3 - 1)])
+            if args.model_pack:
+                media_flags.extend(["--model-pack", str(args.model_pack),
+                                    "--model-manifest-sha256", sha(args.model_pack / "models.lock.json"),
+                                    "--ort-library", str(args.ort_runtime), "--ort-library-sha256", sha(args.ort_runtime)])
             process, local = stack.enter_context(run_core(
                 args.core, args.worker, data, sources, root / "core.log", *media_flags,
             ))
@@ -295,9 +382,25 @@ def run(args):
             assert config["authInternalUsers"][1]["pass"].startswith("sha256:")
             if turn_url:
                 assert "password" not in config["webrtcICEServers2"][0]
+            masks = [{"left": 0, "top": 0, "right": 5000, "bottom": 10000}]
+            if args.dual_rtsp:
+                def probe_inputs():
+                    status, report = local.call("POST", "/api/v2/source-probes", {"source": source, "privacy_masks": masks})
+                    return report if status == 200 else None
+
+                report = until(probe_inputs, 12)
+                assert report["dimensions"] == {"width": 320, "height": 240}
+                assert report["main_stream"]["dimensions"] == {"width": 640, "height": 480}, report
+                assert report["main_stream"]["codec"] == args.input_codec, report
+                for path in ("rtsp://127.0.0.1:1/detail", source["stream_path"], "/wrong_geometry"):
+                    status, problem = local.call("POST", "/api/v2/source-probes", {
+                        "source": source | {"main_stream_path": path}, "privacy_masks": masks,
+                    })
+                    assert status == 400, (status, problem)
+                    if path == "/wrong_geometry":
+                        assert "aspect ratio" in problem["detail"], problem
             status, camera = local.call("POST", "/api/v2/cameras", {
-                "name": "Mask regression", "enabled": True, "source": {"type": "replay", "file": "fixture.mp4", "pace": True},
-                "privacy_masks": [{"left": 0, "top": 0, "right": 5000, "bottom": 10000}],
+                "name": "Mask regression", "enabled": True, "source": source, "privacy_masks": masks,
             }, key=uuid.uuid4().hex)
             assert status == 201, (status, camera)
             camera_id = camera["id"]
@@ -315,14 +418,33 @@ def run(args):
                 "public_key": public, "signature": sign(args.node, key, proof),
             })
             assert status == 201
-            until(lambda: local.camera(camera_id)["runtime"]["state"] == "replaying")
-            if args.mask_change:
-                asyncio.run(mask_change(lan, session, camera_id, local, turn_url, turn_certificate))
+            runtime_state = "streaming" if args.dual_rtsp else "replaying"
+            until(lambda: local.camera(camera_id)["runtime"]["state"] == runtime_state)
+            if args.detail_budget_test:
+                asyncio.run(connect(lan, session, camera_id, turn_url, turn_certificate, profile="detail", offer_status=429))
+            if args.mask_change and not args.detail_budget_test:
+                playback = {"profile": "detail", "dimensions": (640, 480)} if args.dual_rtsp else {}
+                asyncio.run(mask_change(lan, session, camera_id, local, turn_url, turn_certificate, **playback))
                 status, _ = local.call("PATCH", f"/api/v2/cameras/{camera_id}", {
-                    "privacy_masks": [{"left": 0, "top": 0, "right": 5000, "bottom": 10000}],
+                    "privacy_masks": masks,
                 }, key=uuid.uuid4().hex, revision=local.camera(camera_id)["revision"])
                 assert status == 200
-                until(lambda: local.camera(camera_id)["runtime"]["state"] == "replaying")
+                until(lambda: local.camera(camera_id)["runtime"]["state"] == runtime_state)
+            if args.dual_rtsp and not args.detail_budget_test:
+                if args.model_pack:
+                    until(lambda: local.camera(camera_id)["runtime"]["analysis"]["state"] == "ready", 20)
+                asyncio.run(distinct_detail(lan, session, camera_id, local, process, turn_url, turn_certificate, detail,
+                                            args.model_pack is not None))
+                stack.enter_context(launch(publish_detail, root / "detail-restart.log"))
+                until(probe_inputs, 12)
+                async def restart_detail():
+                    peer, _, grant = await connect(lan, session, camera_id, turn_url, turn_certificate,
+                                                   profile="detail", dimensions=(640, 480))
+                    try:
+                        assert request(lan, session["access_token"], "DELETE", grant["whep_path"])[0] == 204
+                    finally:
+                        await peer.close()
+                asyncio.run(restart_detail())
             asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
             if args.crash_restart:
                 old_epoch = int(local.camera(camera_id)["source_epoch"])
@@ -346,13 +468,16 @@ def run(args):
                 assert config_file.is_file()
                 with run_core(args.core, args.worker, data, sources, root / "restart.log", *media_flags) as (_, restored):
                     until(lambda: restored.call("GET", "/api/v2/status")[1]["media"]["router_ready"])
-                    until(lambda: restored.camera(camera_id)["runtime"]["state"] == "replaying")
+                    until(lambda: restored.camera(camera_id)["runtime"]["state"] == runtime_state)
                     assert int(restored.camera(camera_id)["source_epoch"]) > old_epoch
                     assert not config_file.exists()
         print(json.dumps({"native_mediamtx": True, "input_codec": args.input_codec, "whep_h264": True, "viewers": 2,
                           "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": True,
                           "router_config_has_no_cleartext_credentials": True, "ignores_inherited_router_settings": True,
-                          "mask_change_retires_previous_stream": args.mask_change,
+                          "mask_change_retires_previous_stream": args.mask_change and not args.detail_budget_test,
+                          "dual_rtsp_shared_detail_and_independent_analysis": args.dual_rtsp and not args.detail_budget_test,
+                          "actual_inference_continues": bool(args.model_pack) and args.dual_rtsp and not args.detail_budget_test,
+                          "detail_frame_budget_rejects_without_blocking_preview": args.detail_budget_test,
                           "viewer_turn_over_tcp": bool(turn_url), "turn_tls": bool(turn_certificate),
                           "https_proxy": bool(args.nginx), "foreground_crash_restart": args.crash_restart}))
 
@@ -364,6 +489,10 @@ if __name__ == "__main__":
     parser.add_argument("--address", required=True, help="Private IPv4 address assigned to an active LAN interface")
     parser.add_argument("--input-codec", choices=("h264", "hevc"), default="h264")
     parser.add_argument("--mask-change", action="store_true")
+    parser.add_argument("--dual-rtsp", action="store_true")
+    parser.add_argument("--detail-budget-test", action="store_true")
+    parser.add_argument("--model-pack", type=lambda path: Path(path).resolve(strict=True))
+    parser.add_argument("--ort-runtime", type=lambda path: Path(path).resolve(strict=True))
     parser.add_argument("--encoder", type=lambda path: Path(path).resolve(strict=True),
                         help="Use a separately built production media encoder")
     parser.add_argument("--turnserver", type=lambda path: Path(path).resolve(strict=True),
@@ -378,4 +507,8 @@ if __name__ == "__main__":
         parser.error("--turn-tls-openssl requires --turnserver")
     if args.crash_restart and sys.platform != "linux":
         parser.error("--crash-restart requires Linux")
+    if args.detail_budget_test and not args.dual_rtsp:
+        parser.error("--detail-budget-test requires --dual-rtsp")
+    if bool(args.model_pack) != bool(args.ort_runtime):
+        parser.error("--model-pack and --ort-runtime must be used together")
     run(args)

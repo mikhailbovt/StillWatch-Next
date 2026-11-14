@@ -189,6 +189,9 @@ impl From<sw_engine::RegistryError> for ApiError {
                 "Capture resources busy",
                 None,
             ),
+            RegistryError::StreamGeometry => Self::invalid(
+                "RTSP streams must share the same aspect ratio when using privacy masks",
+            ),
             RegistryError::UploadQuota => Self::new(
                 StatusCode::INSUFFICIENT_STORAGE,
                 ProblemCode::CapacityExceeded,

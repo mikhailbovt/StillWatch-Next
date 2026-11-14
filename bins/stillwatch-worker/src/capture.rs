@@ -112,6 +112,7 @@ fn open(source: CaptureSource) -> Result<(Decoder, bool)> {
             let public = sw_protocol::CameraSource::Rtsp {
                 peer,
                 stream_path: stream_path.clone(),
+                main_stream_path: None,
                 secure,
                 transport,
                 credential_ref: None,

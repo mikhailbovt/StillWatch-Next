@@ -324,6 +324,7 @@ void main() {
         'instance_id': _coreId,
         'version': {'major': 2, 'minor': 0},
         'camera_probe_capacity': true,
+        'camera_main_stream': true,
       });
       await tester.pumpWidget(
         MaterialApp(
@@ -344,6 +345,12 @@ void main() {
       await tester.enterText(fields.at(1), '127.0.0.1:8554');
       await tester.ensureVisible(fields.at(3));
       await tester.enterText(fields.at(3), '/camera');
+      final detail = find.widgetWithText(
+        TextField,
+        'RTSP live detail path (optional)',
+      );
+      await tester.ensureVisible(detail);
+      await tester.enterText(detail, '/detail');
       final enabled = find.text('Monitoring enabled');
       await tester.ensureVisible(enabled);
       await tester.tap(enabled);
@@ -384,9 +391,14 @@ void main() {
 
       core.cameraFits = true;
       await press('Save', find.textContaining('H264 · 640 × 360'));
+      expect(
+        find.textContaining('Live detail  HEVC · 1280 × 720'),
+        findsOneWidget,
+      );
       expect(core.cameraSaves, 0);
       await press('Save camera', find.text('Add camera'), gone: true);
       expect(core.cameraSaves, 1);
+      expect(core.cameraSavedSource?['main_stream_path'], '/detail');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.runAsync(core.close);
@@ -405,6 +417,7 @@ final class _CoreFixture {
   bool omitFromSnapshot = false;
   bool cameraFits = false;
   int cameraSaves = 0;
+  Map? cameraSavedSource;
   final writes = <({String path, String key, String revision, String body})>[];
 
   static Future<_CoreFixture> start() =>
@@ -451,11 +464,17 @@ final class _CoreFixture {
     if (request.method == 'POST' && path == '/api/v2/source-probes') {
       final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       expect(body['source']['stream_path'], '/camera');
+      expect(body['source']['main_stream_path'], '/detail');
       response.write(
         jsonEncode({
           'codec': 'h264',
           'native_pts': true,
           'dimensions': {'width': 640, 'height': 360},
+          'main_stream': {
+            'codec': 'hevc',
+            'native_pts': true,
+            'dimensions': {'width': 1280, 'height': 720},
+          },
           'capture_capacity': {
             'fits': cameraFits,
             'available_camera_slots': cameraFits ? 1 : 0,
@@ -468,6 +487,7 @@ final class _CoreFixture {
       final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       expect(body['enabled'], true);
       cameraSaves += 1;
+      cameraSavedSource = body['source'] as Map;
       response.statusCode = 201;
       response.write(jsonEncode({..._camera, 'config': body}));
     } else if (request.method == 'POST') {

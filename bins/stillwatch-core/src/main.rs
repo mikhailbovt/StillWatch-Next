@@ -135,6 +135,9 @@ struct MediaArgs {
     media_ice_udp: Option<SocketAddr>,
     #[arg(long, requires = "mediamtx")]
     media_ice_tcp: Option<SocketAddr>,
+    /// Separate Core RGB buffer budget for on-demand RTSP detail streams.
+    #[arg(long, requires = "mediamtx")]
+    media_detail_frame_bytes: Option<u32>,
     #[arg(long, requires_all = ["mediamtx", "media_turn_secret_file"])]
     media_turn: Option<String>,
     #[arg(long, requires = "media_turn")]
@@ -245,6 +248,7 @@ struct Settings {
     media_encoder_sha256: Option<String>,
     media_ice_udp: Option<SocketAddr>,
     media_ice_tcp: Option<SocketAddr>,
+    media_detail_frame_bytes: Option<u32>,
     media_turn: Option<String>,
     media_turn_secret_file: Option<PathBuf>,
     semantic_worker: Option<SocketAddr>,
@@ -304,6 +308,10 @@ impl Settings {
             .or(self.media_encoder_sha256);
         config.media.media_ice_udp = config.media.media_ice_udp.or(self.media_ice_udp);
         config.media.media_ice_tcp = config.media.media_ice_tcp.or(self.media_ice_tcp);
+        config.media.media_detail_frame_bytes = config
+            .media
+            .media_detail_frame_bytes
+            .or(self.media_detail_frame_bytes);
         config.media.media_turn = config.media.media_turn.take().or(self.media_turn);
         config.media.media_turn_secret_file = config
             .media
@@ -512,6 +520,10 @@ async fn serve(
             ice_udp,
             ice_tcp: config.media.media_ice_tcp,
             advertised_ip: address,
+            detail_frame_bytes: config
+                .media
+                .media_detail_frame_bytes
+                .unwrap_or(128 * 1024 * 1024),
             turn: config
                 .media
                 .media_turn

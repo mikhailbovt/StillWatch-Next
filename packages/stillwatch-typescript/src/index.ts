@@ -57,6 +57,7 @@ type ResponseData = { headers: Headers; data: Uint8Array };
 const MAX_JSON = 4 * 1024 * 1024;
 const REQUEST_MS = 12_000;
 const CAMERA_SETUP_MS = 22_000;
+const WHEP_OFFER_MS = 28_000;
 
 export class StillWatchClient {
   readonly #url: URL;
@@ -252,7 +253,7 @@ export class StillWatchClient {
   async offerWhep(id: string, sdp: string, signal?: AbortSignal): Promise<{ sdp: string; etag: string | null }> {
     const path = whep(id);
     const { data, headers } = await this.#request("POST", path, {
-      headers: { "Content-Type": "application/sdp" }, content: sdp, signal, limit: 48 * 1024,
+      headers: { "Content-Type": "application/sdp" }, content: sdp, signal, limit: 48 * 1024, timeoutMs: WHEP_OFFER_MS,
     });
     if (headers.get("location") !== path || headers.get("content-type") !== "application/sdp") {
       throw new CoreError("protocol");
