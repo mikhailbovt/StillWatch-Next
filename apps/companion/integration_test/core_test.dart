@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:integration_test/integration_test.dart';
@@ -13,11 +15,27 @@ const _camera = 'Masked camera';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('pairs, decodes masked video and reloads the saved Core', (
+  testWidgets('pairs, receives an alert, decodes video and reloads the Core', (
     tester,
   ) async {
     const encodedOffer = String.fromEnvironment('STILLWATCH_QA_OFFER');
     expect(encodedOffer, isNotEmpty, reason: 'Start the native Core fixture.');
+    final notifications = FlutterLocalNotificationsPlugin();
+    final ios = notifications
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >()!;
+    // Provisional authorization posts quietly to the system notification center.
+    // It avoids an interactive OS prompt on the headless Simulator.
+    expect(
+      await ios.requestPermissions(alert: true, provisional: true),
+      isTrue,
+    );
+    const storage = FlutterSecureStorage();
+    await storage.write(key: 'stillwatch.alerts.foreground', value: 'yes');
+    addTearDown(() async {
+      await storage.delete(key: 'stillwatch.alerts.foreground');
+    });
     final offer = utf8.decode(base64Decode(encodedOffer));
     await tester.pumpWidget(const StillWatchApp());
     await _waitFor(tester, find.widgetWithText(FilledButton, 'Add a Core'));
@@ -49,6 +67,9 @@ void main() {
     await tester.tap(trust);
     await _waitFor(tester, find.text('Core connected'), diagnose: true);
     await _waitFor(tester, find.text(_camera));
+    const incident = String.fromEnvironment('STILLWATCH_QA_ALERT_INCIDENT');
+    expect(incident, isNotEmpty);
+    await _waitForSystemNotification(tester, notifications, incident);
     final open = find.byIcon(Icons.open_in_full);
     await _waitFor(tester, open);
     await tester.tap(open);
@@ -91,6 +112,28 @@ void main() {
     await _waitFor(tester, find.text('No active technical events.'));
     await tester.pumpWidget(const SizedBox.shrink());
   }, timeout: const Timeout(Duration(minutes: 3)));
+}
+
+Future<void> _waitForSystemNotification(
+  WidgetTester tester,
+  FlutterLocalNotificationsPlugin notifications,
+  String incident,
+) async {
+  final wait = Stopwatch()..start();
+  do {
+    final delivered = await notifications.getActiveNotifications();
+    if (delivered.any(
+      (notice) =>
+          notice.title == 'StillWatch alert' &&
+          notice.payload != null &&
+          (jsonDecode(notice.payload!) as Map)['incident'] == incident,
+    )) {
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+  } while (wait.elapsed < const Duration(seconds: 25));
+  fail('The Core incident was not delivered to the iOS notification center.');
 }
 
 Future<void> _waitFor(
