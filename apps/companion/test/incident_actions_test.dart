@@ -126,6 +126,27 @@ void main() {
     },
   );
 
+  test('can verify and acknowledge an older open incident', () async {
+    final core = await _CoreFixture.start();
+    addTearDown(core.close);
+    core.omitFromSnapshot = true;
+    await core.reconnect();
+    final console = core.console;
+    expect(console.hasOlderOpenIncidents, isTrue);
+    final reviewed = console.incidents.single;
+    await console.queueIncidentAction(
+      core.profile,
+      reviewed,
+      console.streamGeneration,
+      IncidentAction.acknowledge,
+    );
+    expect(
+      core.writes.single.path,
+      '/api/v2/incidents/$_incidentId/acknowledgements',
+    );
+    expect(core.writes.single.revision, '"4"');
+  });
+
   test('rejects commands reviewed before restoration and clears forgotten profiles', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final core = await _CoreFixture.start();
@@ -269,6 +290,7 @@ final class _CoreFixture {
   String generation = _generation;
   Json incident = _incident;
   bool failWrites = false;
+  bool omitFromSnapshot = false;
   final writes = <({String path, String key, String revision, String body})>[];
 
   static Future<_CoreFixture> start() =>
@@ -341,7 +363,8 @@ final class _CoreFixture {
         },
         '/api/v2/snapshot' => {
           'cursor': '$generation:1',
-          'incidents': [incident],
+          'incidents': omitFromSnapshot ? [] : [incident],
+          if (omitFromSnapshot) 'has_older_open_incidents': true,
         },
         '/api/v2/incidents' => {
           'incidents': [incident],

@@ -159,6 +159,7 @@ final class ConsoleState extends ChangeNotifier {
   LinkState link = LinkState.connecting;
   List<Camera> cameras = const [];
   List<Incident> incidents = const [];
+  bool hasOlderOpenIncidents = false;
   String? historyCursor;
   Json? health;
   String? error;
@@ -241,6 +242,7 @@ final class ConsoleState extends ChangeNotifier {
     selected = profile;
     cameras = const [];
     incidents = const [];
+    hasOlderOpenIncidents = false;
     historyCursor = null;
     health = null;
     error = null;
@@ -308,6 +310,7 @@ final class ConsoleState extends ChangeNotifier {
         if (existing == null || _newer(item, existing)) merged[item.id] = item;
       }
       incidents = _sort(merged.values);
+      hasOlderOpenIncidents = snapshot.hasOlderOpenIncidents;
       historyCursor = history.next;
       _streamGeneration = snapshot.cursor.generation;
       health = results[2] as Json;
@@ -389,6 +392,7 @@ final class ConsoleState extends ChangeNotifier {
     }
     incidents = _sort(merged.values);
     historyCursor = page.next;
+    if (page.next == null) hasOlderOpenIncidents = false;
     notifyListeners();
   }
 
@@ -494,10 +498,19 @@ final class ConsoleState extends ChangeNotifier {
       if (latestGeneration != streamGeneration) {
         throw const StillWatchException('revision_conflict');
       }
-      // A pending action always targets an incident that was open at review.
-      final latest = snapshot.incidents
+      // The snapshot's generation and revisions were read from one transaction.
+      // Older rows require a guarded detail read when the snapshot was bounded.
+      var latest = snapshot.incidents
           .where((item) => item.id == id)
           .firstOrNull;
+      if (latest == null && snapshot.hasOlderOpenIncidents) {
+        try {
+          latest = await profile.client.incident(id);
+        } on StillWatchException catch (failure) {
+          if (failure.status != 404) rethrow;
+        }
+      }
+      if (!current()) return;
       if (latest == null) throw const StillWatchException('revision_conflict');
       replaceIncident(latest);
       if (!current()) return;

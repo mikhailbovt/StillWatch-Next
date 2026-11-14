@@ -14,6 +14,10 @@ export type Lifecycle = "open" | "resolved";
 
 export interface Snapshot {
   cursor: Cursor;
+  /**
+   * Older open incidents are available through the incident history endpoint.
+   */
+  has_older_open_incidents?: boolean;
   incidents: Incident[];
   [k: string]: unknown;
 }

@@ -233,11 +233,13 @@ final class Page<T> {
 final class Snapshot {
   Snapshot.fromJson(Json value)
     : cursor = Cursor(text(value, 'cursor')),
+      hasOlderOpenIncidents = value['has_older_open_incidents'] == true,
       incidents = List.unmodifiable(
         objects(value, 'incidents').map(Incident.fromJson),
       );
 
   final Cursor cursor;
+  final bool hasOlderOpenIncidents;
   final List<Incident> incidents;
 }
 

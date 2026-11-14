@@ -80,6 +80,13 @@ class _IncidentHistoryState extends State<IncidentHistory> {
             ],
           ),
         ),
+        if (console.hasOlderOpenIncidents && console.historyCursor != null)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 10),
+            child: Text(
+              'Load older incidents to see the rest of the open history.',
+            ),
+          ),
         Expanded(
           child: entries.isEmpty && console.historyCursor == null
               ? const Center(child: Text('No incidents in this view.'))

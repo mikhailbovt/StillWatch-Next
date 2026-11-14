@@ -182,8 +182,8 @@ impl Database {
     pub fn snapshot(&mut self, allowed: Option<Vec<Uuid>>) -> Result<Snapshot, StoreError> {
         let allowed = camera_filter(allowed)?;
         let tx = self.conn.transaction()?;
-        let (_, sequence) = bounds(&tx)?;
-        let incidents = {
+        let sequence = seq_head(&tx)?;
+        let mut incidents = {
             let mut statement = tx.prepare(
                 "SELECT state FROM incidents WHERE resolved = 0
                  AND (?1 IS NULL OR lower(hex(camera_id)) IN (SELECT value FROM json_each(?1)))
@@ -196,8 +196,9 @@ impl Database {
                 .map(|state| Ok(serde_json::from_str::<Incident>(&state?)?))
                 .collect::<Result<Vec<_>, StoreError>>()?
         };
-        if incidents.len() > MAX_SNAPSHOT {
-            return Err(StoreError::SnapshotLimit);
+        let has_older_open_incidents = incidents.len() > MAX_SNAPSHOT;
+        if has_older_open_incidents {
+            incidents.truncate(MAX_SNAPSHOT);
         }
         tx.commit()?;
         Ok(Snapshot {
@@ -206,6 +207,14 @@ impl Database {
                 sequence,
             },
             incidents,
+            has_older_open_incidents,
+        })
+    }
+
+    pub fn change_head(&self) -> Result<ChangeCursor, StoreError> {
+        Ok(ChangeCursor {
+            generation: self.identity.generation,
+            sequence: seq_head(&self.conn)?,
         })
     }
 
@@ -593,6 +602,14 @@ fn bounds(conn: &Connection) -> Result<(u64, u64), StoreError> {
          FROM core_identity WHERE singleton = 1",
         [],
         |row| Ok((row_counter(row, 0)?, row_counter(row, 1)?)),
+    )?)
+}
+
+fn seq_head(conn: &Connection) -> Result<u64, StoreError> {
+    Ok(conn.query_row(
+        "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = 'change_events'), 0)",
+        [],
+        |row| row_counter(row, 0),
     )?)
 }
 

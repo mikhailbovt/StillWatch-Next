@@ -39,6 +39,7 @@ pub async fn snapshot(
     Ok(Json(Snapshot {
         cursor: wire::cursor(snapshot.cursor),
         incidents,
+        has_older_open_incidents: snapshot.has_older_open_incidents,
     }))
 }
 
@@ -70,13 +71,7 @@ pub async fn changes(
     }
     let mut cursor = match header.or(query) {
         Some(cursor) => wire::store_cursor(cursor),
-        None => {
-            state
-                .store
-                .snapshot_visible(principal.allowed_cameras())
-                .await?
-                .cursor
-        }
+        None => state.store.change_head().await?,
     };
     let permit = state
         .stream_slots

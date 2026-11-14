@@ -163,6 +163,36 @@ fn counts(conn: &Connection) -> (u64, u64, u64) {
     }).unwrap()
 }
 
+#[test]
+fn snapshot_remains_available_when_open_incidents_exceed_its_page() {
+    let root = tempfile::tempdir().unwrap();
+    let mut db = database(root.path(), 0);
+    let over_limit_camera = Uuid::new_v4();
+    let other_camera = Uuid::new_v4();
+    let mut first = Uuid::nil();
+    for index in 0..=super::MAX_SNAPSHOT {
+        let mut incident = incident();
+        incident.scope.camera_id = over_limit_camera;
+        if index == 0 {
+            first = incident.id;
+        }
+        db.create(incident, 1_000 + index as i64).unwrap();
+    }
+    let mut other = incident();
+    other.scope.camera_id = other_camera;
+    db.create(other, 5_000).unwrap();
+    let page = db.snapshot(Some(vec![over_limit_camera])).unwrap();
+    assert!(page.has_older_open_incidents);
+    assert_eq!(page.incidents.len(), super::MAX_SNAPSHOT);
+    assert!(page.incidents.iter().all(|incident| incident.id != first));
+    assert_eq!(db.get(first).unwrap().scope.camera_id, over_limit_camera);
+    assert_eq!(db.change_head().unwrap(), page.cursor);
+    let other_page = db.snapshot(Some(vec![other_camera])).unwrap();
+    assert!(!other_page.has_older_open_incidents);
+    assert_eq!(other_page.incidents.len(), 1);
+    assert_eq!(other_page.cursor, page.cursor);
+}
+
 #[tokio::test]
 async fn history_retention_preserves_open_incidents_and_advances_the_sse_floor() {
     let root = tempfile::tempdir().unwrap();

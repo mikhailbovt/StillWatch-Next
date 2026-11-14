@@ -182,6 +182,9 @@ impl Change {
 pub struct Snapshot {
     pub cursor: Cursor,
     pub incidents: Vec<Incident>,
+    /// Older open incidents are available through the incident history endpoint.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_older_open_incidents: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

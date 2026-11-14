@@ -536,7 +536,7 @@ paths:
       operationId: getSnapshot
       responses:
         '200':
-          description: Open incidents and the resume cursor from a single database snapshot.
+          description: Up to 2,000 newest open incidents and the resume cursor from a single database snapshot. If has_older_open_incidents is true, query incident history for older rows.
           content:
             application/json:
               schema: { $ref: schemas/Snapshot.json }

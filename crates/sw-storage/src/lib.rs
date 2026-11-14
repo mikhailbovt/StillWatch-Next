@@ -71,8 +71,6 @@ pub enum StoreError {
     Idempotency,
     #[error("change cursor expired")]
     CursorExpired,
-    #[error("too many open incidents for a bounded snapshot")]
-    SnapshotLimit,
     #[error("camera configuration exceeds active capture capacity")]
     CameraCapacity,
     #[error("invalid storage request")]
@@ -114,6 +112,7 @@ pub struct Change {
 pub struct Snapshot {
     pub cursor: ChangeCursor,
     pub incidents: Vec<Incident>,
+    pub has_older_open_incidents: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,6 +327,10 @@ impl Store {
         allowed: Option<Vec<Uuid>>,
     ) -> Result<Snapshot, StoreError> {
         self.call(move |db| db.snapshot(allowed)).await
+    }
+
+    pub async fn change_head(&self) -> Result<ChangeCursor, StoreError> {
+        self.call(|db| db.change_head()).await
     }
 
     pub async fn changes(

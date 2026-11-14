@@ -142,7 +142,7 @@ impl From<StoreError> for ApiError {
                 "Change cursor expired",
                 Some("Fetch a fresh snapshot before reconnecting".into()),
             ),
-            StoreError::SnapshotLimit | StoreError::CameraCapacity => Self::new(
+            StoreError::CameraCapacity => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ProblemCode::CapacityExceeded,
                 "Capacity exceeded",

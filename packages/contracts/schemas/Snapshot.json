@@ -6,6 +6,10 @@
     "cursor": {
       "$ref": "#/$defs/Cursor"
     },
+    "has_older_open_incidents": {
+      "description": "Older open incidents are available through the incident history endpoint.",
+      "type": "boolean"
+    },
     "incidents": {
       "type": "array",
       "items": {
