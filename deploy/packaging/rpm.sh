@@ -18,6 +18,7 @@ tar -C "$payload" -czf "$top/SOURCES/stillwatch-payload.tar.gz" .
 install -m 0755 "$source_root/deploy/linux/stillwatch-core" "$top/SOURCES/stillwatch-core"
 install -m 0644 "$source_root/deploy/linux/stillwatch.conf" "$top/SOURCES/core.conf"
 install -m 0644 "$source_root/deploy/systemd/stillwatch.service" "$top/SOURCES/stillwatch.service"
+install -m 0644 "$source_root/deploy/systemd/stillwatch-apns.service" "$top/SOURCES/stillwatch-apns.service"
 cat > "$top/SPECS/stillwatch-core.spec" <<'EOF'
 Name: stillwatch-core
 Version: 0.1.0
@@ -30,6 +31,7 @@ Source0: stillwatch-payload.tar.gz
 Source1: stillwatch-core
 Source2: core.conf
 Source3: stillwatch.service
+Source4: stillwatch-apns.service
 %global _build_id_links none
 %global debug_package %{nil}
 # The release files and native libraries are already stripped or vendor-built.
@@ -45,18 +47,21 @@ tar -xzf %{SOURCE0} -C %{buildroot}/usr/libexec/stillwatch
 install -m 0755 %{SOURCE1} %{buildroot}/usr/bin/stillwatch-core
 install -D -m 0644 %{SOURCE2} %{buildroot}/etc/stillwatch/core.conf
 install -D -m 0644 %{SOURCE3} %{buildroot}/usr/lib/systemd/system/stillwatch.service
+install -D -m 0644 %{SOURCE4} %{buildroot}/usr/lib/systemd/system/stillwatch-apns.service
 ln -s ../libexec/stillwatch/bin/stillwatch-cli %{buildroot}/usr/bin/stillwatch-cli
 
 %pre
 getent group stillwatch >/dev/null || groupadd -r stillwatch
 getent passwd stillwatch >/dev/null || useradd -r -g stillwatch -d /var/lib/stillwatch -s /sbin/nologin -c "StillWatch service" stillwatch
+getent group stillwatch-apns >/dev/null || groupadd -r stillwatch-apns
+getent passwd stillwatch-apns >/dev/null || useradd -r -g stillwatch-apns -s /sbin/nologin -c "StillWatch APNs worker" stillwatch-apns
 
 %post
 install -d -m 0700 -o stillwatch -g stillwatch /var/lib/stillwatch
 if test -d /run/systemd/system; then systemctl daemon-reload; fi
 
 %preun
-if test "$1" = 0 && test -d /run/systemd/system; then systemctl disable --now stillwatch.service; fi
+if test "$1" = 0 && test -d /run/systemd/system; then systemctl disable --now stillwatch-apns.service stillwatch.service; fi
 
 %postun
 if test -d /run/systemd/system; then systemctl daemon-reload; fi
@@ -68,5 +73,6 @@ if test -d /run/systemd/system; then systemctl daemon-reload; fi
 /usr/bin/stillwatch-cli
 /usr/libexec/stillwatch
 /usr/lib/systemd/system/stillwatch.service
+/usr/lib/systemd/system/stillwatch-apns.service
 EOF
 rpmbuild -bb --define "_topdir $top" --define "_rpmdir $output" "$top/SPECS/stillwatch-core.spec"

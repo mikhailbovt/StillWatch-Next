@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "models/native-deps.lock.json"
 MODEL_FILES = ("models.lock.json", "parity-report.json", "pose.onnx", "pose_balanced.onnx", "fire.onnx")
-BINARIES = ("stillwatch-core", "stillwatch-worker", "stillwatch-cli", "stillwatch-alarm-agent")
+BINARIES = ("stillwatch-core", "stillwatch-worker", "stillwatch-cli", "stillwatch-alarm-agent", "stillwatch-apns-worker")
 
 
 def digest(path):

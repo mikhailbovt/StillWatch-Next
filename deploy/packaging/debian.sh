@@ -18,6 +18,7 @@ cp -a "$payload/." "$stage/usr/libexec/stillwatch/"
 install -m 0755 "$source_root/deploy/linux/stillwatch-core" "$stage/usr/bin/stillwatch-core"
 ln -s ../libexec/stillwatch/bin/stillwatch-cli "$stage/usr/bin/stillwatch-cli"
 install -D -m 0644 "$source_root/deploy/systemd/stillwatch.service" "$stage/usr/lib/systemd/system/stillwatch.service"
+install -D -m 0644 "$source_root/deploy/systemd/stillwatch-apns.service" "$stage/usr/lib/systemd/system/stillwatch-apns.service"
 install -D -m 0644 "$source_root/deploy/linux/stillwatch.conf" "$stage/etc/stillwatch/core.conf"
 
 cat > "$stage/DEBIAN/control" <<'EOF'
@@ -38,6 +39,9 @@ set -eu
 if ! getent passwd stillwatch >/dev/null; then
     adduser --system --group --home /var/lib/stillwatch --no-create-home stillwatch
 fi
+if ! getent passwd stillwatch-apns >/dev/null; then
+    adduser --system --group --no-create-home stillwatch-apns
+fi
 install -d -m 0700 -o stillwatch -g stillwatch /var/lib/stillwatch
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
@@ -47,7 +51,7 @@ cat > "$stage/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -eu
 if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
-    systemctl disable --now stillwatch.service
+    systemctl disable --now stillwatch-apns.service stillwatch.service
 fi
 EOF
 cat > "$stage/DEBIAN/postrm" <<'EOF'
