@@ -39,6 +39,9 @@ class _StillWatchAppState extends State<StillWatchApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _alerts.refreshPermissionsOnResume();
+    }
     unawaited(
       _console.setForeground(
         state == AppLifecycleState.resumed ||

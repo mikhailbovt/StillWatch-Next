@@ -27,7 +27,6 @@ final class LocalAlerts extends ChangeNotifier {
   bool _busy = false;
   bool _changingPreference = false;
   bool _closed = false;
-  bool _wasForeground = true;
   Future<bool>? _permissionCheck;
   Timer? _poll;
 
@@ -73,7 +72,7 @@ final class LocalAlerts extends ChangeNotifier {
       permissionBlockedAt = DateTime.tryParse(
         await storage.read(key: _blockedAtKey) ?? '',
       )?.toUtc();
-      await _checkPermissions();
+      await _refreshPermissions();
       if (enabled) _connectionChanged();
       final launch = await _notifications.getNotificationAppLaunchDetails();
       final response = launch?.notificationResponse;
@@ -119,7 +118,7 @@ final class LocalAlerts extends ChangeNotifier {
       }
       await storage.write(key: _preference, value: value ? 'yes' : 'no');
       enabled = value;
-      await _checkPermissions();
+      await _refreshPermissions();
     } finally {
       _changingPreference = false;
       _connectionChanged();
@@ -140,6 +139,12 @@ final class LocalAlerts extends ChangeNotifier {
       return false;
     } finally {
       _permissionCheck = null;
+    }
+  }
+
+  void refreshPermissionsOnResume() {
+    if (available && !_closed && !_changingPreference) {
+      unawaited(_refreshPermissions());
     }
   }
 
@@ -203,11 +208,6 @@ final class LocalAlerts extends ChangeNotifier {
 
   void _connectionChanged() {
     if (_closed) return;
-    final resumed = console.foreground && !_wasForeground;
-    _wasForeground = console.foreground;
-    if (resumed && available && !_changingPreference) {
-      unawaited(_refreshPermissions());
-    }
     if (!enabled ||
         !available ||
         !console.foreground ||
