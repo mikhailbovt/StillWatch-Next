@@ -1,6 +1,7 @@
 /target/
 /.local/
 /.venv/
+/qualification/runs/
 **/.venv/
 **/__pycache__/
 **/.pytest_cache/

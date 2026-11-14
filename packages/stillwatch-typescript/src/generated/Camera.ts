@@ -379,6 +379,10 @@ export interface CameraRuntime {
   analysis?: AnalysisStatus | null;
   codec?: string | null;
   dropped: Counter;
+  /**
+   * Native presentation timestamp in microseconds of the first usable frame in the epoch.
+   */
+  first_source_us?: string | null;
   frame?: Counter | null;
   last_frame_age_ms?: Counter | null;
   repeated_frame?: boolean;
@@ -394,6 +398,11 @@ export interface AnalysisStatus {
   fire_frames: Counter;
   fire_regions?: number | null;
   last_analysis_age_ms?: Counter | null;
+  last_fire_source_us?: string | null;
+  /**
+   * Native presentation timestamp in microseconds, as a signed decimal string.
+   */
+  last_pose_source_us?: string | null;
   /**
    * Time between receiving the last accepted frame and dispatching it to a worker.
    */

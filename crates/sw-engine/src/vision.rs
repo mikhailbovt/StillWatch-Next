@@ -186,6 +186,8 @@ impl VisionScheduler {
                 response.source_epoch = Some(Counter(epoch));
                 response.pose_frames = Counter(analysis.pose_frames);
                 response.fire_frames = Counter(analysis.fire_frames);
+                response.last_pose_source_us = analysis.pose_time.map(|pts| pts.to_string());
+                response.last_fire_source_us = analysis.fire_time.map(|pts| pts.to_string());
                 response.last_analysis_age_ms =
                     Some(Counter(u64::try_from(age.as_millis()).unwrap_or(u64::MAX)));
                 response.last_queue_age_ms = Some(analysis.queue_ms);

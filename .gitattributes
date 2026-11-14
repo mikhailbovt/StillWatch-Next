@@ -7,5 +7,6 @@
 *.patch text eol=lf
 tools/dev/ffmpeg-same-peer.patch whitespace=-blank-at-eol
 StillWatch_Next_Rust_Technical_Implementation_Plan_RU.md whitespace=-blank-at-eol
+StillWatch_Next_Completion_Plan_RU.md -text whitespace=-blank-at-eol
 deploy/linux/stillwatch-core text eol=lf
 deploy/linux/stillwatch-worker text eol=lf

@@ -112,6 +112,21 @@
             }
           ]
         },
+        "last_fire_source_us": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+        },
+        "last_pose_source_us": {
+          "description": "Native presentation timestamp in microseconds, as a signed decimal string.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+        },
         "last_queue_age_ms": {
           "description": "Time between receiving the last accepted frame and dispatching it to a worker.",
           "type": [
@@ -293,6 +308,14 @@
         },
         "dropped": {
           "$ref": "#/$defs/Counter"
+        },
+        "first_source_us": {
+          "description": "Native presentation timestamp in microseconds of the first usable frame in the epoch.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
         },
         "frame": {
           "anyOf": [

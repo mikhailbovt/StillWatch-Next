@@ -396,6 +396,13 @@ pub struct CameraRuntime {
     pub frame: Option<Counter>,
     pub dropped: Counter,
     pub last_frame_age_ms: Option<Counter>,
+    /// Native presentation timestamp in microseconds of the first usable frame in the epoch.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(regex(pattern = r"^-?(0|[1-9][0-9]{0,18})$"))
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_source_us: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -489,6 +496,19 @@ pub struct AnalysisStatus {
     pub source_epoch: Option<Counter>,
     pub pose_frames: Counter,
     pub fire_frames: Counter,
+    /// Native presentation timestamp in microseconds, as a signed decimal string.
+    #[cfg_attr(
+        feature = "schema",
+        schemars(regex(pattern = r"^-?(0|[1-9][0-9]{0,18})$"))
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_pose_source_us: Option<String>,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(regex(pattern = r"^-?(0|[1-9][0-9]{0,18})$"))
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fire_source_us: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadence: Option<AnalysisCadence>,
     pub last_analysis_age_ms: Option<Counter>,
@@ -511,6 +531,8 @@ impl AnalysisStatus {
             source_epoch: None,
             pose_frames: Counter(0),
             fire_frames: Counter(0),
+            last_pose_source_us: None,
+            last_fire_source_us: None,
             cadence: None,
             last_analysis_age_ms: None,
             last_queue_age_ms: None,

@@ -1,0 +1,87 @@
+{
+  "protocol": "fast-rc-v2",
+  "budget_seconds": 10800,
+  "stage_boundaries_seconds": {
+    "preflight": [0, 900],
+    "logical": [900, 2400],
+    "faults_and_capacity": [2400, 4800],
+    "storage_and_crash": [4800, 6300],
+    "quiet_load": [6300, 9900],
+    "final": [9900, 10800]
+  },
+  "quiet_load": {
+    "minimum_seconds": 3600,
+    "wall_window_seconds": 60,
+    "wall_window_step_seconds": 1,
+    "minimum_wall_accepted_fraction": 0.95,
+    "source_window_seconds": 10,
+    "minimum_source_pose_fraction": 0.8,
+    "minimum_source_fire_fraction": 0.75,
+    "api_read_control_p95_ms": 250,
+    "receive_to_accept_p95_ms": 500,
+    "receive_to_accept_p99_ms": 1000,
+    "max_accepted_result_age_ms": 3000,
+    "relative_source_lag_sustained_ms": 1000,
+    "relative_source_lag_max_growth_ms_per_60s": 500
+  },
+  "deadlines_ms": {
+    "cpu_worker_startup": 30000,
+    "cuda_worker_startup": 60000,
+    "live_inference": 2000
+  },
+  "minimum_completed_fault_cycles": {
+    "rtsp_reconnect": 200,
+    "inference_child_restart": 20,
+    "core_restart": 10,
+    "viewer_grant_offer_close": 100
+  },
+  "rtsp_reconnect_cameras": 4,
+  "rtsp_reconnect_min_each": 50,
+  "capacity_ramp_cameras": [1, 4, 8, 16],
+  "cases": {
+    "preflight": [
+      "artifacts.exact-digests-and-release-features",
+      "models.active-numeric-observation-event-gates",
+      "models.all-role-numeric-report",
+      "models.native-warmup-all-shapes"
+    ],
+    "logical": [
+      "evaluator.censoring-coverage-and-grounding",
+      "clock.source-monotonic-utc-boundaries",
+      "state.seeded-invariants",
+      "storage.pre-aged-retention-at-volume",
+      "quality.required-regressions"
+    ],
+    "faults_and_capacity": [
+      "source.reconnect-completed",
+      "worker.inference-restart-completed",
+      "service.core-restart-completed",
+      "media.viewer-cycle-completed",
+      "capacity.ramp-and-concurrent-admission",
+      "capacity.overload-and-recovery",
+      "pipeline.canary-after-each-fault"
+    ],
+    "storage_and_crash": [
+      "storage.sqlite-quota-and-busy",
+      "storage.pinned-wal-reader",
+      "storage.blob-enospc-and-reconciliation",
+      "storage.incident-outbox-and-blob-cutpoints",
+      "storage.semantic-recovery-cutpoints",
+      "storage.refresh-lost-response-and-restart",
+      "storage.backup-publish-cutpoint",
+      "pipeline.canary-after-storage-faults"
+    ],
+    "quiet_load": [
+      "capacity.complete-isolated-quiet-interval",
+      "capacity.every-camera-cadence-latency-and-source-lag",
+      "capacity.declared-viewer-snapshot-evidence-load",
+      "resources.high-water-and-growth",
+      "pipeline.useful-detections-under-load"
+    ],
+    "final": [
+      "pipeline.final-live-canary",
+      "storage.restore-integrity-and-generation",
+      "resources.churn-drain-and-cleanup"
+    ]
+  }
+}

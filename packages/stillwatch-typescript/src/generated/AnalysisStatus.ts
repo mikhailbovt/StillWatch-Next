@@ -15,6 +15,11 @@ export interface AnalysisStatus {
   fire_frames: Counter;
   fire_regions?: number | null;
   last_analysis_age_ms?: Counter | null;
+  last_fire_source_us?: string | null;
+  /**
+   * Native presentation timestamp in microseconds, as a signed decimal string.
+   */
+  last_pose_source_us?: string | null;
   /**
    * Time between receiving the last accepted frame and dispatching it to a worker.
    */

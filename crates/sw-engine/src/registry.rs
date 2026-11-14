@@ -78,6 +78,7 @@ struct State {
     phase: CaptureState,
     dropped: u64,
     last: Option<(u64, Instant)>,
+    first_source: Option<(u64, i64)>,
     codec: Option<Arc<str>>,
     repeated_frame: bool,
     retrying: bool,
@@ -182,6 +183,7 @@ impl CameraRegistry {
             },
             dropped: 0,
             last: None,
+            first_source: None,
             codec: None,
             repeated_frame: false,
             retrying: false,
@@ -215,6 +217,10 @@ impl CameraRegistry {
                 frame,
                 dropped: Counter(state.dropped),
                 last_frame_age_ms,
+                first_source_us: state
+                    .first_source
+                    .filter(|(epoch, _)| *epoch == item.epoch)
+                    .map(|(_, pts)| pts.to_string()),
                 codec: state.codec.as_deref().map(str::to_owned),
                 repeated_frame: state.repeated_frame,
                 analysis: None,
@@ -696,6 +702,7 @@ impl CameraRegistry {
                 phase,
                 dropped: 0,
                 last: None,
+                first_source: None,
                 codec: None,
                 repeated_frame: false,
                 retrying: false,
@@ -892,6 +899,7 @@ impl CameraRegistry {
                     .await?;
             }
             let frame_id = frame.header.frame;
+            let source_us = frame.header.source_micros;
             let scope = SourceScope {
                 camera_id: camera.id,
                 epoch: camera.epoch,
@@ -933,6 +941,12 @@ impl CameraRegistry {
                 };
                 if usable {
                     state.last = Some((frame_id, now));
+                    if state
+                        .first_source
+                        .is_none_or(|(epoch, _)| epoch != scope.epoch)
+                    {
+                        state.first_source = source_us.map(|pts| (scope.epoch, pts));
+                    }
                 }
                 state.repeated_frame = content.holding;
                 state.retrying = false;

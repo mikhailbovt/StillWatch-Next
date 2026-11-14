@@ -37,6 +37,8 @@ jobs:
         run: |
           cargo xtask contracts --check
           uvx --python 3.12.14 --from openapi-spec-validator==0.9.0 openapi-spec-validator packages/contracts/openapi.yaml
+      - name: Check replay scoring
+        run: uv run --no-project --python 3.12.14 python -B -m unittest discover -s tools/benchmark -p "test_*.py"
       - name: Build host executables
         run: cargo build --locked --workspace
       - name: Check Windows replay and restart
