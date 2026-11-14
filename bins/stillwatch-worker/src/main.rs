@@ -2,6 +2,8 @@
 
 mod activate;
 mod capture;
+#[cfg(feature = "diagnostics")]
+mod fire_scale;
 mod inference;
 mod parity;
 
@@ -41,6 +43,10 @@ fn main() -> Result<()> {
         [command] if command == "infer-v2" => inference::run(Mode::Timed),
         [command] if command == "infer-v2-proposals" => inference::run(Mode::TimedProposals),
         [command] if command == "diagnose-fire" => inference::run(Mode::FireDiagnostic),
+        #[cfg(feature = "diagnostics")]
+        [command, variant] if command == "diagnose-fire-scale" => {
+            fire_scale::run(text_arg(variant)?)
+        }
         [command] if command == "capture-doctor" => {
             println!(
                 "{}",

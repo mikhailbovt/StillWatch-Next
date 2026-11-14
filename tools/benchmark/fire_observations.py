@@ -29,8 +29,8 @@ def exact(stream, size):
 
 
 @contextmanager
-def process(executable, command):
-    with subprocess.Popen([str(executable), command], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as child:
+def process(executable, *command):
+    with subprocess.Popen([str(executable), *command], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as child:
         try:
             yield child
         finally:

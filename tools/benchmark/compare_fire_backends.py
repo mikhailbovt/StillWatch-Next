@@ -11,7 +11,7 @@ import uuid
 from fire_observations import digest, exact, process
 
 
-def call_inference(child, header, rgb):
+def call_inference(child, header, rgb, *, timings=False):
     key = uuid.uuid4()
     child.stdin.write(key.bytes + b"\x02" + header + rgb)
     child.stdin.flush()
@@ -19,13 +19,13 @@ def call_inference(child, header, rgb):
     if not 0 < size <= 1_500_000:
         raise ValueError("invalid worker result")
     outcome = json.loads(exact(child.stdout, size))
-    exact(child.stdout, 28)
+    timing = exact(child.stdout, 28)
     result = outcome["inference"]
     if result["request"] != str(key) or result["pose"] is not None or result["fire"] is None:
         raise ValueError("invalid Fire response")
     result["request"] = str(uuid.UUID(int=0))
     result["elapsed_ms"] = 0
-    return outcome
+    return (outcome, struct.unpack("<7I", timing)) if timings else outcome
 
 
 def call_policy(child, header, rgb, result):

@@ -12,6 +12,8 @@ use crate::{InferenceError, Model, RUNTIME_VERSION, Runtime};
 
 const BASELINE: &str = "b0d20a20d38a5bbc22178d150999e57cc9e7bfb3";
 pub(crate) const SIDE: usize = 640;
+#[cfg(feature = "diagnostics")]
+pub(crate) const DIAGNOSTIC_FIRE_SIDE: usize = 960;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub enum InputProfile {
@@ -38,7 +40,10 @@ impl InputProfile {
     }
 
     pub fn accepts(self, shape: TensorSize) -> bool {
-        self == Self::Rectangular || shape == TensorSize::SQUARE
+        match self {
+            Self::Square => shape == TensorSize::SQUARE,
+            Self::Rectangular => shape.height <= SIDE && shape.width <= SIDE,
+        }
     }
 }
 
@@ -55,9 +60,17 @@ impl TensorSize {
     };
 
     pub fn new(height: usize, width: usize) -> Result<Self, InferenceError> {
+        Self::bounded(height, width, SIDE)
+    }
+
+    pub(crate) fn bounded(
+        height: usize,
+        width: usize,
+        side: usize,
+    ) -> Result<Self, InferenceError> {
         if [height, width]
             .into_iter()
-            .all(|v| (32..=SIDE).contains(&v) && v.is_multiple_of(32))
+            .all(|v| (32..=side).contains(&v) && v.is_multiple_of(32))
         {
             Ok(Self { height, width })
         } else {

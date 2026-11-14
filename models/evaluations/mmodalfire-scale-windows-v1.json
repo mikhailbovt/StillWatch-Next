@@ -1,0 +1,18 @@
+{
+  "manifest_sha256": "4731d9caedb1bc51ab8dcd297377ec0af0f753cf7bf85d28a23631db8f34c7f1",
+  "description": "Fixed early positive windows and matched water-mist comparison windows. Intervals for mist-1, mist-2 and mist-4 span a previously reported nuisance Review. Mist-3 begins with the test recording.",
+  "clips": {
+    "cotton-1.mp4": {},
+    "cotton-2.mp4": {},
+    "heptane-pair-1.mp4": {},
+    "heptane-pair-2.mp4": {},
+    "polyurethane-1.mp4": {},
+    "polyurethane-2.mp4": {},
+    "wood-1.mp4": {},
+    "wood-2.mp4": {},
+    "mist-1.mp4": {"window_s": [150, 174]},
+    "mist-2.mp4": {"window_s": [184, 208]},
+    "mist-3.mp4": {"window_s": [0, 20]},
+    "mist-4.mp4": {"window_s": [0, 24]}
+  }
+}

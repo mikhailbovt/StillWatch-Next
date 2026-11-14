@@ -38,16 +38,17 @@ pub struct Letterbox {
 }
 
 impl Letterbox {
-    fn new(width: usize, height: usize, profile: InputProfile) -> Self {
-        let gain = (SIDE as f64 / width as f64).min(SIDE as f64 / height as f64);
-        let resized_width = ((width as f64 * gain).round_ties_even() as usize).clamp(1, SIDE);
-        let resized_height = ((height as f64 * gain).round_ties_even() as usize).clamp(1, SIDE);
+    fn new(width: usize, height: usize, profile: InputProfile, side: usize) -> Self {
+        let gain = (side as f64 / width as f64).min(side as f64 / height as f64);
+        let resized_width = ((width as f64 * gain).round_ties_even() as usize).clamp(1, side);
+        let resized_height = ((height as f64 * gain).round_ties_even() as usize).clamp(1, side);
         let tensor = if profile == InputProfile::Square {
             TensorSize::SQUARE
         } else {
-            TensorSize::new(
+            TensorSize::bounded(
                 resized_height.next_multiple_of(32),
                 resized_width.next_multiple_of(32),
+                side,
             )
             .expect("stride-rounded letterbox dimensions")
         };
@@ -108,6 +109,7 @@ fn samples(source: usize, target: usize, vertical: bool) -> Vec<Sample> {
 
 pub struct Preprocessor {
     profile: InputProfile,
+    side: usize,
     input: Vec<f32>,
     geometry: Option<Letterbox>,
     maps: Vec<ResizeMap>,
@@ -123,16 +125,26 @@ const MAX_RESIZE_MAPS: usize = 4;
 
 impl Preprocessor {
     pub fn new(profile: InputProfile) -> Self {
+        Self::with_side(profile, SIDE)
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_fire_scale() -> Self {
+        Self::with_side(InputProfile::Rectangular, crate::pack::DIAGNOSTIC_FIRE_SIDE)
+    }
+
+    fn with_side(profile: InputProfile, side: usize) -> Self {
         Self {
             profile,
-            input: Vec::with_capacity(TensorSize::SQUARE.input_values()),
+            side,
+            input: Vec::with_capacity(3 * side * side),
             geometry: None,
             maps: Vec::new(),
         }
     }
     /// Fills a reusable RGB NCHW tensor and returns the exact integer padding.
     pub fn prepare(&mut self, image: Image<'_>) -> (&[f32], Letterbox) {
-        let geometry = Letterbox::new(image.width, image.height, self.profile);
+        let geometry = Letterbox::new(image.width, image.height, self.profile, self.side);
         if self.geometry != Some(geometry) {
             self.input.resize(geometry.tensor.input_values(), PAD);
             self.input.fill(PAD);
@@ -233,6 +245,27 @@ mod tests {
         assert_eq!(geometry.tensor_size().dimensions(), [384, 640]);
         assert_eq!(tensor.len(), 3 * 384 * 640);
         assert_eq!(geometry.tensor_size().anchors(), 5040);
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn diagnostic_scale_maps_padding_and_edges_without_widening_live_shapes() {
+        let mut prep = Preprocessor::diagnostic_fire_scale();
+        for (width, height, shape, pad) in [
+            (640, 360, [544, 960], [0, 2]),
+            (360, 640, [960, 544], [2, 0]),
+        ] {
+            let pixels = vec![255; width as usize * height as usize * 3];
+            let (tensor, geo) = prep.prepare(Image::rgb(width, height, &pixels).unwrap());
+            assert_eq!(geo.tensor_size().dimensions(), shape);
+            assert_eq!([geo.left, geo.top], pad);
+            assert_eq!(tensor[0], PAD);
+            assert!(!InputProfile::Rectangular.accepts(geo.tensor_size()));
+            assert_eq!(geo.x(geo.left as f32), 0.0);
+            assert_eq!(geo.y(geo.top as f32), 0.0);
+            assert_eq!(geo.x(shape[1] as f32), f64::from(width));
+            assert_eq!(geo.y(shape[0] as f32), f64::from(height));
+        }
     }
 
     #[test]

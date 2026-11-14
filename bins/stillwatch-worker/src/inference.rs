@@ -213,7 +213,7 @@ pub fn run(mode: Mode) -> Result<()> {
     }
 }
 
-fn write_result(
+pub(super) fn write_result(
     output: &mut impl Write,
     payload: &[u8],
     timing: Option<ExecutionTiming>,
@@ -255,7 +255,7 @@ fn observe(
     })?
 }
 
-fn micros(duration: std::time::Duration) -> u32 {
+pub(super) fn micros(duration: std::time::Duration) -> u32 {
     u32::try_from(duration.as_micros()).unwrap_or(u32::MAX)
 }
 

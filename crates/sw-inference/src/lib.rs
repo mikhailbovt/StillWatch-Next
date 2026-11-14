@@ -235,10 +235,35 @@ impl Model {
         input: &[f32],
         consume: impl FnOnce(&[f32]) -> T,
     ) -> Result<T, InferenceError> {
-        if !self.profile.accepts(size)
-            || input.len() != size.input_values()
-            || input.iter().any(|value| !value.is_finite())
+        if !self.profile.accepts(size) {
+            return Err(InferenceError::Tensor);
+        }
+        self.run_tensor(size, input, consume)
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnose_fire_scale<T>(
+        &mut self,
+        size: TensorSize,
+        input: &[f32],
+        consume: impl FnOnce(&[f32]) -> T,
+    ) -> Result<T, InferenceError> {
+        if self.id != ModelId::Fire
+            || self.profile != InputProfile::Rectangular
+            || size.dimensions().into_iter().max() != Some(pack::DIAGNOSTIC_FIRE_SIDE)
         {
+            return Err(InferenceError::Tensor);
+        }
+        self.run_tensor(size, input, consume)
+    }
+
+    fn run_tensor<T>(
+        &mut self,
+        size: TensorSize,
+        input: &[f32],
+        consume: impl FnOnce(&[f32]) -> T,
+    ) -> Result<T, InferenceError> {
+        if input.len() != size.input_values() || input.iter().any(|value| !value.is_finite()) {
             return Err(InferenceError::Tensor);
         }
         let [height, width] = size.dimensions();
