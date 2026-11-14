@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import csv
 import hashlib
 import json
@@ -28,10 +29,12 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def p95(values):
+def timing_percentiles(values):
     if not values:
-        return None
-    return sorted(values)[max(0, math.ceil(0.95 * len(values)) - 1)]
+        return {key: None for key in ("p50", "p95", "p99")}
+    ordered = sorted(values)
+    return {f"p{percent}": round(ordered[math.ceil(percent / 100 * len(ordered)) - 1], 4)
+            for percent in (50, 95, 99)}
 
 
 def command(args, fixture, duration):
@@ -45,17 +48,21 @@ def command(args, fixture, duration):
 def stats(process):
     main = psutil.Process(process.pid)
     processes = [main, *main.children(recursive=True)]
-    rss = cpu = threads = 0
+    rss = threads = 0
+    counters = {}
     for item in processes:
         try:
             with item.oneshot():
-                rss += item.memory_info().rss
+                resident = item.memory_info().rss
                 counter = item.cpu_times()
-                cpu += counter.user + counter.system
-                threads += item.num_threads()
+                created = item.create_time()
+                thread_count = item.num_threads()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return rss, cpu, threads, len(processes)
+            continue
+        rss += resident
+        counters[(item.pid, created)] = counter.user + counter.system
+        threads += thread_count
+    return rss, counters, threads, len(counters)
 
 
 def data_size(directory):
@@ -110,18 +117,22 @@ def measure(args, root, fixture, count, samples):
         end = began + args.seconds
         timings = []
         observations = {}
-        degraded = 0
+        states = Counter()
         rss = []
         native = []
         workers = []
         disks = []
         heartbeat_path = args.output / "heartbeat.json"
         heartbeat_temp = heartbeat_path.with_suffix(".tmp")
-        first_cpu = stats(process)[1]
+        cpu_totals = stats(process)[1]
+        cpu_seconds = 0.0
         while time.monotonic() < end:
             interval = time.monotonic()
             point = interval - began
-            resident, _, threads, processes = stats(process)
+            resident, cpu_now, threads, processes = stats(process)
+            cpu_seconds += sum(max(0.0, seconds - cpu_totals.get(identity, 0.0))
+                               for identity, seconds in cpu_now.items())
+            cpu_totals = cpu_now
             rss.append(resident)
             native.append(threads)
             workers.append(processes)
@@ -133,7 +144,7 @@ def measure(args, root, fixture, count, samples):
                 timings.append(latency)
                 if status != 200:
                     raise RuntimeError(f"analysis status returned {status}")
-                degraded += int(item["state"] != "ready")
+                states[item["state"]] += 1
                 observations.setdefault(camera, []).append((point, item))
                 samples.writerow([
                     count, round(point, 3), camera, item["state"], item["source_epoch"],
@@ -143,13 +154,15 @@ def measure(args, root, fixture, count, samples):
             if args.repeat:
                 heartbeat_temp.write_text(json.dumps({
                     "cameras": count, "elapsed_seconds": round(point, 2), "rss_bytes": resident,
-                    "data_bytes": disks[-1], "processes": processes, "degraded_samples": degraded,
+                    "data_bytes": disks[-1], "processes": processes, "analysis_state_counts": dict(states),
                 }) + "\n", encoding="utf-8")
                 heartbeat_temp.replace(heartbeat_path)
             time.sleep(max(0, min(end, interval + args.sample_every) - time.monotonic()))
 
         elapsed = time.monotonic() - began
-        cpu = 100 * (stats(process)[1] - first_cpu) / elapsed
+        cpu_seconds += sum(max(0.0, seconds - cpu_totals.get(identity, 0.0))
+                           for identity, seconds in stats(process)[1].items())
+        cpu = 100 * cpu_seconds / elapsed
         rates = {}
         for camera, rows in observations.items():
             span = rows[-1][0] - rows[0][0]
@@ -169,16 +182,21 @@ def measure(args, root, fixture, count, samples):
                         if item["last_worker_ms"] is not None]
         frame_ages = [int(item["last_analysis_age_ms"]) for rows in observations.values() for _, item in rows
                       if item["last_analysis_age_ms"] is not None]
+        api = timing_percentiles(timings)
+        inference = timing_percentiles(worker_times)
+        age = timing_percentiles(frame_ages)
         return {
-            "cameras": count, "seconds": round(elapsed, 3), "api_p95_ms": round(p95(timings), 4),
-            "inference_worker_p95_ms_sampled": p95(worker_times),
-            "analysis_age_p95_ms_sampled": p95(frame_ages),
+            "cameras": count, "seconds": round(elapsed, 3), "api_p95_ms": api["p95"],
+            "inference_worker_p95_ms_sampled": inference["p95"],
+            "analysis_age_p95_ms_sampled": age["p95"],
+            "timing_percentiles_ms": {"api": api, "inference_worker_sampled": inference, "analysis_age_sampled": age},
             "rss_median_mib": round(statistics.median(rss) / 2**20, 2),
             "rss_max_mib": round(max(rss) / 2**20, 2),
             "rss_start_mib": round(rss[0] / 2**20, 2), "rss_end_mib": round(rss[-1] / 2**20, 2),
             "data_start_bytes": disks[0], "data_end_bytes": disks[-1], "data_max_bytes": max(disks),
             "cpu_percent_one_core": round(cpu, 2), "threads_max": max(native), "processes_max": max(workers),
-            "degraded_samples": degraded, "analysis_samples": len(timings),
+            "cpu_measurement": "sampled lower bound across process lifetimes",
+            "analysis_state_counts": dict(states), "analysis_samples": len(timings),
             "per_camera": rates,
         }
 
