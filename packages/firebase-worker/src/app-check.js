@@ -1,5 +1,6 @@
 const MAX_TOKEN = 12 * 1024;
 const DEBUG_TOKEN = /^[\w-]{16,128}$/;
+const REFRESH_RESERVE_MS = 5 * 60_000;
 
 export function appCheckProvider(config, credentialFile, readFile) {
   let cached;
@@ -38,19 +39,22 @@ export function appCheckProvider(config, credentialFile, readFile) {
     cached = validToken(data.token, config.firebase);
     return cached;
   };
-  const credentialReady = async () => {
+  const credentialStatus = async () => {
     try {
-      if (config.appCheck === "token_file") await readToken();
-      else await readDebugToken();
-      return true;
+      if (config.appCheck === "token_file") {
+        const { expireTimeMillis } = await readToken();
+        return expireTimeMillis <= Date.now() + REFRESH_RESERVE_MS ? "renewal_due" : "ready";
+      }
+      await readDebugToken();
+      return "development_debug";
     } catch {
-      return false;
+      return "unavailable";
     }
   };
-  return { acquire, credentialReady };
+  return { acquire, credentialStatus };
 }
 
-function validToken(token, { projectId, appId }) {
+export function validToken(token, { projectId, appId }) {
   if (typeof token !== "string" || token.length > MAX_TOKEN || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) {
     throw new Error("app_check_unavailable");
   }

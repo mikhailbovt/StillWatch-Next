@@ -66,12 +66,15 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("Invalid loopback port");
   const raw = JSON.parse((await readFile(path, 8192)).toString("utf8"));
   const config = readConfiguration(raw);
+  if (process.env.STILLWATCH_FIREBASE_PRODUCTION === "1" && config.appCheck !== "token_file") {
+    throw new Error("Production worker requires token_file mode");
+  }
   const coreDigest = credential((await readFile(coreTokenFile, 128, true)).toString("ascii").trim());
   const browserDigest = config.mode === "hybrid_web"
     ? credential((await readFile(browserTokenFile, 128, true)).toString("ascii").trim())
     : null;
   if (browserDigest && timingSafeEqual(coreDigest, browserDigest)) throw new Error("Separate worker credentials are required");
-  const { acquire: appCheck, credentialReady } = appCheckProvider(config, appCheckFile, readFile);
+  const { acquire: appCheck, credentialStatus } = appCheckProvider(config, appCheckFile, readFile);
   const host = "127.0.0.1:" + port;
   const origin = "http://" + host;
   const hybrid = config.mode === "hybrid_web";
@@ -189,11 +192,12 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
     }
     if (!authenticated(req, coreDigest)) return reply(res, 401, { error: "unauthorized" });
     if (req.method === "GET" && req.url === "/health") {
-      const cloudCredentialsPresent = await credentialReady();
+      const appCheckState = await credentialStatus();
       return reply(res, 200, {
         mode: config.mode, sdk_version: firebaseSdkVersion, model: config.model,
         semantic_evaluation: true,
-        cloud_transport: cloudCredentialsPresent && (!hybrid || browserReady()),
+        cloud_transport: appCheckState !== "unavailable" && (!hybrid || browserReady()),
+        app_check_state: appCheckState,
         local_state: hybrid ? browserState() : "disconnected",
         max_images: 5, max_bytes: maxRequestBytes, busy: running,
       });

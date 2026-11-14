@@ -152,12 +152,16 @@ def run(args):
             assert request(origin, "/evaluate", core_credential, fire_packet(), binary=True)[0] == 502
             # These fixtures only exercise local claim checks. No token is
             # presented to Firebase by the health endpoint.
-            for claims, ready in ((valid_claims, True), (valid_claims | {"exp": 1}, False),
-                                  (valid_claims | {"sub": "1:000:web:other"}, False),
-                                  (valid_claims | {"aud": ["projects/other"]}, False)):
+            for claims, expected in ((valid_claims, "renewal_due"),
+                                     (valid_claims | {"exp": int(time.time()) + 3600}, "ready"),
+                                     (valid_claims | {"exp": 1}, "unavailable"),
+                                     (valid_claims | {"sub": "1:000:web:other"}, "unavailable"),
+                                     (valid_claims | {"aud": ["projects/other"]}, "unavailable")):
                 private(app_check, f"{encoded({'alg': 'RS256'})}.{encoded(claims)}.fixture")
                 status, body = request(origin, "/health", core_credential)
-                assert status == 200 and json.loads(body)["cloud_transport"] is ready
+                capabilities = json.loads(body)
+                assert status == 200 and capabilities["app_check_state"] == expected
+                assert capabilities["cloud_transport"] is (expected != "unavailable")
             if args.core:
                 with run_core(args.core, args.worker, root / "core", root, root / "core.log",
                               "--semantic-worker", f"127.0.0.1:{port}",

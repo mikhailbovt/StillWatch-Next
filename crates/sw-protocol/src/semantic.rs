@@ -51,6 +51,10 @@ pub struct SemanticStatus {
     pub sdk_version: Option<String>,
     pub cloud_model: Option<String>,
     pub local_model_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_route_ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_check_state: Option<AppCheckState>,
     pub used_today: u32,
     pub daily_request_limit: u32,
 }
@@ -63,10 +67,24 @@ pub struct ProviderCapabilities {
     pub model: String,
     pub semantic_evaluation: bool,
     pub cloud_transport: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_check_state: Option<AppCheckState>,
     pub local_state: LocalState,
     pub max_images: u8,
     pub max_bytes: usize,
     pub busy: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AppCheckState {
+    Ready,
+    RenewalDue,
+    DevelopmentDebug,
+    Unavailable,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

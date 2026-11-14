@@ -3,9 +3,25 @@
   "title": "SemanticStatus",
   "type": "object",
   "properties": {
+    "app_check_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AppCheckState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "cloud_model": {
       "type": [
         "string",
+        "null"
+      ]
+    },
+    "cloud_route_ready": {
+      "type": [
+        "boolean",
         "null"
       ]
     },
@@ -53,6 +69,16 @@
     "daily_request_limit"
   ],
   "$defs": {
+    "AppCheckState": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "renewal_due",
+        "development_debug",
+        "unavailable",
+        "unknown"
+      ]
+    },
     "SemanticState": {
       "type": "string",
       "enum": [

@@ -177,6 +177,10 @@ class _CoreSettingsState extends State<CoreSettings> {
                         readable(value['last_inference_source'] as String),
                       if (value['cloud_model'] is String)
                         value['cloud_model'] as String,
+                      if (value['local_model_state'] case final String local)
+                        'On-device ${readable(local)}',
+                      if (value['app_check_state'] case final String appCheck)
+                        'App Check ${readable(appCheck)}',
                     ].join(' · '),
                   );
                 },

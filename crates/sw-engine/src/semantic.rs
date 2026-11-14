@@ -213,6 +213,8 @@ impl SemanticSupervisor {
                 sdk_version: None,
                 cloud_model: None,
                 local_model_state: None,
+                cloud_route_ready: None,
+                app_check_state: None,
                 used_today: 0,
                 daily_request_limit: config.daily_limit,
             }),
@@ -228,6 +230,8 @@ impl SemanticSupervisor {
             sdk_version: None,
             cloud_model: None,
             local_model_state: None,
+            cloud_route_ready: None,
+            app_check_state: None,
             used_today: 0,
             daily_request_limit: 0,
         }
@@ -462,6 +466,8 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
             };
             status.sdk_version = capabilities.map(|info| info.sdk_version.clone());
             status.cloud_model = capabilities.map(|info| info.model.clone());
+            status.cloud_route_ready = capabilities.map(|info| info.cloud_transport);
+            status.app_check_state = capabilities.and_then(|info| info.app_check_state);
             status.local_model_state = capabilities.map(|info| {
                 match info.local_state {
                     LocalState::Ready => "ready",
