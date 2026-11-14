@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import json
 import os
@@ -64,7 +65,21 @@ def check_port(port):
         return False
 
 
-def run(core, worker, mediamtx, ffmpeg):
+def windows_machine_secret(path, clear):
+    command = """Add-Type -AssemblyName System.Security
+$clear = [Convert]::FromBase64String([Console]::ReadLine())
+$secret = [Security.Cryptography.ProtectedData]::Protect(
+    $clear, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+[Console]::Write([Convert]::ToBase64String($secret))"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        input=base64.b64encode(clear).decode("ascii") + "\n",
+        text=True, capture_output=True, check=True, timeout=15,
+    )
+    path.write_bytes(base64.b64decode(result.stdout, validate=True))
+
+
+def run(core, worker, mediamtx, ffmpeg, dpapi=False):
     with TemporaryDirectory(prefix="stillwatch-rtsp-") as temp:
         root = Path(temp)
         port = free_port()
@@ -103,7 +118,13 @@ paths:
         credentials_dir.mkdir()
         credential_id = str(uuid.uuid4())
         cred = credentials_dir / f"{credential_id}.json"
-        cred.write_text(json.dumps({"username": "fixture-reader", "password": "fixture-password"}))
+        clear = json.dumps({"username": "fixture-reader", "password": "fixture-password"})
+        cred.write_text(clear)
+        encrypted = cred.with_suffix(".dpapi")
+        if dpapi:
+            windows_machine_secret(encrypted, clear.encode("utf-8"))
+            # A protected file must take precedence even if a legacy copy is present.
+            cred.write_text("{}")
         if os.name != "nt":
             cred.chmod(0o600)
         publish = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-f", "lavfi",
@@ -137,6 +158,14 @@ paths:
                         cameras = [client.camera(camera_id) for camera_id in ids]
                         return cameras if all(c["runtime"]["state"] == "streaming" and int(c["runtime"]["frame"]) >= 3 for c in cameras) else None
                     initial = until(streaming, 15)
+                    if dpapi:
+                        wrong_id = str(uuid.uuid4())
+                        (credentials_dir / f"{wrong_id}.json").write_text(clear)
+                        (credentials_dir / f"{wrong_id}.dpapi").write_bytes(b"invalid DPAPI fixture")
+                        failed = client.call("POST", "/api/v2/source-probes",
+                                             {"source": source | {"credential_ref": wrong_id}})
+                        assert failed[0] == 400 and "fixture-password" not in json.dumps(failed)
+                        cred.unlink()
                 until(lambda: any(client.camera(camera_id)["runtime"]["state"] in ("retrying", "starting") for camera_id in ids))
                 assert client.call("GET", "/health/ready")[0] == 200
                 with launch(publish, root / "publisher-restart.log"):
@@ -145,12 +174,17 @@ paths:
                         return current and all(int(a["source_epoch"]) > int(b["source_epoch"]) for a, b in zip(current, initial, strict=True))
                     until(recovered, 20)
         print(json.dumps({"platform": os.name, "rtsp_tcp": True, "rtsp_udp": True, "credential_reference": True,
-                          "reconnect": True, "unlisted_peer_rejected": True}))
+                          "reconnect": True, "unlisted_peer_rejected": True,
+                          "windows_dpapi": dpapi, "invalid_encrypted_file_blocks_fallback": dpapi}))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ("core", "worker", "mediamtx", "ffmpeg"):
         parser.add_argument(f"--{argument}", type=Path, required=True)
+    parser.add_argument("--dpapi", action="store_true", help="Use a Windows machine-protected credential fixture.")
     options = parser.parse_args()
-    run(*(getattr(options, arg).resolve(strict=True) for arg in ("core", "worker", "mediamtx", "ffmpeg")))
+    if options.dpapi and os.name != "nt":
+        parser.error("--dpapi requires Windows")
+    run(*(getattr(options, arg).resolve(strict=True) for arg in ("core", "worker", "mediamtx", "ffmpeg")),
+        dpapi=options.dpapi)

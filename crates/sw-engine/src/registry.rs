@@ -19,7 +19,6 @@ use sw_storage::{
 };
 use thiserror::Error;
 use tokio::{
-    io::AsyncReadExt,
     sync::{Semaphore, watch},
     task::JoinHandle,
 };
@@ -525,42 +524,7 @@ impl CameraRegistry {
             .credentials_root
             .as_ref()
             .ok_or(RegistryError::Source)?;
-        let path = root.join(format!("{id}.json"));
-        let meta = tokio::fs::symlink_metadata(&path)
-            .await
-            .map_err(|_| RegistryError::Source)?;
-        if !meta.file_type().is_file() || meta.len() > 4096 {
-            return Err(RegistryError::Source);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if meta.permissions().mode() & 0o077 != 0 {
-                return Err(RegistryError::Source);
-            }
-        }
-        let mut data = Vec::new();
-        tokio::fs::File::open(path)
-            .await
-            .map_err(|_| RegistryError::Source)?
-            .take(4097)
-            .read_to_end(&mut data)
-            .await
-            .map_err(|_| RegistryError::Source)?;
-        if data.len() > 4096 {
-            return Err(RegistryError::Source);
-        }
-        let credentials: CameraCredentials =
-            serde_json::from_slice(&data).map_err(|_| RegistryError::Source)?;
-        if credentials.username.is_empty()
-            || credentials.username.len() > 512
-            || credentials.password.len() > 1024
-            || credentials.username.chars().any(char::is_control)
-            || credentials.password.chars().any(char::is_control)
-        {
-            return Err(RegistryError::Source);
-        }
-        Ok(Some(credentials))
+        crate::camera_credentials::read(root, id).await.map(Some)
     }
 
     pub async fn supervise(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {

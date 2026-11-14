@@ -1,5 +1,6 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+mod camera_credentials;
 mod capture_process;
 mod evidence;
 mod hazards;
@@ -11,6 +12,9 @@ mod replay_upload;
 mod scene;
 mod semantic;
 mod vision;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_credentials;
 
 pub use capture_process::{
     CaptureProcess, CaptureRead, Frame, FrameBudget, WorkerBinary, WorkerError,

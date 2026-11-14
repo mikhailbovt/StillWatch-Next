@@ -62,7 +62,30 @@ When a Core's address or certificate changes, verify the change with the operato
 
 ## Cameras and video
 
-Add the numeric control address of each authorized network camera to the rtsp_peers array in core.json. Enter the same address and port in the Companion. For authenticated cameras, place a private JSON file containing username and password in the configured camera_credentials_dir. Name the file with its UUID and the .json suffix. Use only the UUID when configuring the camera. The RTSP adapter rejects redirects and confines negotiated UDP media to the control peer. RTSPS requires a trusted certificate with an IP subject alternative name matching the configured camera. Windows SChannel verifies the chain and its revocation status in the worker account. The initial probe allows extra time for this check. The camera setup timeout in the SDKs covers it.
+Add the numeric control address of each authorized network camera to the rtsp_peers array in core.json. Enter the same address and port in the Companion. For authenticated cameras, provision credentials on the Core host and enter their UUID in the camera configuration. The RTSP adapter rejects redirects and confines negotiated UDP media to the control peer. RTSPS requires a trusted certificate with an IP subject alternative name matching the configured camera. Windows SChannel verifies the chain and its revocation status in the worker account. The initial probe allows extra time for this check. The camera setup timeout in the SDKs covers it.
+
+On Windows, provision new camera credentials as machine-scope DPAPI blobs. Core reads `UUID.dpapi` before the corresponding JSON file. Run the following in an elevated Windows PowerShell on the Core host after installing the MSI. The credential directory inherits the private ACL of the installed data directory. Set `camera_credentials_dir` to that directory. A custom directory also requires an ACL that limits access to Administrators, SYSTEM and the Core service account. Machine-scope DPAPI binds the blob to this Windows installation, and any account that can read the blob on that host can decrypt it. Use a fresh reference for rotation or replace an existing blob atomically, then probe the camera and remove its old plaintext file. Reprovision protected credentials when restoring to a different machine. [Windows Data Protection API](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
+
+~~~powershell
+Add-Type -AssemblyName System.Security
+$directory = Join-Path $env:ProgramData 'StillWatch\camera-credentials'
+New-Item -ItemType Directory -Path $directory -Force | Out-Null
+$id = [Guid]::NewGuid()
+$camera = Get-Credential -Message 'Camera username and password'
+$json = @{username=$camera.UserName; password=$camera.GetNetworkCredential().Password} | ConvertTo-Json -Compress
+$plain = [Text.Encoding]::UTF8.GetBytes($json)
+try {
+    $blob = [Security.Cryptography.ProtectedData]::Protect(
+        $plain, $null, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+    [IO.File]::WriteAllBytes((Join-Path $directory "$id.dpapi"), $blob)
+    $id
+} finally {
+    [Array]::Clear($plain, 0, $plain.Length)
+    Remove-Variable json,plain,camera
+}
+~~~
+
+On Linux and NAS, mount the credential directory from the host's private secret store, or supply a protected directory with files owned by the service account and mode 0600. Use `UUID.json` with `username` and `password` fields. Limit the service's read access to the credential files it needs. Back up the secrets separately under the host's protection.
 
 For ONVIF, add each approved numeric device-service URL to `onvif_endpoints` in core.json. Set `onvif_interface` to the local IPv4 address of the Core's camera network to enable multicast discovery. The owner can open **Find ONVIF stream** in the camera editor, discover devices on that network, or enter an approved device URL directly. Set the credential reference in the camera editor before opening the picker for a camera that requires authentication. The picker reads video profiles through Media or Media2. Select a profile, allow its RTSP socket in `rtsp_peers`, and probe it before enabling monitoring. ONVIF calls use the same numeric address, scheme and port as the approved device URL. For HTTPS, configure `onvif_ca_file` with the PEM trust anchors for those cameras and use certificates with the matching IP subject alternative names. Keep legacy HTTP cameras on a private camera network. [ONVIF interface specifications](https://www.onvif.org/profiles/specifications/)
 

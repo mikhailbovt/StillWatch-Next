@@ -276,8 +276,14 @@ Compose ограничивает `/tmp` 512 MiB и включает ротаци
 | Fedora RPM | `8553d5995a0120c657d37bf0afe67a36fe145bb36783cd9e2c232002f08e1267` |
 | CPU OCI | `98d8abb1c5fa88e65c0fc7a928b3d8c37ab200bcd71760a21e73bc1850eab79d` |
 
-Точный Windows payload проверен через native CLI и API, включая ограничения SQLite, квоту backup и откат schema 7. Точный DEB прошёл проверку ONNX inference в офлайн OCI. Последняя чистая установка Windows MSI и Fedora RPM выше относится к `f1b21aa`. Rust 41 тест и Clippy прошли на Windows и Ubuntu, изменение lock добавило использование уже зафиксированного `fs4` в storage. Cargo Audit по текущему lock и Gitleaks по новым коммитам не нашли проблем.
+Точный Windows payload проверен через native CLI и API, включая ограничения SQLite, квоту backup и откат schema 7. Точный DEB прошёл проверку ONNX inference в офлайн OCI. Точный RPM прошёл установку, запуск всех трёх моделей от `stillwatch` и удаление с сохранением SQLite в Fedora 44. Последняя чистая установка Windows MSI относится к `f1b21aa`. Rust 41 тест и Clippy прошли на Windows и Ubuntu, изменение lock добавило использование уже зафиксированного `fs4` в storage. Cargo Audit по этому lock и Gitleaks по новым коммитам не нашли проблем.
 
 ### VisiFire, проверка переноса на наружные сцены
 
 На замороженных роликах Bilkent первая реакция на новом виде двора произошла в 9.87 с. Первое отчётливое пламя видно между 1-й и 2-й секундами, поэтому неопределённость разметки пересекает порог задержки 8 с. На коротком 4.67-секундном дальнем плане review возник в 2.44 с. Четыре связанных вида лесного пламени дали первые review за 0.60–1.13 с и пять повторов. Подтверждённый дубликат из FIRESENSE исключён до inference. Все тесты offline. Прогон не снимает зафиксированные пропуски раннего дыма в помещениях. Методика и хэши в `models/evaluations/visifire-v1.md`. [Bilkent VisiFire](https://kilyos.ee.bilkent.edu.tr/~signal/VisiFire/)
+
+### Уведомление в iOS Simulator и защита паролей камер Windows
+
+На iPhone 17 Pro Simulator сборка из `a8b38be` получила тестовый инцидент от Core по закреплённому TLS. Системный центр iOS показал уведомление при предварительном разрешении. Core записал квитанцию устройства, а поле ACK осталось пустым. Тест также проверил WHEP с маской, Keychain и журнал. Xcode 26.6 собрал неподписанный архив. Физический iPhone, звук и доставка при блокировке остаются открыты. Артефакты в `.local/qualification/ios-simulator-43547081335`. [Сквозной прогон iOS](https://github.com/mikhailbovt/stillwatch-next-ios-qualification/actions/runs/43547081335)
+
+Windows Core открыл зашифрованные DPAPI credentials по UUID в loopback RTSP с TCP и UDP, сохранил поток после восстановления источника и отклонил повреждённый blob при рабочем JSON с тем же UUID. Отдельные прогоны подтвердили прежние JSON-ссылки на Windows и защищённые файловыми правами JSON-ссылки на Ubuntu. На обеих ОС прошли 41 Rust-тест, Clippy и release build. Инструкция провижининга описана в `docs/operations.md`.
