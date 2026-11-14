@@ -254,8 +254,10 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
     use std::time::{Duration, Instant};
 
     use sw_protocol::{
-        CameraConfig, CameraPatch, CameraSource, Dimensions, EvidenceContext, EvidenceCoverage,
-        EvidenceInterval, LocalFacts, SemanticRoute,
+        CameraConfig, CameraPatch, CameraSource, Classification, Dimensions, EvidenceContext,
+        EvidenceCoverage, EvidenceInterval, EvidenceVisibility, InferenceSource, LocalFacts,
+        MedicalObservation, Observable, ObservationReport, SemanticObservation, SemanticReport,
+        SemanticRoute,
     };
 
     let root = tempfile::tempdir().unwrap();
@@ -413,12 +415,16 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
             .unwrap()
             .camera
     };
-    let claim = async |route, ready| {
-        store
-            .claim_semantic(route, ready, crate::utc_ms() + 100, 5, 0, false)
-            .await
-            .unwrap()
+    let owner = Uuid::new_v4();
+    let schedule = |route, ready| crate::SemanticSchedule {
+        owner,
+        route,
+        local_ready: ready,
+        daily_limit: 5,
+        minimum_interval_ms: 0,
+        include_replay: false,
     };
+    let claim = async |route, ready| store.claim_semantic(schedule(route, ready)).await.unwrap();
 
     let default_epoch = store.bump_camera_epoch(camera.id, 1).await.unwrap().epoch;
     evidence(default_epoch, 1_500, true).await;
@@ -432,44 +438,213 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
     assert!(claim(SemanticRoute::CloudOnly, true).await.is_none());
     assert!(claim(SemanticRoute::PreferLocal, false).await.is_none());
     assert!(claim(SemanticRoute::LocalOnly, false).await.is_none());
-    let local_work = claim(SemanticRoute::PreferLocal, true).await.unwrap();
+    let local_claim = claim(SemanticRoute::PreferLocal, true).await.unwrap();
+    let initial_work = store.load_semantic(&local_claim).await.unwrap().unwrap();
+    assert_eq!(store.semantic_usage(0).await.unwrap(), 0);
+    store
+        .call(move |db| {
+            db.conn.execute(
+                "UPDATE semantic_jobs SET lease_until = 0 WHERE packet_id = ?",
+                [local.packet_id.as_bytes()],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let successor = crate::SemanticSchedule {
+        owner: Uuid::new_v4(),
+        ..schedule(SemanticRoute::PreferLocal, true)
+    };
+    let local_claim = store.claim_semantic(successor).await.unwrap().unwrap();
+    let local_work = store.load_semantic(&local_claim).await.unwrap().unwrap();
+    assert_eq!(local_work.request_id, initial_work.request_id);
+    assert_eq!(
+        store
+            .dispatch_semantic(&initial_work, schedule(SemanticRoute::PreferLocal, true))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(store.semantic_usage(0).await.unwrap(), 0);
     assert_eq!(local_work.route, SemanticRoute::LocalOnly);
     assert_eq!(local_work.stamp, local);
 
     let opted_in = patch(1, true, "allow-cloud", 4_000).await;
-    assert!(!store.semantic_current(&local_work, 4_000).await.unwrap());
+    assert!(store.load_semantic(&local_claim).await.unwrap().is_none());
+    assert_eq!(
+        store
+            .dispatch_semantic(&local_work, schedule(SemanticRoute::PreferLocal, true))
+            .await
+            .unwrap(),
+        None
+    );
+    store.release_semantic(&local_claim, true).await.unwrap();
     assert!(claim(SemanticRoute::CloudOnly, false).await.is_none());
     let cloud = evidence(opted_in.epoch, 5_000, false).await;
-    let cloud_work = claim(SemanticRoute::CloudOnly, false).await.unwrap();
+    let cloud_claim = claim(SemanticRoute::CloudOnly, false).await.unwrap();
+    let cloud_work = store.load_semantic(&cloud_claim).await.unwrap().unwrap();
     assert_eq!(cloud_work.stamp, cloud);
     assert_eq!(cloud_work.route, SemanticRoute::CloudOnly);
-    assert!(store.semantic_current(&cloud_work, 6_000).await.unwrap());
+    assert_eq!(
+        store
+            .dispatch_semantic(&cloud_work, schedule(SemanticRoute::CloudOnly, false))
+            .await
+            .unwrap(),
+        Some(1)
+    );
+    assert!(store.semantic_current(&cloud_work).await.unwrap());
 
     let opted_out = patch(2, false, "revoke-cloud", 7_000).await;
     assert!(opted_out.epoch > opted_in.epoch);
-    assert!(!store.semantic_current(&cloud_work, 7_000).await.unwrap());
+    assert!(!store.semantic_current(&cloud_work).await.unwrap());
     patch(3, true, "allow-cloud-again", 8_000).await;
-    assert!(!store.semantic_current(&cloud_work, 8_000).await.unwrap());
+    assert!(!store.semantic_current(&cloud_work).await.unwrap());
 
     let current = store.camera(camera.id).await.unwrap();
     let fresh_before_restart = evidence(current.epoch, 9_000, false).await;
     assert_ne!(fresh_before_restart.packet_id, cloud_work.stamp.packet_id);
-    drop(store);
-    let restarted = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let cloud_schedule = schedule(SemanticRoute::CloudOnly, false);
+    let report = SemanticReport {
+        sdk_version: "13.3.0".into(),
+        inference_source: InferenceSource::InCloud,
+        model: "gemini-3.5-flash-lite".into(),
+        usage_total_tokens: Some(10),
+        observation: ObservationReport {
+            classification: Classification::PossibleVisibleMedicalConcern,
+            observations: SemanticObservation::Medical(MedicalObservation {
+                person_visible: Observable::Yes,
+                transition_visible: Observable::Unknown,
+                persistent_low_posture: Observable::Yes,
+                same_subject_recovery_visible: Observable::Unknown,
+                visibility: EvidenceVisibility::Good,
+            }),
+            supporting_image_ids: vec!["f0".into()],
+            contradictions: vec![],
+            limitations: vec![],
+            brief_description: "A person is low in the frame.".into(),
+        },
+    };
+    let fresh_claim = store.claim_semantic(cloud_schedule).await.unwrap().unwrap();
+    let fresh_work = store.load_semantic(&fresh_claim).await.unwrap().unwrap();
+    assert_eq!(
+        store
+            .dispatch_semantic(&fresh_work, cloud_schedule)
+            .await
+            .unwrap(),
+        Some(2)
+    );
     assert!(
-        restarted
-            .claim_semantic(
-                SemanticRoute::CloudOnly,
-                false,
-                crate::utc_ms() + 200,
-                5,
-                0,
-                false
-            )
+        store
+            .claim_semantic(crate::SemanticSchedule {
+                daily_limit: 2,
+                ..cloud_schedule
+            })
             .await
             .unwrap()
             .is_none()
     );
+    store
+        .call(|db| {
+            db.conn.execute_batch(
+                "CREATE TEMP TRIGGER reject_semantic BEFORE UPDATE ON semantic_attempts
+            WHEN NEW.report IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        store
+            .save_semantic_response(&fresh_work, &report, Assessment::Concern)
+            .await
+            .is_err()
+    );
+    assert!(store.semantic_current(&fresh_work).await.unwrap());
+    store
+        .call(|db| {
+            db.conn.execute_batch("DROP TRIGGER reject_semantic;")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    store
+        .save_semantic_response(&fresh_work, &report, Assessment::Concern)
+        .await
+        .unwrap();
+    store
+        .save_semantic_response(&fresh_work, &report, Assessment::Concern)
+        .await
+        .unwrap();
+    assert_eq!(
+        store.finish_semantic_response().await.unwrap(),
+        Some(crate::SemanticCompleted::Applied {
+            source: InferenceSource::InCloud
+        })
+    );
+    assert_eq!(store.finish_semantic_response().await.unwrap(), None);
+    assert_eq!(store.semantic_usage(0).await.unwrap(), 2);
+
+    // An accepted provider response survives a Core restart as evidence history.
+    // Its previous monotonic clock cannot authorize escalation in this process.
+    let after_restart = evidence(current.epoch, 10_000, false).await;
+    let claim_before_restart = store.claim_semantic(cloud_schedule).await.unwrap().unwrap();
+    let work_before_restart = store
+        .load_semantic(&claim_before_restart)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(work_before_restart.stamp, after_restart);
+    assert_eq!(
+        store
+            .dispatch_semantic(&work_before_restart, cloud_schedule)
+            .await
+            .unwrap(),
+        Some(3)
+    );
+    store
+        .save_semantic_response(
+            &work_before_restart,
+            &report,
+            Assessment::ImmediateVisibleConcern,
+        )
+        .await
+        .unwrap();
+    let undispatched = evidence(current.epoch, 11_000, false).await;
+    drop(store);
+    let restarted = Store::open(root.path(), StoreConfig::default()).unwrap();
+    assert!(
+        restarted
+            .claim_semantic(schedule(SemanticRoute::CloudOnly, false))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        restarted.finish_semantic_response().await.unwrap(),
+        Some(crate::SemanticCompleted::Stale)
+    );
+    let states = restarted
+        .call(move |db| {
+            [
+                cloud.packet_id,
+                work_before_restart.stamp.packet_id,
+                undispatched.packet_id,
+            ]
+            .map(|packet| {
+                db.conn.query_row(
+                    "SELECT state FROM semantic_jobs WHERE packet_id = ?",
+                    [packet.as_bytes()],
+                    |r| r.get::<_, String>(0),
+                )
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(states, ["unknown_outcome", "completed", "expired"]);
+    assert_eq!(restarted.semantic_usage(0).await.unwrap(), 3);
 }
 
 #[test]

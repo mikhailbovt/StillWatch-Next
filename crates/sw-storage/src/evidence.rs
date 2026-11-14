@@ -352,11 +352,16 @@ impl Database {
             "UPDATE evidence_packets SET persisted_at = ?, semantic_eligible = ? WHERE id = ?",
             params![committed_at, eligible, packet],
         )?;
+        let queued =
+            eligible && write.context.is_some() && matches!(outcome, EvidenceOutcome::Persisted(_));
+        if queued {
+            tx.execute(
+                "INSERT INTO semantic_jobs(packet_id, request_id, state) VALUES (?, ?, 'queued')",
+                params![packet, id(&Uuid::new_v4())],
+            )?;
+        }
         tx.commit()?;
-        if eligible
-            && matches!(outcome, EvidenceOutcome::Persisted(_))
-            && let Some(time) = write.observation_time
-        {
+        if queued && let Some(time) = write.observation_time {
             let now = Instant::now();
             self.evidence_monotonic
                 .retain(|_, registered| registered.evidence_fresh(committed_at, now));

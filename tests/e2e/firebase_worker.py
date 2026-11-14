@@ -36,7 +36,7 @@ def request(origin, route, token=None, body=None, *, host=None, foreign_origin=N
     if foreign_origin is not None:
         headers["Origin"] = foreign_origin
     if request_id is not None:
-        headers["X-StillWatch-Request"] = request_id
+        headers["X-StillWatch-Request-Id" if route == "/evaluate" else "X-StillWatch-Request"] = request_id
     if body is not None:
         headers["Content-Type"] = "application/octet-stream" if binary else "application/json"
     req = urllib.request.Request(origin + route, data=body, headers=headers)
@@ -79,6 +79,8 @@ def fire_packet(route="cloud_only", timeout_ms=1000):
 def verify_waiting_browser(origin, core_credential, browser_credential):
     packet = fire_packet("local_only", 3000)
     ready = b'{"state":"ready"}'
+    assert request(origin, "/evaluate", core_credential, packet,
+                   binary=True, request_id="invalid")[0] == 400
 
     def healthy():
         code, body = request(origin, "/health", core_credential)
@@ -89,16 +91,18 @@ def verify_waiting_browser(origin, core_credential, browser_credential):
         until(healthy, 2)
         assert not browser.done()
         assert request(origin, "/device/poll", browser_credential, ready)[0] == 409
-        evaluation = pool.submit(request, origin, "/evaluate", core_credential, packet, binary=True)
+        request_id = str(uuid.uuid4())
+        evaluation = pool.submit(request, origin, "/evaluate", core_credential, packet,
+                                 binary=True, request_id=request_id, include_headers=True)
         status, body, headers = browser.result(timeout=3)
         assert status == 200 and body == packet
-        request_id = headers["X-StillWatch-Request"]
-        assert uuid.UUID(request_id)
+        assert headers["X-StillWatch-Request"] == request_id
         assert request(origin, "/device/attestation", browser_credential, b"{}", request_id=request_id)[0] == 409
         assert request(origin, "/device/result", browser_credential, b"{}", request_id=str(uuid.uuid4()))[0] == 409
         failed = b'{"error":"inference_unavailable"}'
         assert request(origin, "/device/result", browser_credential, failed, request_id=request_id)[0] == 204
-        assert evaluation.result(timeout=3)[0] == 503
+        code, _, headers = evaluation.result(timeout=3)
+        assert code == 503 and headers["X-StillWatch-Request-Id"] == request_id
         assert request(origin, "/device/result", browser_credential, failed, request_id=request_id)[0] == 409
     assert request(origin, "/device/poll", browser_credential, ready, timeout=7)[0] == 204
 

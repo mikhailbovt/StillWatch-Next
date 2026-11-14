@@ -43,7 +43,9 @@ pub use evidence::{
 };
 pub use health::{HealthIssue, HealthObservation};
 pub use legacy::{LegacyImport, LegacyManifest, import_legacy};
-pub use semantic::{SemanticOutcome, SemanticWork};
+pub use semantic::{
+    SemanticClaim, SemanticCompleted, SemanticOutcome, SemanticSchedule, SemanticWork,
+};
 pub use trust::{DeviceAccess, PairingGrant};
 
 const MAX_PAGE: usize = 200;

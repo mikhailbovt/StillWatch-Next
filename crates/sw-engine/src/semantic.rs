@@ -13,8 +13,11 @@ use sw_protocol::{
     EvidenceVisibility, InferenceSource, LocalFacts, LocalState, Observable, ProviderCapabilities,
     SemanticObservation, SemanticReport, SemanticRoute, SemanticState, SemanticStatus,
 };
-use sw_storage::{SemanticOutcome, SemanticWork, Store};
+use sw_storage::{
+    SemanticClaim, SemanticCompleted, SemanticOutcome, SemanticSchedule, SemanticWork, Store,
+};
 use tokio::{io::AsyncReadExt, sync::watch};
+use uuid::Uuid;
 
 const SDK: &str = "13.3.0";
 const CLOUD_MODEL: &str = "gemini-3.5-flash-lite";
@@ -41,6 +44,7 @@ pub trait SemanticProvider: Send + Sync {
 
     fn evaluate(
         &self,
+        request_id: Uuid,
         packet: Vec<u8>,
     ) -> impl Future<Output = Result<SemanticReport, SemanticProviderError>> + Send;
 }
@@ -97,6 +101,49 @@ struct Attachment<'a> {
     source_s: f64,
     sha256: &'a str,
     bytes: usize,
+}
+
+struct PreparedPacket {
+    packet: EvidencePacket,
+    images: Vec<Vec<u8>>,
+}
+
+impl PreparedPacket {
+    fn encode(&self, route: SemanticRoute, timeout: Duration) -> Result<Vec<u8>, SemanticOutcome> {
+        let attachments = self
+            .packet
+            .images
+            .iter()
+            .zip(&self.images)
+            .map(|(image, jpeg)| {
+                Ok(Attachment {
+                    id: &image.image_id,
+                    kind: image.kind,
+                    source_s: image.source_s,
+                    sha256: image.sha256.as_deref().ok_or(SemanticOutcome::Invalid)?,
+                    bytes: jpeg.len(),
+                })
+            })
+            .collect::<Result<Vec<_>, SemanticOutcome>>()?;
+        let wire = WirePacket {
+            packet: &self.packet,
+            attachments,
+            timeout_ms: timeout.as_millis() as u64,
+            route,
+        };
+        let metadata = serde_json::to_vec(&wire).map_err(|_| SemanticOutcome::Invalid)?;
+        let length = 4 + metadata.len() + self.images.iter().map(Vec::len).sum::<usize>();
+        if metadata.len() > RESPONSE_LIMIT || length > PACKET_LIMIT {
+            return Err(SemanticOutcome::Invalid);
+        }
+        let mut body = Vec::with_capacity(length);
+        body.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        body.extend(metadata);
+        for jpeg in &self.images {
+            body.extend_from_slice(jpeg);
+        }
+        Ok(body)
+    }
 }
 
 impl SemanticSupervisor {
@@ -196,11 +243,13 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
     }
 
     pub async fn run(self: Arc<Self>, mut stop: watch::Receiver<bool>) {
+        let lease_owner = Uuid::new_v4();
         let mut changes = self.store.subscribe();
         let mut refresh_at = Instant::now();
         let mut capabilities = None;
         let mut failures = 0u32;
         let mut next_request = Instant::now();
+        let mut pending = None;
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while !*stop.borrow() {
@@ -213,71 +262,81 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
                 refresh_at = Instant::now() + REFRESH;
             }
             if Instant::now() >= next_request
+                && let Some((work, result)) = &pending
+            {
+                match self.persist_result(work, result).await {
+                    Ok(()) => pending = None,
+                    Err(sw_storage::StoreError::Idempotency) => {
+                        pending = None;
+                        self.degrade();
+                    }
+                    Err(_) => {
+                        self.degrade();
+                        next_request = Instant::now() + Duration::from_secs(1);
+                    }
+                }
+            }
+            if pending.is_none()
+                && Instant::now() >= next_request
                 && let Some(info) = capabilities.as_ref()
                 && ready(info, self.config.route)
                 && !info.busy
-                && let Ok(Some(work)) = self
-                    .store
-                    .claim_semantic(
-                        self.config.route,
-                        info.local_state == LocalState::Ready,
-                        utc_ms(),
-                        self.config.daily_limit,
-                        4_000,
-                        self.config.include_replay,
-                    )
-                    .await
             {
-                if let Ok(mut status) = self.status.write() {
-                    status.used_today = status.used_today.saturating_add(1);
-                }
-                let outcome = tokio::select! {
-                    _ = stop.wait_for(|stopping| *stopping) => return,
-                    outcome = self.evaluate(&work) => outcome,
+                let schedule = SemanticSchedule {
+                    owner: lease_owner,
+                    route: self.config.route,
+                    local_ready: info.local_state == LocalState::Ready,
+                    daily_limit: self.config.daily_limit,
+                    minimum_interval_ms: 4_000,
+                    include_replay: self.config.include_replay,
                 };
-                match outcome {
-                    Ok(report) => {
-                        let source = report.inference_source;
-                        let assessment = project(&work.packet, &report);
-                        let saved = self
-                            .store
-                            .semantic_completed(work, report, assessment, utc_ms())
-                            .await;
-                        if let Ok(mut status) = self.status.write() {
-                            match saved {
-                                Ok(true) => {
-                                    status.last_inference_source = Some(
-                                        match source {
-                                            InferenceSource::InCloud => "in_cloud",
-                                            InferenceSource::OnDevice => "on_device",
-                                        }
-                                        .into(),
-                                    );
-                                    status.state = if status.used_today < self.config.daily_limit {
-                                        SemanticState::Available
-                                    } else {
-                                        SemanticState::Degraded
-                                    };
+                match self.store.claim_semantic(schedule).await {
+                    Ok(Some(claim)) => {
+                        let prepared = tokio::select! {
+                            _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => {
+                                let _ = self.store.release_semantic(&claim, false).await;
+                                return;
+                            }
+                            prepared = self.prepare_dispatch(&claim, schedule) => prepared,
+                        };
+                        if let Some((work, body)) = prepared {
+                            let outcome = tokio::select! {
+                                _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => {
+                                    let _ = self.store.semantic_failed(&work, SemanticOutcome::Unavailable).await;
+                                    return;
                                 }
-                                Ok(false) => {}
-                                Err(_) => status.state = SemanticState::Degraded,
+                                outcome = self.evaluate_dispatched(&work, body) => outcome,
+                            };
+                            if outcome
+                                .as_ref()
+                                .is_err_and(|error| *error != SemanticOutcome::Stale)
+                            {
+                                self.degrade();
+                                failures = failures.saturating_add(1);
+                                next_request =
+                                    Instant::now() + Duration::from_secs(1u64 << failures.min(5));
+                            } else {
+                                failures = 0;
                             }
+                            let saved = self.persist_result(&work, &outcome).await;
+                            if saved.is_err() {
+                                self.degrade();
+                                next_request = Instant::now() + Duration::from_secs(1);
+                                if !matches!(saved, Err(sw_storage::StoreError::Idempotency)) {
+                                    pending = Some((work, outcome));
+                                }
+                            } else if self.finish_response().await.is_err() {
+                                self.degrade();
+                                next_request = Instant::now() + Duration::from_secs(1);
+                            }
+                        } else {
+                            next_request = Instant::now() + Duration::from_millis(500);
                         }
-                        failures = 0;
                     }
-                    Err(error) => {
-                        let _ = self
-                            .store
-                            .semantic_failed(work.stamp, work.route, error, utc_ms())
-                            .await;
-                        if error != SemanticOutcome::Stale {
-                            if let Ok(mut status) = self.status.write() {
-                                status.state = SemanticState::Degraded;
-                            }
-                            failures = failures.saturating_add(1);
-                            next_request = Instant::now()
-                                + Duration::from_secs((1u64 << failures.min(6)).min(60));
-                        }
+                    Ok(None) => {}
+                    Err(_) => {
+                        self.degrade();
+                        next_request = Instant::now() + Duration::from_secs(1);
                     }
                 }
             }
@@ -289,16 +348,110 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
         }
     }
 
+    async fn persist_result(
+        &self,
+        work: &SemanticWork,
+        result: &Result<SemanticReport, SemanticOutcome>,
+    ) -> Result<(), sw_storage::StoreError> {
+        match result {
+            Ok(report) => {
+                self.store
+                    .save_semantic_response(work, report, project(&work.packet, report))
+                    .await
+            }
+            Err(error) => self.store.semantic_failed(work, *error).await,
+        }
+    }
+
+    async fn finish_response(&self) -> Result<(), sw_storage::StoreError> {
+        if let Some(SemanticCompleted::Applied { source }) =
+            self.store.finish_semantic_response().await?
+            && let Ok(mut status) = self.status.write()
+        {
+            status.last_inference_source = Some(
+                match source {
+                    InferenceSource::InCloud => "in_cloud",
+                    InferenceSource::OnDevice => "on_device",
+                }
+                .into(),
+            );
+            status.state = if status.used_today < self.config.daily_limit {
+                SemanticState::Available
+            } else {
+                SemanticState::Degraded
+            };
+        }
+        Ok(())
+    }
+
+    fn degrade(&self) {
+        if let Ok(mut status) = self.status.write() {
+            status.state = SemanticState::Degraded;
+        }
+    }
+
+    async fn prepare_dispatch(
+        &self,
+        claim: &SemanticClaim,
+        schedule: SemanticSchedule,
+    ) -> Option<(SemanticWork, PreparedPacket)> {
+        let prepared = async {
+            let work = self
+                .store
+                .load_semantic(claim)
+                .await
+                .map_err(|_| SemanticOutcome::Unavailable)?
+                .ok_or(SemanticOutcome::Stale)?;
+            let body = self.prepare_packet(&work).await?;
+            let used = self
+                .store
+                .dispatch_semantic(&work, schedule)
+                .await
+                .map_err(|_| SemanticOutcome::Unavailable)?;
+            if let Some(used) = used {
+                if let Ok(mut status) = self.status.write() {
+                    status.used_today = used;
+                }
+                Ok(Some((work, body)))
+            } else {
+                Ok(None)
+            }
+        }
+        .await;
+        match prepared {
+            Ok(Some(work)) => Some(work),
+            result => {
+                let expire = matches!(
+                    result,
+                    Err(SemanticOutcome::Invalid
+                        | SemanticOutcome::Stale
+                        | SemanticOutcome::Deadline)
+                );
+                if self.store.release_semantic(claim, expire).await.is_err()
+                    || matches!(
+                        result,
+                        Err(SemanticOutcome::Unavailable | SemanticOutcome::Invalid)
+                    )
+                {
+                    self.degrade();
+                }
+                None
+            }
+        }
+    }
+
     async fn refresh(&self, capabilities: Option<&ProviderCapabilities>) {
         let now = utc_ms();
         let used = self
             .store
             .semantic_usage(now.div_euclid(86_400_000) * 86_400_000)
             .await;
+        let stored = self.finish_response().await.is_ok();
         if let Ok(mut status) = self.status.write() {
             let route_ready = capabilities.is_some_and(|info| ready(info, self.config.route));
             status.route_ready = Some(route_ready);
-            status.state = if route_ready
+            status.state = if stored
+                && route_ready
                 && used
                     .as_ref()
                     .is_ok_and(|used| *used < self.config.daily_limit)
@@ -324,7 +477,7 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
         }
     }
 
-    async fn evaluate(&self, work: &SemanticWork) -> Result<SemanticReport, SemanticOutcome> {
+    async fn prepare_packet(&self, work: &SemanticWork) -> Result<PreparedPacket, SemanticOutcome> {
         let deadline_ms = work.stamp.expires_at.saturating_sub(utc_ms());
         let duration = Duration::from_millis(u64::try_from(deadline_ms).unwrap_or_default())
             .min(REQUEST_BUDGET);
@@ -333,7 +486,6 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
         }
         tokio::time::timeout(duration, async {
             let mut bodies = Vec::with_capacity(work.packet.images.len());
-            let mut attachments = Vec::with_capacity(work.packet.images.len());
             if !(1..=5).contains(&work.packet.images.len()) {
                 return Err(SemanticOutcome::Invalid);
             }
@@ -351,54 +503,59 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
                     .await
                     .map_err(|_| SemanticOutcome::Unavailable)?
                     .ok_or(SemanticOutcome::Unavailable)?;
-                let sha256 = image.sha256.as_deref().ok_or(SemanticOutcome::Invalid)?;
-                if jpeg.len() > IMAGE_LIMIT {
+                if image
+                    .sha256
+                    .as_deref()
+                    .is_none_or(|digest| digest.len() != 64)
+                    || jpeg.len() > IMAGE_LIMIT
+                {
                     return Err(SemanticOutcome::Invalid);
                 }
-                attachments.push(Attachment {
-                    id: &image.image_id,
-                    kind: image.kind,
-                    source_s: image.source_s,
-                    sha256,
-                    bytes: jpeg.len(),
-                });
                 bodies.push(jpeg);
             }
             let mut packet = work.packet.clone();
             packet.observed_host_utc = None;
             packet.persisted_at = None;
             packet.fresh_when_persisted = None;
-            let wire = WirePacket {
-                packet: &packet,
-                attachments,
-                timeout_ms: duration.as_millis() as u64,
-                route: work.route,
-            };
-            let metadata = serde_json::to_vec(&wire).map_err(|_| SemanticOutcome::Invalid)?;
-            let length = 4 + metadata.len() + bodies.iter().map(Vec::len).sum::<usize>();
-            if metadata.len() > RESPONSE_LIMIT || length > PACKET_LIMIT {
-                return Err(SemanticOutcome::Invalid);
-            }
-            let mut body = Vec::with_capacity(length);
-            body.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
-            body.extend(metadata);
-            for jpeg in bodies {
-                body.extend(jpeg);
-            }
-            if !self
-                .store
-                .semantic_current(work, utc_ms())
-                .await
-                .map_err(|_| SemanticOutcome::Unavailable)?
-            {
-                return Err(SemanticOutcome::Stale);
-            }
-            let report = self.transport.evaluate(body).await?;
-            validate(&work.packet, work.route, &report)?;
-            Ok(report)
+            Ok(PreparedPacket {
+                packet,
+                images: bodies,
+            })
         })
         .await
         .map_err(|_| SemanticOutcome::Deadline)?
+    }
+
+    async fn evaluate_dispatched(
+        &self,
+        work: &SemanticWork,
+        packet: PreparedPacket,
+    ) -> Result<SemanticReport, SemanticOutcome> {
+        if !self
+            .store
+            .semantic_current(work)
+            .await
+            .map_err(|_| SemanticOutcome::Unavailable)?
+        {
+            return Err(SemanticOutcome::Stale);
+        }
+        let now = utc_ms();
+        let monotonic = Instant::now();
+        if !work.observed.evidence_fresh(now, monotonic) {
+            return Err(SemanticOutcome::Stale);
+        }
+        let remaining = Duration::from_millis(work.stamp.expires_at.saturating_sub(now) as u64)
+            .min(REQUEST_BUDGET);
+        if remaining < Duration::from_millis(400) {
+            return Err(SemanticOutcome::Stale);
+        }
+        let body = packet.encode(work.route, remaining)?;
+        let report =
+            tokio::time::timeout(remaining, self.transport.evaluate(work.request_id, body))
+                .await
+                .map_err(|_| SemanticOutcome::Deadline)??;
+        validate(&work.packet, work.route, &report)?;
+        Ok(report)
     }
 }
 
@@ -416,12 +573,17 @@ impl SemanticProvider for FirebaseProvider {
         serde_json::from_slice(&bytes).map_err(|_| SemanticProviderError::Invalid)
     }
 
-    async fn evaluate(&self, body: Vec<u8>) -> Result<SemanticReport, SemanticProviderError> {
+    async fn evaluate(
+        &self,
+        request_id: Uuid,
+        body: Vec<u8>,
+    ) -> Result<SemanticReport, SemanticProviderError> {
         let response = self
             .http
             .post(format!("{}/evaluate", self.endpoint))
             .bearer_auth(&self.token)
             .header("Content-Type", "application/octet-stream")
+            .header("X-StillWatch-Request-Id", request_id.to_string())
             .body(body)
             .send()
             .await

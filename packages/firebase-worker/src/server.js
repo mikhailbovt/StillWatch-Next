@@ -201,6 +201,12 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
     if (req.method !== "POST" || req.url !== "/evaluate") return reply(res, 404, { error: "not_found" });
     if (running) return reply(res, 429, { error: "busy" });
     if (req.headers["content-type"] !== "application/octet-stream") return reply(res, 415, { error: "invalid_body" });
+    const requestId = req.headers["x-stillwatch-request-id"];
+    if (requestId !== undefined && (typeof requestId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId))) {
+      return reply(res, 400, { error: "invalid_request_id" });
+    }
+    if (requestId) res.setHeader("X-StillWatch-Request-Id", requestId);
     running = true;
     let controller;
     let timer;
@@ -220,7 +226,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
         }
         result = await new Promise((resolve, reject) => {
           controller.signal.addEventListener("abort", () => reject(new Error("timeout")), { once: true });
-          job = { id: randomUUID(), body, resolve, claimed: false, finished: false,
+          job = { id: requestId ?? randomUUID(), body, resolve, claimed: false, finished: false,
             route: packet.meta.route, attestation: false, signal: controller.signal };
           dispatch();
         });

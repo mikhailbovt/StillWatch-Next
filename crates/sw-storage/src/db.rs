@@ -25,7 +25,7 @@ use crate::{
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
 pub const APPLICATION_ID: i64 = 0x53574e32;
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
@@ -92,6 +92,11 @@ impl Database {
             notify,
             _lock: lock,
         };
+        if let Err(error) = db.recover_semantic_jobs()
+            && !matches!(&error, StoreError::Sql(error) if error.sqlite_error_code() == Some(ErrorCode::DiskFull))
+        {
+            return Err(error);
+        }
         if let Err(error) = db.reconcile_evidence() {
             if !matches!(&error, StoreError::Sql(error)
                 if error.sqlite_error_code() == Some(ErrorCode::DiskFull))
@@ -566,7 +571,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match (application_id, version) {
         (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
-        (APPLICATION_ID, 1..=8) => {
+        (APPLICATION_ID, 1..=9) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 1 {
                 tx.execute_batch(include_str!("migrations/002.sql"))?;
@@ -589,7 +594,10 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             if version <= 7 {
                 tx.execute_batch(include_str!("migrations/008.sql"))?;
             }
-            tx.execute_batch(include_str!("migrations/009.sql"))?;
+            if version <= 8 {
+                tx.execute_batch(include_str!("migrations/009.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/010.sql"))?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -613,6 +621,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             tx.execute_batch(include_str!("migrations/007.sql"))?;
             tx.execute_batch(include_str!("migrations/008.sql"))?;
             tx.execute_batch(include_str!("migrations/009.sql"))?;
+            tx.execute_batch(include_str!("migrations/010.sql"))?;
             tx.execute(
                 "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
                 params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],
