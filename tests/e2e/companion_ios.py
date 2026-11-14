@@ -8,9 +8,13 @@ import hashlib
 import ipaddress
 import json
 import socket
+import sqlite3
 import subprocess
+import time
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import UUID
 
 from replay_core import run_core, until
 
@@ -54,6 +58,12 @@ def run(args):
             assert code == 201, (code, camera)
             camera_id = camera["id"]
             until(lambda: client.camera(camera_id)["runtime"]["state"] == "replaying", 20)
+            with closing(sqlite3.connect(data / "stillwatch.sqlite3", timeout=3)) as db, db:
+                now = time.time_ns() // 1_000_000
+                db.execute(
+                    "INSERT INTO health_events(camera_id, code, opened_at, ended_at) VALUES (?, ?, ?, ?)",
+                    (UUID(camera_id).bytes, "camera_frozen", now - 60_000, now),
+                )
             offer = subprocess.check_output([
                 str(args.bin / "stillwatch-cli"), "pair", "--data-dir", str(data),
                 "--local", client.address.removeprefix("http://"), "--role", "viewer",

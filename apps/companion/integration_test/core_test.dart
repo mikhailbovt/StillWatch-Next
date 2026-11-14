@@ -80,6 +80,15 @@ void main() {
     await _waitFor(tester, find.text('Core connected'));
     await _waitFor(tester, find.text(_camera));
     expect(find.widgetWithText(FilledButton, 'Add a Core'), findsNothing);
+
+    await tester.tap(find.text('Settings'));
+    final history = find.text('Core health history');
+    await _waitFor(tester, history);
+    await tester.ensureVisible(history);
+    await tester.tap(history);
+    await _waitFor(tester, find.text('Camera frames frozen'));
+    await tester.tap(find.text('Active'));
+    await _waitFor(tester, find.text('No active technical events.'));
     await tester.pumpWidget(const SizedBox.shrink());
   }, timeout: const Timeout(Duration(minutes: 3)));
 }
