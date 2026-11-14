@@ -152,6 +152,7 @@ impl Database {
         write: EvidenceWrite,
         now: UnixMillis,
     ) -> Result<EvidenceOutcome, StoreError> {
+        self.require_evidence_recovery()?;
         let image_hashes: Vec<_> = write
             .images
             .iter()

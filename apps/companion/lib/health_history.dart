@@ -177,6 +177,7 @@ class _EventTile extends StatelessWidget {
       'semantic_budget_exhausted' => 'Daily semantic budget exhausted',
       'disk_space_low' => 'Core disk space below 512 MiB',
       'disk_space_unknown' => 'Core disk space could not be checked',
+      'database_budget_low' => 'Core database capacity is low',
       _ => 'Technical event',
     };
     return ListTile(

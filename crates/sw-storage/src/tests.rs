@@ -154,7 +154,15 @@ fn incident() -> NewIncident {
 }
 
 fn database(root: &Path, quota: u64) -> Database {
-    Database::open(root, quota, watch::channel(()).0).unwrap()
+    Database::open(
+        root,
+        &StoreConfig {
+            evidence_quota_bytes: quota,
+            ..StoreConfig::default()
+        },
+        watch::channel(()).0,
+    )
+    .unwrap()
 }
 
 fn counts(conn: &Connection) -> (u64, u64, u64) {
@@ -629,6 +637,199 @@ fn sqlite_full_and_read_only_keep_last_committed_state() {
         }
     }
     panic!("test did not reach SQLite page limit");
+}
+
+#[tokio::test]
+async fn metadata_quota_reports_pressure_and_reuses_pages_after_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let quota = 4 * 1024 * 1024;
+    let store = Store::open(
+        root.path(),
+        StoreConfig {
+            database_quota_bytes: quota,
+            ..StoreConfig::default()
+        },
+    )
+    .unwrap();
+    store.ready().await.unwrap();
+    let saved = store.create(incident(), 1_000).await.unwrap();
+    let inserted = store
+        .call(|db| {
+            db.conn
+                .execute("CREATE TABLE quota_fixture(payload BLOB)", [])?;
+            for i in 0..128 {
+                match db
+                    .conn
+                    .execute("INSERT INTO quota_fixture VALUES(zeroblob(65536))", [])
+                {
+                    Ok(_) => {}
+                    Err(error) if error.sqlite_error_code() == Some(ErrorCode::DiskFull) => {
+                        let count: i64 =
+                            db.conn
+                                .query_row("SELECT count(*) FROM quota_fixture", [], |row| {
+                                    row.get(0)
+                                })?;
+                        assert_eq!(count, i);
+                        return Ok(i);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            panic!("fixture did not exhaust the configured page quota");
+        })
+        .await
+        .unwrap();
+    assert!(inserted > 0);
+    assert!(matches!(
+        store.ready().await,
+        Err(StoreError::DatabaseCapacity)
+    ));
+    assert!(store.database_budget_low().await.unwrap());
+    assert!(matches!(
+        store
+            .call(|db| {
+                db.conn
+                    .execute("INSERT INTO quota_fixture VALUES(zeroblob(65536))", [])?;
+                Ok(())
+            })
+            .await,
+        Err(StoreError::DatabaseCapacity)
+    ));
+    assert!(fs::metadata(root.path().join(DATABASE_FILE)).unwrap().len() <= quota);
+    assert_eq!(store.get(saved.id).await.unwrap(), saved);
+    store
+        .call(|db| {
+            db.conn.execute("DROP TABLE quota_fixture", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(!store.database_budget_low().await.unwrap());
+    store.ready().await.unwrap();
+    store.create(incident(), 2_000).await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_recovers_pending_evidence_when_metadata_space_returns() {
+    let root = tempfile::tempdir().unwrap();
+    let config = StoreConfig {
+        database_quota_bytes: 4 * 1024 * 1024,
+        ..StoreConfig::default()
+    };
+    let mut db = Database::open(root.path(), &config, watch::channel(()).0).unwrap();
+    let mut saved = Vec::new();
+    for _ in 0..64 {
+        let hazard = db.create(incident(), 1_000).unwrap();
+        saved.push(hazard.id);
+    }
+    db.conn.execute_batch(
+        "UPDATE incidents SET camera_hazard = 1, state = json_set(state, '$.evidence_state', 'pending');
+         CREATE TABLE quota_fixture(payload BLOB);",
+    ).unwrap();
+    loop {
+        match db
+            .conn
+            .execute("INSERT INTO quota_fixture VALUES(zeroblob(4096))", [])
+        {
+            Ok(_) => {}
+            Err(error) if error.sqlite_error_code() == Some(ErrorCode::DiskFull) => break,
+            Err(error) => panic!("unexpected fixture result: {error:?}"),
+        }
+    }
+    drop(db);
+    let store = Store::open(root.path(), config).unwrap();
+    assert!(matches!(
+        store.ready().await,
+        Err(StoreError::DatabaseCapacity)
+    ));
+    assert_eq!(
+        store.get(saved[0]).await.unwrap().evidence_state,
+        EvidenceState::Pending
+    );
+    store
+        .call(|db| {
+            db.conn.execute("DROP TABLE quota_fixture", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    assert!(!store.database_budget_low().await.unwrap());
+    store.ready().await.unwrap();
+    for id in saved {
+        assert_eq!(
+            store.get(id).await.unwrap().evidence_state,
+            EvidenceState::Unavailable
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_pinned_wal_reader_cannot_grow_the_log_indefinitely() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let saved = store.create(incident(), 1_000).await.unwrap();
+    store
+        .call(|db| {
+            db.conn.execute_batch(
+                "CREATE TABLE wal_fixture(payload BLOB);
+                 INSERT INTO wal_fixture VALUES(zeroblob(1048576));",
+            )?;
+            let busy: i64 = db
+                .conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+            assert_eq!(busy, 0);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let reader = Connection::open(root.path().join(DATABASE_FILE)).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let count: i64 = reader
+        .query_row("SELECT count(*) FROM wal_fixture", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+    let mut suspended = false;
+    for iteration in 0..32 {
+        match store
+            .call(move |db| {
+                db.conn.execute(
+                    "UPDATE wal_fixture
+                     SET payload = substr(hex(zeroblob(524288)), 1, 1048576 - ?)",
+                    [iteration],
+                )?;
+                Ok(())
+            })
+            .await
+        {
+            Ok(()) => {}
+            Err(StoreError::DatabaseCapacity) => {
+                suspended = true;
+                break;
+            }
+            Err(error) => panic!("unexpected checkpoint result {error:?}"),
+        }
+    }
+    assert!(suspended);
+    let wal = root.path().join(format!("{DATABASE_FILE}-wal"));
+    let held_bytes = fs::metadata(&wal).unwrap().len();
+    assert!((16 * 1024 * 1024..18 * 1024 * 1024).contains(&held_bytes));
+    assert!(matches!(
+        store.ready().await,
+        Err(StoreError::DatabaseCapacity)
+    ));
+    store.healthy().await.unwrap();
+    assert_eq!(store.get(saved.id).await.unwrap(), saved);
+    assert!(matches!(
+        store.create(incident(), 2_000).await,
+        Err(StoreError::DatabaseCapacity)
+    ));
+    assert_eq!(fs::metadata(&wal).unwrap().len(), held_bytes);
+    reader.execute_batch("COMMIT").unwrap();
+    drop(reader);
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    store.ready().await.unwrap();
+    assert_eq!(fs::metadata(&wal).unwrap().len(), 0);
+    store.create(incident(), 3_000).await.unwrap();
 }
 
 #[tokio::test]

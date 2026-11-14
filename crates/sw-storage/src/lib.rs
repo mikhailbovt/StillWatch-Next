@@ -2,6 +2,7 @@
 
 mod alerts;
 mod backup;
+mod budget;
 mod cameras;
 mod db;
 mod evidence;
@@ -35,6 +36,7 @@ use uuid::Uuid;
 use db::Database;
 
 pub use backup::restore_backup;
+pub use budget::DEFAULT_DATABASE_QUOTA_BYTES;
 pub use cameras::{CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult};
 pub use evidence::{
     EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceResult, EvidenceWrite,
@@ -61,6 +63,8 @@ pub enum StoreError {
     Deadline,
     #[error("database writer is unavailable. Retry writes with the original idempotency key")]
     Unavailable,
+    #[error("database storage capacity reached")]
+    DatabaseCapacity,
     #[error("incident does not exist")]
     NotFound,
     #[error("incident already exists with different creation facts")]
@@ -145,6 +149,7 @@ pub struct CommandResult {
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
     pub evidence_quota_bytes: u64,
+    pub database_quota_bytes: u64,
     pub queue_capacity: usize,
 }
 
@@ -152,6 +157,7 @@ impl Default for StoreConfig {
     fn default() -> Self {
         Self {
             evidence_quota_bytes: 500 * 1024 * 1024,
+            database_quota_bytes: DEFAULT_DATABASE_QUOTA_BYTES,
             queue_capacity: 64,
         }
     }
@@ -185,6 +191,7 @@ impl Store {
     pub fn open(root: &Path, config: StoreConfig) -> Result<Self, StoreError> {
         if !(1..=4096).contains(&config.queue_capacity)
             || config.evidence_quota_bytes > i64::MAX as u64
+            || !budget::valid_quota(config.database_quota_bytes)
         {
             return Err(StoreError::Invalid);
         }
@@ -194,20 +201,18 @@ impl Store {
         let (notify, wake) = watch::channel(());
         let handle = thread::Builder::new()
             .name("stillwatch-sqlite".into())
-            .spawn(
-                move || match Database::open(&root, config.evidence_quota_bytes, notify) {
-                    Ok(mut db) => {
-                        if boot.send(Ok(db.identity)).is_ok() {
-                            for job in incoming {
-                                job(&mut db);
-                            }
+            .spawn(move || match Database::open(&root, &config, notify) {
+                Ok(mut db) => {
+                    if boot.send(Ok(db.identity)).is_ok() {
+                        for job in incoming {
+                            job(&mut db);
                         }
                     }
-                    Err(error) => {
-                        let _ = boot.send(Err(error));
-                    }
-                },
-            )?;
+                }
+                Err(error) => {
+                    let _ = boot.send(Err(error));
+                }
+            })?;
         let worker = Arc::new(Worker {
             requests: Some(requests),
             handle: Some(handle),
@@ -230,13 +235,16 @@ impl Store {
     }
 
     pub async fn healthy(&self) -> Result<(), StoreError> {
-        self.call(|db| {
-            let _: i64 = db
-                .conn
-                .query_row("SELECT singleton FROM core_identity", [], |row| row.get(0))?;
-            Ok(())
-        })
-        .await
+        self.call(|db| db.verify_readable()).await
+    }
+
+    pub async fn ready(&self) -> Result<(), StoreError> {
+        self.call(|db| db.ready()).await
+    }
+
+    /// Check write headroom and retry any recovery deferred by a full store.
+    pub async fn database_budget_low(&self) -> Result<bool, StoreError> {
+        self.call(|db| db.reconcile_storage()).await
     }
 
     async fn call<T: Send + 'static>(
@@ -249,7 +257,21 @@ impl Store {
             let outcome = if Instant::now() >= deadline {
                 Err(StoreError::Deadline)
             } else {
-                operation(db)
+                if db.budget.should_retry() {
+                    let _ = db.budget.check_wal(&db.conn);
+                }
+                let before = db.conn.total_changes();
+                let outcome = operation(db).map_err(|error| db.budget.classify(error));
+                if db.conn.total_changes() != before
+                    || matches!(
+                        &outcome,
+                        Err(StoreError::DatabaseCapacity | StoreError::Sql(_))
+                    )
+                {
+                    // A committed result stays valid even if checkpointing fails.
+                    let _ = db.budget.check_wal(&db.conn);
+                }
+                outcome
             };
             let _ = reply.send(outcome);
         });

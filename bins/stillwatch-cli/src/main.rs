@@ -10,10 +10,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
-use stillwatch_sdk::{Client, StaticToken};
+use stillwatch_sdk::{Client, Error as SdkError, StaticToken};
 use sw_protocol::{
-    CameraConfig, CameraPatch, Counter, DeviceRole, DeviceScope, IdempotencyKey, PairingRequest,
-    SourceProbeRequest,
+    CameraConfig, CameraPatch, Counter, DeviceRole, DeviceScope, Health, HealthState,
+    IdempotencyKey, PairingRequest, SourceProbeRequest,
 };
 use sw_storage::{LegacyImport, Store, StoreConfig, import_legacy, restore_backup};
 use uuid::Uuid;
@@ -145,11 +145,32 @@ async fn main() -> Result<()> {
         Command::Doctor { host, output } => {
             let client = local_client(&host.data_dir, host.local)?;
             let core = client.capabilities().await?;
-            let health = client.readiness().await?;
+            let health = match client.readiness().await {
+                Ok(health) => health,
+                Err(SdkError::Http { status: 503, .. }) => Health {
+                    state: HealthState::Degraded,
+                    api: core.version,
+                },
+                Err(error) => return Err(error.into()),
+            };
             let semantic = client.semantic_status().await?;
             let status = match client.status().await {
                 Ok(status) => Some(status),
-                Err(stillwatch_sdk::Error::Http { status: 404, .. }) => None,
+                Err(SdkError::Http { status: 404, .. }) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let active_host_health = match client.health_events(None, 200, true).await {
+                Ok(page) => Some(
+                    page.events
+                        .into_iter()
+                        .filter(|event| event.camera_id.is_none())
+                        .map(|event| event.code)
+                        .collect::<Vec<_>>(),
+                ),
+                Err(SdkError::Http {
+                    status: 404 | 503 | 507,
+                    ..
+                }) => None,
                 Err(error) => return Err(error.into()),
             };
             let mut cursor = None;
@@ -172,6 +193,7 @@ async fn main() -> Result<()> {
             let report = serde_json::to_string_pretty(&serde_json::json!({
                 "core_version": core.version, "cli_version": env!("CARGO_PKG_VERSION"),
                 "readiness": health, "status": status, "semantic": semantic, "active_cameras": cameras,
+                "active_host_health": active_host_health,
             }))?;
             if let Some(path) = output {
                 use std::io::Write;

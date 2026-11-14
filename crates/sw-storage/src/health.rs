@@ -22,6 +22,7 @@ pub enum HealthIssue {
     SemanticBudgetExhausted,
     DiskSpaceLow,
     DiskSpaceUnknown,
+    DatabaseBudgetLow,
 }
 
 impl HealthIssue {
@@ -38,6 +39,7 @@ impl HealthIssue {
             Self::SemanticBudgetExhausted => "semantic_budget_exhausted",
             Self::DiskSpaceLow => "disk_space_low",
             Self::DiskSpaceUnknown => "disk_space_unknown",
+            Self::DatabaseBudgetLow => "database_budget_low",
         }
     }
 }

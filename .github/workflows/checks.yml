@@ -66,6 +66,9 @@ jobs:
           uv run --no-project --python 3.12.14 python -B tests/e2e/core_diagnostics.py \
             --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
             --cli "target/debug/stillwatch-cli$suffix"
+          uv run --no-project --python 3.12.14 python -B tests/e2e/storage_budget.py \
+            --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
+            --cli "target/debug/stillwatch-cli$suffix"
       - name: Check alarm startup and delivery
         shell: bash
         run: |

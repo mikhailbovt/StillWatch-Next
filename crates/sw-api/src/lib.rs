@@ -252,7 +252,7 @@ async fn liveness() -> Json<Health> {
 async fn readiness(State(state): State<Api>) -> (StatusCode, Json<Health>) {
     let ready = !*state.shutdown.borrow()
         && matches!(
-            tokio::time::timeout(Duration::from_secs(2), state.store.healthy()).await,
+            tokio::time::timeout(Duration::from_secs(2), state.store.ready()).await,
             Ok(Ok(()))
         );
     let (status, state) = if ready {

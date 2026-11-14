@@ -189,6 +189,13 @@ pub(crate) async fn check_disk(store: &Store, root: &Path) {
             bytes < LOW_DISK_BYTES,
         ));
     }
+    match store.database_budget_low().await {
+        Ok(low) => observations.push(HealthObservation::global(
+            HealthIssue::DatabaseBudgetLow,
+            low,
+        )),
+        Err(_) => eprintln!("StillWatch could not check the metadata storage budget"),
+    }
     if store.record_health(observations, now_ms()).await.is_err() {
         eprintln!("StillWatch could not record storage health");
     }

@@ -1,11 +1,10 @@
 use std::{
     fs::{self, File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use rusqlite::{
-    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+    Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -18,7 +17,9 @@ use uuid::Uuid;
 
 use crate::{
     Change, ChangeCursor, CommandResult, HistoryCursor, Identity, IncidentPage, MAX_CHANGES,
-    MAX_PAGE, MAX_SNAPSHOT, OperatorCommand, Snapshot, StoreError, cameras::camera_filter,
+    MAX_PAGE, MAX_SNAPSHOT, OperatorCommand, Snapshot, StoreConfig, StoreError,
+    budget::{BUSY_TIMEOUT, DatabaseBudget},
+    cameras::camera_filter,
 };
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
@@ -29,16 +30,22 @@ const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
 pub(crate) struct Database {
     pub(crate) conn: Connection,
+    pub(crate) budget: DatabaseBudget,
     pub(crate) identity: Identity,
     pub(crate) blobs: PathBuf,
     pub(crate) quota: u64,
     pub(crate) blob_bytes: Option<u64>,
+    evidence_recovery_pending: bool,
     pub(crate) notify: watch::Sender<()>,
     _lock: File,
 }
 
 impl Database {
-    pub fn open(root: &Path, quota: u64, notify: watch::Sender<()>) -> Result<Self, StoreError> {
+    pub fn open(
+        root: &Path,
+        config: &StoreConfig,
+        notify: watch::Sender<()>,
+    ) -> Result<Self, StoreError> {
         private_dir(root)?;
         let lock = OpenOptions::new()
             .create(true)
@@ -53,34 +60,75 @@ impl Database {
         }
         let blobs = root.join("blobs");
         private_dir(&blobs)?;
+        let file = root.join(DATABASE_FILE);
         let mut conn = Connection::open_with_flags(
-            root.join(DATABASE_FILE),
+            &file,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        conn.busy_timeout(Duration::from_secs(3))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         migrate(&mut conn)?;
         let journal: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
         if !journal.eq_ignore_ascii_case("wal") {
             return Err(StoreError::Schema);
         }
         conn.execute_batch(
-            "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;
-             PRAGMA journal_size_limit = 16777216;",
+            "PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA trusted_schema = OFF;",
         )?;
+        let budget = DatabaseBudget::configure(&conn, &file, config.database_quota_bytes)?;
         let identity = read_identity(&conn)?;
         let mut db = Self {
             conn,
+            budget,
             identity,
             blobs,
-            quota,
+            quota: config.evidence_quota_bytes,
             blob_bytes: None,
+            evidence_recovery_pending: false,
             notify,
             _lock: lock,
         };
-        db.reconcile_evidence()?;
+        if let Err(error) = db.reconcile_evidence() {
+            if !matches!(&error, StoreError::Sql(error)
+                if error.sqlite_error_code() == Some(ErrorCode::DiskFull))
+            {
+                return Err(error);
+            }
+            // Keep history readable while the administrator restores write headroom.
+            db.evidence_recovery_pending = true;
+            eprintln!("StillWatch could not finish evidence recovery because the database is full");
+        }
+        db.budget.check_wal(&db.conn)?;
         Ok(db)
+    }
+
+    pub(crate) fn verify_readable(&self) -> Result<(), StoreError> {
+        self.conn
+            .query_row("SELECT singleton FROM core_identity", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    pub(crate) fn ready(&self) -> Result<(), StoreError> {
+        self.verify_readable()?;
+        self.require_evidence_recovery()?;
+        self.budget.ready(&self.conn)
+    }
+
+    pub(crate) fn reconcile_storage(&mut self) -> Result<bool, StoreError> {
+        self.budget.check_wal(&self.conn)?;
+        let mut low = self.budget.is_low(&self.conn)?;
+        if self.evidence_recovery_pending && !low && self.budget.writable() {
+            if let Err(error) = self.reconcile_evidence() {
+                return match self.budget.classify(error) {
+                    StoreError::DatabaseCapacity => Ok(true),
+                    error => Err(error),
+                };
+            }
+            self.evidence_recovery_pending = false;
+            low = self.budget.is_low(&self.conn)?;
+        }
+        Ok(low || self.evidence_recovery_pending)
     }
 
     pub fn create(&mut self, new: NewIncident, now: UnixMillis) -> Result<Incident, StoreError> {
@@ -92,7 +140,15 @@ impl Database {
         new: NewIncident,
         now: UnixMillis,
     ) -> Result<Incident, StoreError> {
+        self.require_evidence_recovery()?;
         self.create_checked(new, now, true)
+    }
+
+    pub(crate) fn require_evidence_recovery(&self) -> Result<(), StoreError> {
+        if self.evidence_recovery_pending {
+            return Err(StoreError::DatabaseCapacity);
+        }
+        Ok(())
     }
 
     fn create_checked(
@@ -343,6 +399,7 @@ impl Database {
         new: NewIncident,
         now: UnixMillis,
     ) -> Result<Incident, StoreError> {
+        self.require_evidence_recovery()?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

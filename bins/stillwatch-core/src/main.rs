@@ -24,7 +24,7 @@ use sw_protocol::{
     PairingProfile, SemanticRoute,
     worker::{CudaConfig, InferenceConfig, MODEL_SELECTION_MAX_BYTES, ModelSelection},
 };
-use sw_storage::{CameraLimits, Store, StoreConfig};
+use sw_storage::{CameraLimits, DEFAULT_DATABASE_QUOTA_BYTES, Store, StoreConfig};
 use tokio::{net::TcpListener, sync::watch};
 
 #[derive(Clone, Parser)]
@@ -44,6 +44,9 @@ struct Config {
     media: MediaArgs,
     #[arg(long, default_value_t = 500 * 1024 * 1024)]
     evidence_quota_bytes: u64,
+    /// Maximum size in bytes for the SQLite metadata database.
+    #[arg(long)]
+    database_quota_bytes: Option<u64>,
     #[arg(long, default_value_t = 24, value_parser = clap::value_parser!(u32).range(1..=8_760))]
     evidence_retention_hours: u32,
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=3650))]
@@ -250,6 +253,7 @@ struct Settings {
     semantic_include_replay: Option<bool>,
     evidence_retention_hours: Option<u32>,
     history_retention_days: Option<u32>,
+    database_quota_bytes: Option<u64>,
 }
 
 impl Settings {
@@ -285,6 +289,7 @@ impl Settings {
         config.history_retention_days = self
             .history_retention_days
             .unwrap_or(config.history_retention_days);
+        config.database_quota_bytes = config.database_quota_bytes.or(self.database_quota_bytes);
         config.camera_credentials_dir = config
             .camera_credentials_dir
             .take()
@@ -418,6 +423,9 @@ async fn serve(
                 &dir,
                 StoreConfig {
                     evidence_quota_bytes: config.evidence_quota_bytes,
+                    database_quota_bytes: config
+                        .database_quota_bytes
+                        .unwrap_or(DEFAULT_DATABASE_QUOTA_BYTES),
                     ..StoreConfig::default()
                 },
             )?;

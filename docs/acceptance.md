@@ -32,6 +32,12 @@ Schema 8 persists technical health intervals separately from the hazard and noti
 
 The schema-7 Windows and Ubuntu binaries created a database and offline backup. Schema 8 preserved the Core ID, the configured camera and a prior incident. The schema-7 CLI refused the upgraded database and opened a restored schema-7 copy. The schema-8 CLI restored the same backup into an upgraded directory. This used the native binaries and disposable data directories. The legacy source import also passed on both platforms.
 
+The 2,105-incident fixture exercised a limited open snapshot, all pages of history, acknowledgement of an older incident, and delivery to a new SSE subscriber on Windows and Ubuntu. The four-camera mixed Ubuntu run included one active RTSP feed, three replays, two concurrent WHEP clients per round, device session refresh and two deliberate Node worker outages. The short run lasted 720 seconds. No source had cloud consent during this test.
+
+The Android 16 emulator preserved the observed notification denial time after force-stop and cleared it immediately after returning from the system permission screen. iPhone 17 Pro Simulator verified pinned TLS, masked WHEP, profile retrieval from Keychain, and the health journal. The same run produced an unsigned iOS archive. [iOS qualification](https://github.com/mikhailbovt/stillwatch-next-ios-qualification/actions/runs/43539910618)
+
+`tests/e2e/storage_budget.py` verified SQLite metadata exhaustion and backpressure on the WAL with an external reader on Windows and Ubuntu. The API kept committed state readable, returned 507 for blocked writes, and accepted a retry after headroom returned. The maintenance CLI produced a redacted report while readiness returned 503. A storage test restarted with pending evidence in a full database and completed reconciliation after freeing pages.
+
 The KMU replay added one low-light smoke onset, one daytime clip with smoke present at the start and ten labeled lookalikes. Neither positive matched the eight-second window. The low-light sequence ended 5.33 seconds after the labeled onset. The daytime clip produced a review at 13.67 seconds, and five lookalike clips produced 13 fire reviews. See `models/evaluations/kmu-fire-smoke-v1.md` for scope and hashes.
 
 ## Release artifacts

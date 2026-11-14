@@ -151,6 +151,12 @@ impl From<StoreError> for ApiError {
             StoreError::Invalid => Self::invalid("The storage request is invalid"),
             StoreError::Credential => Self::unauthorized(),
             StoreError::DeviceCapacity => Self::rate_limited("Device or pairing capacity reached"),
+            StoreError::DatabaseCapacity => Self::new(
+                StatusCode::INSUFFICIENT_STORAGE,
+                ProblemCode::StorageUnavailable,
+                "Core database storage capacity reached",
+                None,
+            ),
             StoreError::Domain(error) => Self::new(
                 StatusCode::CONFLICT,
                 ProblemCode::InvalidTransition,
