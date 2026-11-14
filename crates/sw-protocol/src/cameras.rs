@@ -308,6 +308,8 @@ pub struct CameraRuntime {
     pub last_frame_age_ms: Option<Counter>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeated_frame: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisStatus>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -368,6 +370,8 @@ pub struct AnalysisStatus {
     pub source_epoch: Option<Counter>,
     pub pose_frames: Counter,
     pub fire_frames: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadence: Option<AnalysisCadence>,
     pub last_analysis_age_ms: Option<Counter>,
     pub last_worker_ms: Option<u32>,
     pub people: Option<u16>,
@@ -382,6 +386,7 @@ impl AnalysisStatus {
             source_epoch: None,
             pose_frames: Counter(0),
             fire_frames: Counter(0),
+            cadence: None,
             last_analysis_age_ms: None,
             last_worker_ms: None,
             people: None,
@@ -389,4 +394,15 @@ impl AnalysisStatus {
             fire_regions: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AnalysisCadence {
+    /// Accepted model results in the last ten seconds, normalized by source time.
+    pub pose_frames_per_minute: u32,
+    pub fire_frames_per_minute: u32,
+    pub pose_target_per_minute: u32,
+    pub fire_target_per_minute: u32,
+    pub below_target: bool,
 }

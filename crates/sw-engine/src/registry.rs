@@ -211,6 +211,7 @@ impl CameraRegistry {
                 dropped: Counter(state.dropped),
                 last_frame_age_ms,
                 repeated_frame: state.repeated_frame,
+                analysis: None,
             },
         }
     }

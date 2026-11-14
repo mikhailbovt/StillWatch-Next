@@ -280,6 +280,39 @@ void main() {
       await tester.runAsync(core.close);
     }
   });
+
+  testWidgets('reports low analysis cadence on a live preview', (tester) async {
+    final core = (await tester.runAsync(_CoreFixture.start))!;
+    final console = core.console..foreground = false;
+    try {
+      Future<void> show(Json? analysis) async {
+        console.cameras = [
+          Camera.fromJson({
+            ..._camera,
+            'runtime': {'state': 'streaming', 'analysis': ?analysis},
+          }),
+        ];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(body: CameraGrid(console: console)),
+          ),
+        );
+      }
+
+      await show(null);
+      expect(find.text('Live source · preview'), findsOneWidget);
+      await show({
+        'state': 'ready',
+        'cadence': {'below_target': true},
+      });
+      expect(find.text('Analysis below target rate'), findsOneWidget);
+      await show({'state': 'degraded'});
+      expect(find.text('Analysis unavailable'), findsOneWidget);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(core.close);
+    }
+  });
 }
 
 final class _CoreFixture {

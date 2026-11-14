@@ -3,6 +3,16 @@
   "title": "AnalysisStatus",
   "type": "object",
   "properties": {
+    "cadence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisCadence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "fire_frames": {
       "$ref": "#/$defs/Counter"
     },
@@ -74,6 +84,42 @@
     "fire_frames"
   ],
   "$defs": {
+    "AnalysisCadence": {
+      "type": "object",
+      "properties": {
+        "below_target": {
+          "type": "boolean"
+        },
+        "fire_frames_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fire_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_frames_per_minute": {
+          "description": "Accepted model results in the last ten seconds, normalized by source time.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pose_frames_per_minute",
+        "fire_frames_per_minute",
+        "pose_target_per_minute",
+        "fire_target_per_minute",
+        "below_target"
+      ]
+    },
     "AnalysisState": {
       "type": "string",
       "enum": [

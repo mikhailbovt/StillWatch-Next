@@ -67,6 +67,14 @@ class CameraGrid extends StatelessWidget {
                 : camera.repeatedFrame
                 ? 'Repeated camera frame'
                 : readable(camera.state);
+            final analysis = camera.runtime['analysis'];
+            final cadence = analysis is Map ? analysis['cadence'] : null;
+            final analysisStatus = switch (analysis) {
+              {'state': 'degraded'} => 'Analysis unavailable',
+              _ when cadence is Map && cadence['below_target'] == true =>
+                'Analysis below target rate',
+              _ => null,
+            };
             return Card(
               clipBehavior: Clip.antiAlias,
               key: ValueKey(camera.id),
@@ -114,7 +122,8 @@ class CameraGrid extends StatelessWidget {
                     title: Text(camera.name, overflow: TextOverflow.ellipsis),
                     subtitle: Text(
                       running && online
-                          ? '${camera.live ? 'Live source' : 'Replay'} · preview'
+                          ? analysisStatus ??
+                                '${camera.live ? 'Live source' : 'Replay'} · preview'
                           : status,
                     ),
                     trailing: profile.role == 'owner'

@@ -17,7 +17,7 @@ use sw_protocol::{
     MAX_REPLAY_UPLOAD_BYTES, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
     OnvifStreamRequest, SourceProbe, SourceProbeRequest,
 };
-use sw_storage::{CameraAction, CameraCommand};
+use sw_storage::{CameraAction, CameraCommand, CameraRecord};
 use uuid::Uuid;
 
 use crate::{Api, auth::Principal, errors::ApiError};
@@ -47,7 +47,7 @@ pub async fn list(
     Ok(Json(CameraPage {
         cameras: records
             .into_iter()
-            .map(|record| registry.view(record))
+            .map(|record| view(&state, registry, record))
             .collect(),
         next,
     }))
@@ -61,7 +61,7 @@ pub async fn detail(
     let id = resource_id(&id)?;
     principal.camera(id)?;
     let camera = state.store.camera(id).await?;
-    response(StatusCode::OK, registry(&state)?.view(camera))
+    response(StatusCode::OK, view(&state, registry(&state)?, camera))
 }
 
 pub async fn create(
@@ -72,7 +72,10 @@ pub async fn create(
 ) -> Result<Response, ApiError> {
     let config = json(body)?;
     let saved = mutate(&state, &principal, headers, CameraAction::Create(config)).await?;
-    response(StatusCode::CREATED, registry(&state)?.view(saved.camera))
+    response(
+        StatusCode::CREATED,
+        view(&state, registry(&state)?, saved.camera),
+    )
 }
 
 pub async fn patch(
@@ -88,7 +91,10 @@ pub async fn patch(
         patch: json(body)?,
     };
     let saved = mutate(&state, &principal, headers, action).await?;
-    response(StatusCode::OK, registry(&state)?.view(saved.camera))
+    response(
+        StatusCode::OK,
+        view(&state, registry(&state)?, saved.camera),
+    )
 }
 
 pub async fn remove(
@@ -192,15 +198,28 @@ pub async fn analysis_status(
     let id = resource_id(&id)?;
     principal.camera(id)?;
     let camera = state.store.camera(id).await?;
-    let analysis = if !camera.config.enabled {
-        sw_protocol::AnalysisStatus::with_state(sw_protocol::AnalysisState::Disabled)
-    } else {
-        state.vision.as_ref().map_or_else(
-            || sw_protocol::AnalysisStatus::with_state(sw_protocol::AnalysisState::Disabled),
-            |vision| vision.status(camera.id, camera.epoch),
-        )
-    };
+    let analysis = analysis(&state, camera.id, camera.epoch, camera.config.enabled);
     Ok(Json(analysis))
+}
+
+fn analysis(state: &Api, id: Uuid, epoch: u64, enabled: bool) -> sw_protocol::AnalysisStatus {
+    match &state.vision {
+        Some(vision) if enabled => vision.status(id, epoch),
+        _ => sw_protocol::AnalysisStatus::with_state(sw_protocol::AnalysisState::Disabled),
+    }
+}
+
+fn view(state: &Api, registry: &CameraRegistry, record: CameraRecord) -> Camera {
+    let mut camera = registry.view(record);
+    if state.vision.is_some() {
+        camera.runtime.analysis = Some(analysis(
+            state,
+            camera.id,
+            camera.source_epoch.0,
+            camera.config.enabled,
+        ));
+    }
+    camera
 }
 
 async fn mutate(

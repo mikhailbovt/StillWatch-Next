@@ -7,6 +7,7 @@ export type Counter = string;
 export type AnalysisState = "disabled" | "starting" | "ready" | "degraded";
 
 export interface AnalysisStatus {
+  cadence?: AnalysisCadence | null;
   fire_frames: Counter;
   fire_regions?: number | null;
   last_analysis_age_ms?: Counter | null;
@@ -16,5 +17,16 @@ export interface AnalysisStatus {
   smoke_regions?: number | null;
   source_epoch?: Counter | null;
   state: AnalysisState;
+  [k: string]: unknown;
+}
+export interface AnalysisCadence {
+  below_target: boolean;
+  fire_frames_per_minute: number;
+  fire_target_per_minute: number;
+  /**
+   * Accepted model results in the last ten seconds, normalized by source time.
+   */
+  pose_frames_per_minute: number;
+  pose_target_per_minute: number;
   [k: string]: unknown;
 }

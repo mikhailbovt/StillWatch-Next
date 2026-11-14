@@ -117,6 +117,44 @@ def run(args):
             verify_inference_recovery(args, root, model_options)
         if args.model_fault:
             verify_corrupt_model(args, root, model_options)
+        if args.cadence:
+            verify_cadence(args, root, model_options)
+
+
+def verify_cadence(args, root, model_options):
+    for fps in (2, 15):
+        name = f"cadence-{fps}.mp4"
+        subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(args.demo),
+                        "-vf", f"scale=640:360,fps={fps}", "-t", "30", "-an", "-c:v", "libx264",
+                        "-threads", "1", str(root / name)], check=True)
+    with run_core(args.core, args.worker, root / "cadence-data", root, root / "cadence.log",
+                  *model_options, "--inference-workers", "2", "--inference-threads", "3") as (_, client):
+        cameras = {}
+        for fps in (2, 15):
+            status, camera = client.call("POST", "/api/v2/cameras", {
+                "name": f"Source at {fps} fps", "enabled": True,
+                "source": {"type": "replay", "file": f"cadence-{fps}.mp4", "pace": True},
+            }, key=f"cadence-{fps}")
+            assert status == 201 and "cadence" not in camera["runtime"]["analysis"]
+            cameras[fps] = camera["id"]
+
+        def available():
+            status, page = client.call("GET", "/api/v2/cameras")
+            assert status == 200
+            rows = {camera["id"]: camera["runtime"].get("analysis") for camera in page["cameras"]}
+            return rows if all(rows.get(camera, {}).get("cadence") for camera in cameras.values()) else None
+
+        rows = until(available, 25)
+        for fps, camera in cameras.items():
+            analysis = rows[camera]
+            assert analysis["state"] == "ready", analysis
+            cadence = analysis["cadence"]
+            assert cadence["below_target"] == (fps == 2), (fps, cadence)
+            assert cadence["pose_target_per_minute"] == 240 and cadence["fire_target_per_minute"] == 90
+            status, details = client.call("GET", f"/api/v2/cameras/{camera}/analysis-status")
+            assert status == 200 and details["source_epoch"] == analysis["source_epoch"]
+            assert details["cadence"]["below_target"] == cadence["below_target"]
+        print(json.dumps({"analysis_cadence": {fps: rows[camera]["cadence"] for fps, camera in cameras.items()}}))
 
 
 def inference_worker(parent):
@@ -403,6 +441,7 @@ if __name__ == "__main__":
     parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
     parser.add_argument("--model-fault", action="store_true", help="Reject a corrupted, disposable copy of the model pack")
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
+    parser.add_argument("--cadence", action="store_true", help="Verify measured rates for 2 fps and 15 fps replay cameras")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():
         parser.error("--worker-faults requires Linux procfs")

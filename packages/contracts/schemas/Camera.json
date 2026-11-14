@@ -50,6 +50,135 @@
     "runtime"
   ],
   "$defs": {
+    "AnalysisCadence": {
+      "type": "object",
+      "properties": {
+        "below_target": {
+          "type": "boolean"
+        },
+        "fire_frames_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fire_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_frames_per_minute": {
+          "description": "Accepted model results in the last ten seconds, normalized by source time.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pose_frames_per_minute",
+        "fire_frames_per_minute",
+        "pose_target_per_minute",
+        "fire_target_per_minute",
+        "below_target"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "AnalysisStatus": {
+      "type": "object",
+      "properties": {
+        "cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fire_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "fire_regions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "last_analysis_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_worker_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "people": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "pose_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "smoke_regions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "source_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        }
+      },
+      "required": [
+        "state",
+        "pose_frames",
+        "fire_frames"
+      ]
+    },
     "CameraConfig": {
       "type": "object",
       "properties": {
@@ -91,6 +220,16 @@
     "CameraRuntime": {
       "type": "object",
       "properties": {
+        "analysis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "dropped": {
           "$ref": "#/$defs/Counter"
         },

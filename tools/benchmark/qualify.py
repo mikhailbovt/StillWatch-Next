@@ -23,6 +23,8 @@ import psutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests/e2e"))
 from replay_core import run_core, until
 
+CADENCE_FIELDS = ("pose_frames_per_minute", "fire_frames_per_minute", "below_target")
+
 
 def digest(path):
     with path.open("rb") as stream:
@@ -105,7 +107,9 @@ def measure(args, root, fixture, count, samples):
                 "source": {"type": "replay", "file": fixture.name, "pace": True, "repeat": args.repeat},
             }, key=uuid4().hex)
             if status != 201:
-                raise RuntimeError(f"camera admission failed with {status}")
+                problem = camera.get("code") if isinstance(camera, dict) else None
+                title = camera.get("title") if isinstance(camera, dict) else None
+                raise RuntimeError(f"camera admission failed: {status} {problem or ''} {title or ''}".rstrip())
             ids.append(camera["id"])
 
         def capture_ready():
@@ -118,6 +122,7 @@ def measure(args, root, fixture, count, samples):
         timings = []
         observations = {}
         states = Counter()
+        cadence_samples = below_target = 0
         rss = []
         native = []
         workers = []
@@ -145,16 +150,22 @@ def measure(args, root, fixture, count, samples):
                 if status != 200:
                     raise RuntimeError(f"analysis status returned {status}")
                 states[item["state"]] += 1
+                cadence = item.get("cadence")
+                if cadence is not None:
+                    cadence_samples += 1
+                    below_target += int(cadence["below_target"])
                 observations.setdefault(camera, []).append((point, item))
                 samples.writerow([
                     count, round(point, 3), camera, item["state"], item["source_epoch"],
                     item["pose_frames"], item["fire_frames"], item["last_analysis_age_ms"],
                     item["last_worker_ms"], resident, threads, processes, disks[-1], round(latency, 4),
+                    *[cadence.get(field) if cadence is not None else None for field in CADENCE_FIELDS],
                 ])
             if args.repeat:
                 heartbeat_temp.write_text(json.dumps({
                     "cameras": count, "elapsed_seconds": round(point, 2), "rss_bytes": resident,
                     "data_bytes": disks[-1], "processes": processes, "analysis_state_counts": dict(states),
+                    "measured_cadence_samples": cadence_samples, "below_target_samples": below_target,
                 }) + "\n", encoding="utf-8")
                 heartbeat_temp.replace(heartbeat_path)
             time.sleep(max(0, min(end, interval + args.sample_every) - time.monotonic()))
@@ -197,6 +208,7 @@ def measure(args, root, fixture, count, samples):
             "cpu_percent_one_core": round(cpu, 2), "threads_max": max(native), "processes_max": max(workers),
             "cpu_measurement": "sampled lower bound across process lifetimes",
             "analysis_state_counts": dict(states), "analysis_samples": len(timings),
+            "measured_cadence_samples": cadence_samples, "below_target_samples": below_target,
             "per_camera": rates,
         }
 
@@ -216,6 +228,7 @@ def run(args):
         header = [
             "cameras", "seconds", "camera_id", "analysis_state", "epoch", "pose_frames", "fire_frames",
             "analysis_age_ms", "worker_ms", "tree_rss_bytes", "tree_threads", "tree_processes", "data_bytes", "api_ms",
+            *CADENCE_FIELDS,
         ]
         report = {
             "platform": platform.platform(), "processor": platform.processor(),

@@ -1,12 +1,13 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
 use sw_domain::{ObservationLabel, SourceScope};
 use sw_protocol::{
-    AnalysisState, AnalysisStatus, Counter, InferenceBackend, InferenceFailure, InferenceStatus,
+    AnalysisCadence, AnalysisState, AnalysisStatus, Counter, InferenceBackend, InferenceFailure,
+    InferenceStatus,
     worker::{InferenceConfig, InferenceResult, Tasks},
 };
 use sw_storage::Store;
@@ -23,6 +24,11 @@ use crate::{
 const POSE_INTERVAL_US: i64 = 200_000;
 const FIRE_INTERVAL_US: i64 = 500_000;
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
+const CADENCE_WINDOW_US: i64 = 10_000_000;
+const SOURCE_MINUTE_US: i64 = 60_000_000;
+// Allow for sampling intervals that cannot align exactly with the camera frame rate.
+const POSE_TARGET_PER_MINUTE: u32 = 240;
+const FIRE_TARGET_PER_MINUTE: u32 = 90;
 
 pub struct VisionScheduler {
     config: InferenceConfig,
@@ -52,6 +58,9 @@ struct Analysis {
     fire_at: Option<Instant>,
     pose_frames: u64,
     fire_frames: u64,
+    first_source_us: Option<i64>,
+    pose_window: VecDeque<i64>,
+    fire_window: VecDeque<i64>,
     last_at: Instant,
     worker_ms: u32,
     people: Option<u16>,
@@ -130,10 +139,13 @@ impl VisionScheduler {
 
     pub fn status(&self, camera: Uuid, epoch: u64) -> AnalysisStatus {
         let mut response = AnalysisStatus::with_state(AnalysisState::Degraded);
-        let source_unusable = self
+        let latest = self
             .cameras
             .latest(camera)
-            .is_some_and(|frame| frame.scope.epoch == epoch && !frame.usable_for_analysis);
+            .filter(|frame| frame.scope.epoch == epoch);
+        let source_unusable = latest
+            .as_ref()
+            .is_some_and(|frame| !frame.usable_for_analysis);
         if let Some(lane) = self.cameras.inference_lane(camera)
             && let Ok(progress) = self.progress.read()
         {
@@ -170,6 +182,15 @@ impl VisionScheduler {
                 }
                 if state == AnalysisState::Ready && (!pose_fresh || !fire_fresh) {
                     response.state = AnalysisState::Degraded;
+                }
+                if response.state == AnalysisState::Ready {
+                    response.cadence = latest
+                        .filter(|frame| {
+                            frame.scope == analysis.scope
+                                && frame.captured_at.elapsed() <= FRAME_MAX_AGE
+                        })
+                        .and_then(|frame| frame.frame.header.source_micros)
+                        .and_then(|source_us| analysis.cadence(source_us));
                 }
             } else if state == AnalysisState::Ready {
                 response.state = AnalysisState::Starting;
@@ -381,9 +402,17 @@ impl VisionScheduler {
         if current.scope != frame.scope {
             *current = Analysis::new(frame.scope);
         }
+        current.first_source_us.get_or_insert(source_us);
+        let cutoff = source_us.saturating_sub(CADENCE_WINDOW_US);
+        for window in [&mut current.pose_window, &mut current.fire_window] {
+            while window.front().is_some_and(|&sample| sample <= cutoff) {
+                window.pop_front();
+            }
+        }
         if let Some(people) = &result.pose {
             current.pose_frames = current.pose_frames.saturating_add(1);
             current.pose_time = Some(source_us);
+            current.pose_window.push_back(source_us);
             current.pose_at = Some(frame.captured_at);
             current.people = Some(people.len() as u16);
         }
@@ -394,6 +423,7 @@ impl VisionScheduler {
                 .count();
             current.fire_frames = current.fire_frames.saturating_add(1);
             current.fire_time = Some(source_us);
+            current.fire_window.push_back(source_us);
             current.fire_at = Some(frame.captured_at);
             current.smoke = Some(smoke as u16);
             current.fire = Some((regions.len() - smoke) as u16);
@@ -410,6 +440,9 @@ impl VisionScheduler {
                     if self.cameras.inference_lane(*camera) == Some(lane) {
                         analysis.pose_at = None;
                         analysis.fire_at = None;
+                        analysis.first_source_us = None;
+                        analysis.pose_window.clear();
+                        analysis.fire_window.clear();
                     }
                 }
             }
@@ -436,12 +469,42 @@ impl Analysis {
             fire_at: None,
             pose_frames: 0,
             fire_frames: 0,
+            first_source_us: None,
+            pose_window: VecDeque::new(),
+            fire_window: VecDeque::new(),
             last_at: Instant::now(),
             worker_ms: 0,
             people: None,
             smoke: None,
             fire: None,
         }
+    }
+
+    fn cadence(&self, now: i64) -> Option<AnalysisCadence> {
+        if now.saturating_sub(self.first_source_us?) < CADENCE_WINDOW_US
+            || self.pose_time.is_some_and(|sample| sample > now)
+            || self.fire_time.is_some_and(|sample| sample > now)
+        {
+            return None;
+        }
+        let cutoff = now.saturating_sub(CADENCE_WINDOW_US);
+        let per_minute = |samples: &VecDeque<i64>| {
+            let count = samples
+                .iter()
+                .rev()
+                .take_while(|&&sample| sample > cutoff)
+                .count();
+            count as u32 * (SOURCE_MINUTE_US / CADENCE_WINDOW_US) as u32
+        };
+        let pose = per_minute(&self.pose_window);
+        let fire = per_minute(&self.fire_window);
+        Some(AnalysisCadence {
+            pose_frames_per_minute: pose,
+            fire_frames_per_minute: fire,
+            pose_target_per_minute: POSE_TARGET_PER_MINUTE,
+            fire_target_per_minute: FIRE_TARGET_PER_MINUTE,
+            below_target: pose < POSE_TARGET_PER_MINUTE || fire < FIRE_TARGET_PER_MINUTE,
+        })
     }
 }
 
