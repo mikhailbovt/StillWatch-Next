@@ -44,6 +44,7 @@ struct Api {
     profile: Option<PairingProfile>,
     enrollment_slots: Arc<auth::EnrollmentLimit>,
     alert_cursor_key: Arc<ring::hmac::Key>,
+    ios_push: bool,
 }
 
 /// Builds the first, loopback-only trust profile. LAN binding has its own TLS and device checks.
@@ -66,6 +67,7 @@ pub fn loopback_router(
             vision,
             semantic,
             media: None,
+            ios_push: false,
         },
         PairingEndpoints::default(),
     )
@@ -77,6 +79,7 @@ pub struct ApiServices {
     pub vision: Option<Arc<VisionScheduler>>,
     pub semantic: Option<Arc<SemanticSupervisor>>,
     pub media: Option<Arc<MediaService>>,
+    pub ios_push: bool,
 }
 
 pub fn local_router(
@@ -103,6 +106,7 @@ pub fn local_router(
         profile: None,
         enrollment_slots: Arc::new(auth::EnrollmentLimit::default()),
         alert_cursor_key: Arc::new(alerts::cursor_key()),
+        ios_push: services.ios_push,
     };
     Some(router(state))
 }
@@ -135,6 +139,14 @@ fn router(state: Api) -> Router {
         .route("/api/v2/alerts/{id}/silence", post(incidents::silence))
         .route("/api/v2/alerts", get(alerts::list))
         .route("/api/v2/alerts/{alert}/seen", post(alerts::seen))
+        .route(
+            "/api/v2/alerts/ios/registration",
+            axum::routing::put(alerts::register_ios).delete(alerts::unregister_ios),
+        )
+        .route(
+            "/api/v2/alerts/ios/notices/{notice}",
+            get(alerts::ios_notice),
+        )
         .route("/api/v2/snapshot", get(stream::snapshot))
         .route("/api/v2/changes", get(stream::changes));
     if state.cameras.is_some() {
@@ -245,6 +257,7 @@ pub fn network_router(
         profile: Some(profile),
         enrollment_slots: Arc::new(auth::EnrollmentLimit::default()),
         alert_cursor_key: Arc::new(alerts::cursor_key()),
+        ios_push: services.ios_push,
     };
     router(state)
 }
@@ -286,6 +299,7 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
         camera_priority: state.cameras.is_some(),
         camera_main_stream: state.cameras.is_some(),
         refresh_replay: true,
+        ios_push: state.ios_push,
     })
 }
 

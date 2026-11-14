@@ -8,10 +8,10 @@ use sw_protocol::{
     AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisMetrics, AnalysisStatus, Bootstrap,
     Camera, CameraConfig, CameraPage, CameraPatch, CaptureDevice, Change, CoreStatus, Counter,
     Cursor, Device, DeviceCredentials, EvidencePacket, FeedbackRequest, Health, HealthEventPage,
-    Incident, IncidentPage, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
-    OnvifStreamRequest, PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest,
-    ReplayUpload, ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe,
-    SourceProbeRequest, StreamGrant, StreamRequest,
+    Incident, IncidentPage, IosPushNotice, IosPushRegistration, OnvifDevice, OnvifProfile,
+    OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, PairingFinish, PairingOffer,
+    PairingRequest, Problem, RefreshRequest, ReplayUpload, ResolveRequest, SemanticStatus,
+    SilenceRequest, Snapshot, SourceProbe, SourceProbeRequest, StreamGrant, StreamRequest,
     worker::{CaptureRequest, FireProposalResult, InferenceConfig, InferenceResult},
 };
 
@@ -69,6 +69,8 @@ fn contracts(check: bool) -> Result<()> {
     write_schema::<SilenceRequest>(&root, "SilenceRequest", check)?;
     write_schema::<AlertFeed>(&root, "AlertFeed", check)?;
     write_schema::<AlertReceipt>(&root, "AlertReceipt", check)?;
+    write_schema::<IosPushRegistration>(&root, "IosPushRegistration", check)?;
+    write_schema::<IosPushNotice>(&root, "IosPushNotice", check)?;
     write_schema::<Problem>(&root, "Problem", check)?;
     let workers = root.join("../workers/v1");
     if !check {

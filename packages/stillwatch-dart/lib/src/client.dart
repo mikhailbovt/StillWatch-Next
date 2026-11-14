@@ -230,6 +230,28 @@ final class StillWatchClient {
     );
   }
 
+  Future<void> registerIosPush(String token) async {
+    if (token.length < 2 ||
+        token.length > 512 ||
+        token.length.isOdd ||
+        !RegExp(r'^[a-f0-9]+$').hasMatch(token)) {
+      throw const StillWatchException('invalid_request');
+    }
+    await _request(
+      'PUT',
+      '/api/v2/alerts/ios/registration',
+      body: utf8.encode(jsonEncode({'token': token})),
+      contentType: 'application/json',
+    );
+  }
+
+  Future<void> unregisterIosPush() async {
+    await _request('DELETE', '/api/v2/alerts/ios/registration');
+  }
+
+  Future<Json> iosPushNotice(String notice) =>
+      _json('GET', '/api/v2/alerts/ios/notices/${uuid(notice)}');
+
   Future<Page<Incident>> incidents({String? after, int limit = 100}) async {
     final json = await _json('GET', _page('/api/v2/incidents', after, limit));
     return Page(

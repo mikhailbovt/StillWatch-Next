@@ -9,6 +9,7 @@ mod db;
 mod evidence;
 mod health;
 mod legacy;
+mod push;
 mod recovery;
 mod refresh_key;
 mod retention;
@@ -50,6 +51,7 @@ pub use evidence::{
 };
 pub use health::{HealthIssue, HealthObservation};
 pub use legacy::{LegacyImport, LegacyManifest, import_legacy};
+pub use push::{ApnsOutcome, PendingApnsDelivery};
 pub use recovery::{RecoveryIntent, RecoveryOutcome};
 pub use semantic::{
     SemanticClaim, SemanticCompleted, SemanticOutcome, SemanticSchedule, SemanticWork,

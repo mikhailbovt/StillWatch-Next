@@ -10,7 +10,9 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ring::hmac;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sw_protocol::{AlertFeed, AlertReceipt, Counter, UtcTimestamp};
+use sw_protocol::{
+    AlertFeed, AlertReceipt, Counter, IosPushNotice, IosPushRegistration, UtcTimestamp,
+};
 use sw_storage::{AlertScan, MAX_ALERT_PAGE, StoreError};
 use uuid::Uuid;
 
@@ -192,4 +194,54 @@ pub async fn seen(
         )
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn register_ios(
+    State(state): State<Api>,
+    Extension(principal): Extension<Principal>,
+    body: Result<Json<IosPushRegistration>, JsonRejection>,
+) -> Result<StatusCode, ApiError> {
+    let Principal::Device { access, .. } = principal else {
+        return Err(ApiError::forbidden());
+    };
+    if !state.ios_push {
+        return Err(ApiError::not_found());
+    }
+    if !access.owner() && access.device.camera_ids.is_empty() {
+        return Err(ApiError::forbidden());
+    }
+    let Json(body) =
+        body.map_err(|_| ApiError::invalid("Invalid iOS notification registration"))?;
+    state
+        .store
+        .register_ios_push(access.device.id, body.token, now_ms())
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn unregister_ios(
+    State(state): State<Api>,
+    Extension(principal): Extension<Principal>,
+) -> Result<StatusCode, ApiError> {
+    let Principal::Device { access, .. } = principal else {
+        return Err(ApiError::forbidden());
+    };
+    state.store.unregister_ios_push(access.device.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn ios_notice(
+    State(state): State<Api>,
+    Extension(principal): Extension<Principal>,
+    Path(notice): Path<Uuid>,
+) -> Result<Json<IosPushNotice>, ApiError> {
+    let Principal::Device { access, .. } = principal else {
+        return Err(ApiError::forbidden());
+    };
+    Ok(Json(
+        state
+            .store
+            .ios_push_notice(access.device.id, notice, now_ms())
+            .await?,
+    ))
 }

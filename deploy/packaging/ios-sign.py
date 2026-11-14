@@ -74,7 +74,7 @@ def verified_profile(args, work):
     return plistlib.loads(content)
 
 
-def profile_entitlements(profile, certificate, device, now):
+def profile_entitlements(profile, certificate, device, now, require_apns=False):
     entitlements = profile["Entitlements"]
     teams = profile["TeamIdentifier"]
     app_id = entitlements["application-identifier"]
@@ -105,6 +105,13 @@ def profile_entitlements(profile, certificate, device, now):
     groups = entitlements.get("keychain-access-groups", [])
     if app_id in groups or f"{prefix}.*" in groups:
         app["keychain-access-groups"] = [app_id]
+    apns = entitlements.get("aps-environment")
+    if apns is not None:
+        if apns != ("development" if development else "production"):
+            raise ValueError("The provisioning profile has an incompatible APNs environment.")
+        app["aps-environment"] = apns
+    if require_apns and apns is None:
+        raise ValueError("Enable Push Notifications for the exact iOS App ID and use its updated profile.")
     return app, "development" if development else "ad-hoc", expiry, len(devices)
 
 
@@ -195,7 +202,7 @@ def sign(args):
         if not valid_from <= now < valid_to:
             raise ValueError("The signing certificate is outside its validity period.")
         entitlements, kind, expiry, device_count = profile_entitlements(
-            profile, certificate, args.device, now,
+            profile, certificate, args.device, now, args.require_apns,
         )
         entitlement_path = work / "entitlements.plist"
         entitlement_path.write_bytes(plistlib.dumps(entitlements))
@@ -216,6 +223,7 @@ def sign(args):
         "version": info["CFBundleShortVersionString"],
         "build": info["CFBundleVersion"],
         "signing_type": kind,
+        "apns_environment": entitlements.get("aps-environment"),
         "expires_at": min(expiry, valid_to).isoformat(),
         "eligible_device_count": device_count,
         "profile_sha256": sha256(args.profile),
@@ -228,6 +236,7 @@ def main():
     for name in ("app", "profile", "identity", "password-file", "apple-roots"):
         parser.add_argument(f"--{name}", required=True, type=lambda path: Path(path).resolve(strict=True))
     parser.add_argument("--device-file", required=True, type=Path, help="File with the target iPhone UDID.")
+    parser.add_argument("--require-apns", action="store_true", help="Require the Apple profile to authorize APNs.")
     parser.add_argument("--output", required=True, type=lambda path: Path(path).absolute())
     args = parser.parse_args()
     try:

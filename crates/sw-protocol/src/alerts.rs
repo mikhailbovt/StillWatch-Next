@@ -41,3 +41,37 @@ pub struct AlertFeed {
 pub struct AlertReceipt {
     pub attention_cycle: Counter,
 }
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct IosPushRegistration {
+    pub token: String,
+}
+
+impl IosPushRegistration {
+    pub fn valid_token(value: &str) -> bool {
+        (2..=512).contains(&value.len())
+            && value.len().is_multiple_of(2)
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct IosPushNotice {
+    pub generation: Uuid,
+    pub alert: AlertDelivery,
+}
+
+/// The local APNs worker needs a delivery address, an opaque handle and expiry.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApnsDelivery {
+    pub token: String,
+    pub notice: Uuid,
+    pub expires_at: UtcTimestamp,
+}

@@ -124,6 +124,7 @@ final class CoreInfo {
       analysisCapacityProbe = value['analysis_capacity_probe'] == true,
       cameraPriority = value['camera_priority'] == true,
       cameraMainStream = value['camera_main_stream'] == true,
+      iosPush = value['ios_push'] == true,
       version = object(value['version']) {
     if (version['major'] != 2 || version['minor'] is! int) {
       throw const StillWatchException('identity');
@@ -136,6 +137,7 @@ final class CoreInfo {
   final bool analysisCapacityProbe;
   final bool cameraPriority;
   final bool cameraMainStream;
+  final bool iosPush;
   final Json version;
 }
 

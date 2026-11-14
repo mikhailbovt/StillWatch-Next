@@ -115,6 +115,10 @@ struct Config {
     semantic_daily_limit: u32,
     #[arg(long, requires = "semantic_worker")]
     semantic_include_replay: bool,
+    #[arg(long, requires = "apns_token_file")]
+    apns_worker: Option<SocketAddr>,
+    #[arg(long, requires = "apns_worker")]
+    apns_token_file: Option<PathBuf>,
     #[cfg(windows)]
     #[arg(long)]
     service: bool,
@@ -291,6 +295,8 @@ struct Settings {
     semantic_token_file: Option<PathBuf>,
     semantic_route: Option<SemanticRoute>,
     semantic_include_replay: Option<bool>,
+    apns_worker: Option<SocketAddr>,
+    apns_token_file: Option<PathBuf>,
     evidence_retention_hours: Option<u32>,
     history_retention_days: Option<u32>,
     database_quota_bytes: Option<u64>,
@@ -368,6 +374,10 @@ impl Settings {
             }
             config.semantic_include_replay |= self.semantic_include_replay.unwrap_or(false);
         }
+        if config.apns_worker.is_none() && config.apns_token_file.is_none() {
+            config.apns_worker = self.apns_worker;
+            config.apns_token_file = self.apns_token_file;
+        }
     }
 }
 
@@ -422,6 +432,10 @@ async fn serve(
     ensure!(
         config.semantic_worker.is_some() == config.semantic_token_file.is_some(),
         "semantic worker requires a token file"
+    );
+    ensure!(
+        config.apns_worker.is_some() == config.apns_token_file.is_some(),
+        "APNs worker requires a token file"
     );
     ensure!(
         config.media.media_turn.is_some() == config.media.media_turn_secret_file.is_some()
@@ -607,11 +621,21 @@ async fn serve(
     } else {
         None
     };
+    let apns = if let (Some(address), Some(file)) = (config.apns_worker, config.apns_token_file) {
+        Some(
+            sw_engine::ApnsSender::new(address, &file, store.clone())
+                .await
+                .context("APNs worker configuration")?,
+        )
+    } else {
+        None
+    };
     let services = sw_api::ApiServices {
         cameras: Some(registry.clone()),
         vision: vision.clone(),
         semantic: semantic.clone(),
         media: media.clone(),
+        ios_push: apns.is_some(),
     };
     let endpoints = sw_api::PairingEndpoints {
         lan: lan.as_ref().map(|lan| lan.identity.clone()),
@@ -687,6 +711,7 @@ async fn serve(
     let mut registry_task = tokio::spawn(registry.supervise(registry_shutdown.clone()));
     let mut semantic_task =
         semantic.map(|semantic| tokio::spawn(semantic.run(registry_shutdown.clone())));
+    let mut apns_task = apns.map(|apns| tokio::spawn(apns.run(registry_shutdown.clone())));
     let mut vision_task = vision.map(|vision| tokio::spawn(vision.supervise(registry_shutdown)));
     let signal_registry = stop_registry.clone();
 
@@ -725,6 +750,9 @@ async fn serve(
         },
         result = wait_task(&mut semantic_task) => {
             (subsystem_exit("semantic supervisor", *draining.borrow(), result, |_| Ok(())), Some(Subsystem::Semantic))
+        },
+        result = wait_task(&mut apns_task) => {
+            (subsystem_exit("APNs sender", *draining.borrow(), result, |_| Ok(())), Some(Subsystem::Apns))
         },
     };
     #[cfg(target_os = "linux")]
@@ -784,6 +812,14 @@ async fn serve(
     {
         semantic_task.abort();
     }
+    if ended != Some(Subsystem::Apns)
+        && let Some(mut apns_task) = apns_task
+        && tokio::time::timeout(Duration::from_secs(6), &mut apns_task)
+            .await
+            .is_err()
+    {
+        apns_task.abort();
+    }
     if matches!(ended, Some(Subsystem::Vision | Subsystem::Maintenance)) && result.is_err() {
         // A timed-out blocking sampler or filesystem call may not return to the runtime.
         // The OS supervisor owns restart and child cleanup for this failure.
@@ -802,6 +838,7 @@ enum Subsystem {
     Maintenance,
     Health,
     Semantic,
+    Apns,
 }
 
 async fn wait_task<T>(

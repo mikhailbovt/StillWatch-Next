@@ -194,6 +194,7 @@ impl Store {
                   SELECT rowid FROM alert_silences WHERE until_utc <= ? ORDER BY until_utc, rowid LIMIT 512)",
                 [now],
             )?;
+            tx.execute("DELETE FROM ios_push_registrations WHERE expires_at <= ?", [now])?;
             tx.commit()?;
             Ok([expired, receipts, removed, silences].contains(&512))
         }).await
@@ -204,6 +205,6 @@ fn parse_id(data: &[u8]) -> Result<Uuid, StoreError> {
     Uuid::from_slice(data).map_err(|_| StoreError::Invalid)
 }
 
-fn timestamp(ms: UnixMillis) -> Result<UtcTimestamp, StoreError> {
+pub(crate) fn timestamp(ms: UnixMillis) -> Result<UtcTimestamp, StoreError> {
     UtcTimestamp::from_unix_millis(ms).map_err(|_| StoreError::Invalid)
 }

@@ -15,12 +15,12 @@ from rtsp_core import free_port, launch
 from sdk_core import create_camera, issue
 
 
-def insert_urgent(database, camera, incident):
+def insert_urgent(database, camera, incident, *, live=True):
     when = time.time_ns() // 1_000_000
     body = {
         "id": str(incident), "scope": {"camera_id": camera, "epoch": 1, "scene_revision": 1},
         "revision": 1, "category": "fire", "detection_reason": "Alert transport qualification",
-        "first_source_us": 0, "last_source_us": 1000000, "live": True,
+        "first_source_us": 0, "last_source_us": 1000000, "live": live,
         "created_at": when, "updated_at": when, "assessment": "immediate_visible_concern",
         "attention": "urgent", "attention_cycle": 1, "acknowledgement": None,
         "resolution": None, "evidence": None, "evidence_state": "unavailable",

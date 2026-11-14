@@ -245,6 +245,9 @@ fn prepare_restored_database(conn: &mut Connection, generation: Uuid) -> Result<
     )?;
     tx.execute("DELETE FROM alert_silences", [])?;
     tx.execute("DELETE FROM pairing_grants", [])?;
+    tx.execute("DELETE FROM ios_push_deliveries", [])?;
+    tx.execute("DELETE FROM ios_push_registrations", [])?;
+    tx.execute("DELETE FROM refresh_receipts", [])?;
     tx.execute("DELETE FROM device_sessions", [])?;
     tx.execute("DELETE FROM retired_refresh_credentials", [])?;
     tx.execute(

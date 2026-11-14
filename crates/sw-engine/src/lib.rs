@@ -11,6 +11,7 @@ mod media;
 mod onvif;
 #[cfg(feature = "diagnostics")]
 mod policy_trace;
+mod push;
 mod registry;
 mod replay_upload;
 mod scene;
@@ -33,6 +34,7 @@ pub use media::{MediaAnswer, MediaConfig, MediaError, MediaService, TurnConfig};
 pub use onvif::{OnvifConfig, OnvifError};
 #[cfg(feature = "diagnostics")]
 pub use policy_trace::{trace_fire_policy, trace_pose_association};
+pub use push::ApnsSender;
 pub use registry::{CameraFrame, CameraHealth, CameraRegistry, RegistryError, SourceConfig};
 pub use semantic::{
     FirebaseProvider, SemanticConfig, SemanticProvider, SemanticProviderError, SemanticSupervisor,

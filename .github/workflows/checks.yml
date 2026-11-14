@@ -80,6 +80,9 @@ jobs:
           uv run --no-project --python 3.12.14 python -B tests/e2e/alarm_agent.py \
             --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
             --cli "target/debug/stillwatch-cli$suffix" --agent "target/debug/stillwatch-alarm-agent$suffix"
+          uv run --no-project --python 3.12.14 python -B tests/e2e/apns_core.py \
+            --core "target/debug/stillwatch-core$suffix" --worker "target/debug/stillwatch-worker$suffix" \
+            --cli "target/debug/stillwatch-cli$suffix" --node "$(command -v node)"
       - name: Check the HTTPS reverse proxy
         if: runner.os == 'Linux'
         shell: bash

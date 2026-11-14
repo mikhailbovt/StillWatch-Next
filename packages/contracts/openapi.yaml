@@ -539,6 +539,40 @@ paths:
       responses:
         '204': { description: Client receipt recorded }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v2/alerts/ios/registration:
+    put:
+      summary: Register this paired device for the configured iOS APNs worker
+      description: Registers or renews the APNs device token. The current TLS-authenticated device owns the registration and its camera visibility comes from Core.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: schemas/IosPushRegistration.json }
+      responses:
+        '204': { description: Registration saved }
+        '403': { description: A paired device with camera access is required }
+        '404': { description: Core has no iOS delivery worker configured }
+    delete:
+      summary: Remove this paired device's iOS delivery registration
+      responses:
+        '204': { description: Registration removed or already absent }
+        '403': { description: A paired device is required }
+  /api/v2/alerts/ios/notices/{notice}:
+    get:
+      summary: Resolve an opaque iOS notification handle
+      description: Returns the current active alert for the registered device. This request records neither receipt nor acknowledgement.
+      parameters:
+        - name: notice
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Current device-scoped alert
+          content:
+            application/json:
+              schema: { $ref: schemas/IosPushNotice.json }
+        '404': { description: Notice expired or is outside the current device scope }
   /api/v2/alerts/{id}/silence:
     parameters:
       - $ref: '#/components/parameters/IncidentId'

@@ -9,12 +9,19 @@ import 'package:stillwatch_sdk/stillwatch_sdk.dart';
 import 'alerts.dart';
 import 'health_history.dart';
 import 'incidents.dart';
+import 'ios_push.dart';
 import 'profiles.dart';
 
 class CoreSettings extends StatefulWidget {
-  const CoreSettings({super.key, required this.console, required this.alerts});
+  const CoreSettings({
+    super.key,
+    required this.console,
+    required this.alerts,
+    this.iosPush,
+  });
   final ConsoleState console;
   final LocalAlerts alerts;
+  final IosPush? iosPush;
 
   @override
   State<CoreSettings> createState() => _CoreSettingsState();
@@ -48,6 +55,7 @@ class _CoreSettingsState extends State<CoreSettings> {
     );
     if (!mounted || !yes) return;
     try {
+      await widget.iosPush?.forget(profile);
       await widget.console.forget(profile);
     } catch (error) {
       if (mounted) showFailure(context, error);
@@ -293,6 +301,38 @@ class _CoreSettingsState extends State<CoreSettings> {
                       if (context.mounted) showFailure(context, error);
                     }
                   },
+                ),
+              ),
+            if (widget.iosPush case final IosPush push)
+              ListenableBuilder(
+                listenable: push,
+                builder: (context, _) => SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('iOS background notifications'),
+                  subtitle: Text(switch (push.state) {
+                    'registered' =>
+                      'Registered with this Core for urgent alerts.',
+                    'connecting' =>
+                      'Waiting for iOS registration or the Core connection.',
+                    'permission' =>
+                      'Allow StillWatch notifications in iOS Settings.',
+                    'disable_pending' => 'The Core will remove this registration when it reconnects.',
+                    'unavailable' => 'Background registration is unavailable.',
+                    _ when widget.console.coreInfo?.iosPush != true =>
+                      'This Core has no APNs worker configured.',
+                    _ => 'Receive urgent alerts from this Core while the app is in the background.',
+                  }),
+                  value: push.enabled,
+                  onChanged:
+                      push.enabled || widget.console.coreInfo?.iosPush == true
+                      ? (value) async {
+                          try {
+                            await push.setEnabled(profile, value);
+                          } catch (error) {
+                            if (context.mounted) showFailure(context, error);
+                          }
+                        }
+                      : null,
                 ),
               ),
             if (Platform.isWindows || Platform.isLinux)

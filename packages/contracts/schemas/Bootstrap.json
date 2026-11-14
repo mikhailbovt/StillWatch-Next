@@ -22,6 +22,9 @@
       "type": "string",
       "format": "uuid"
     },
+    "ios_push": {
+      "type": "boolean"
+    },
     "refresh_replay": {
       "type": "boolean"
     },

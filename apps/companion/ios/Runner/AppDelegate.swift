@@ -6,17 +6,47 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var scanner: PairingScanner?
+  private var pushChannel: FlutterMethodChannel?
+  private var pushToken: String?
+  private var pushFailed = false
+  private var pushInteractions: [String] = []
+  private lazy var notificationDelegate = StillWatchNotificationDelegate(fallback: self) { [weak self] notice in
+    guard let self else { return }
+    if self.pushInteractions.count == 8 { self.pushInteractions.removeFirst() }
+    self.pushInteractions.append(notice)
+    self.pushChannel?.invokeMethod("interaction", arguments: nil)
+  }
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    UNUserNotificationCenter.current().delegate = self
+    UNUserNotificationCenter.current().delegate = notificationDelegate
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    if let push = engineBridge.pluginRegistry.registrar(forPlugin: "StillWatchPush") {
+      let channel = FlutterMethodChannel(
+        name: "com.stillwatch.companion/apns", binaryMessenger: push.messenger())
+      pushChannel = channel
+      channel.setMethodCallHandler { [weak self] call, result in
+        guard let self else { result(nil); return }
+        switch call.method {
+        case "register": self.registerPush(prompt: call.arguments as? Bool == true, result: result)
+        case "token":
+          var state: [String: Any] = ["failed": self.pushFailed]
+          if let token = self.pushToken { state["token"] = token }
+          result(state)
+        case "takeInteractions":
+          let pending = self.pushInteractions
+          self.pushInteractions.removeAll()
+          result(pending)
+        default: result(FlutterMethodNotImplemented)
+        }
+      }
+    }
     guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "StillWatchPairing") else {
       return
     }
@@ -50,6 +80,103 @@ import UserNotifications
       scanner.modalPresentationStyle = .fullScreen
       presenter.present(scanner, animated: true)
     }
+  }
+
+  private func registerPush(prompt: Bool, result: @escaping FlutterResult) {
+    let center = UNUserNotificationCenter.current()
+    center.getNotificationSettings { settings in
+      switch settings.authorizationStatus {
+      case .authorized, .provisional, .ephemeral:
+        DispatchQueue.main.async { self.beginPushRegistration(result) }
+      case .notDetermined where prompt:
+        center.requestAuthorization(options: [.alert, .sound]) { allowed, _ in
+          DispatchQueue.main.async {
+            if allowed { self.beginPushRegistration(result) }
+            else { result(false) }
+          }
+        }
+      default:
+        DispatchQueue.main.async {
+          self.pushToken = nil
+          result(false)
+        }
+      }
+    }
+  }
+
+  private func beginPushRegistration(_ result: FlutterResult) {
+    pushFailed = false
+    UIApplication.shared.registerForRemoteNotifications()
+    result(true)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    if !deviceToken.isEmpty && deviceToken.count <= 256 {
+      pushToken = deviceToken.map { String(format: "%02x", $0) }.joined()
+      pushFailed = false
+      pushChannel?.invokeMethod("registrationChanged", arguments: nil)
+    }
+  }
+
+  override func application(
+    _ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+    pushFailed = true
+    pushChannel?.invokeMethod("registrationChanged", arguments: nil)
+  }
+
+}
+
+private final class StillWatchNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+  private weak var fallback: UNUserNotificationCenterDelegate?
+  private let open: (String) -> Void
+
+  init(fallback: UNUserNotificationCenterDelegate, open: @escaping (String) -> Void) {
+    self.fallback = fallback
+    self.open = open
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if pushNotice(notification) != nil {
+      completionHandler([])
+      return
+    }
+    if fallback?.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: completionHandler) == nil {
+      completionHandler([])
+    }
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    if let notice = pushNotice(response.notification) {
+      if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+        DispatchQueue.main.async { self.open(notice) }
+      }
+      completionHandler()
+      return
+    }
+    if fallback?.userNotificationCenter?(center, didReceive: response, withCompletionHandler: completionHandler) == nil {
+      completionHandler()
+    }
+  }
+
+  private func pushNotice(_ notification: UNNotification) -> String? {
+    guard notification.request.trigger is UNPushNotificationTrigger,
+      let value = notification.request.content.userInfo["stillwatch_notice"] as? String,
+      let notice = UUID(uuidString: value) else { return nil }
+    return notice.uuidString.lowercased()
   }
 }
 

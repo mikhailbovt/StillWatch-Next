@@ -226,6 +226,23 @@ python3 deploy/packaging/ios-sign.py \
 
 The JSON records the profile type, expiry, eligible device count and IPA checksum. Run `xtool devices --no-wait` and `xtool install StillWatch.ipa` on the signing host with the authorized iPhone connected. Verify pairing, playback, profile restoration and notifications on the phone. [xtool on Windows or Linux](https://xtool.sh/documentation/xtool/installation-linux/)
 
+### iPhone background alerts
+
+Enable Push Notifications for the exact StillWatch App ID in Apple Developer and create a provisioning profile that authorizes `aps-environment`. Pass `--require-apns` to `ios-sign.py` for a bundle that needs background alerts. The signing report records the environment. Use the sandbox endpoint with a development profile and the production endpoint with an ad-hoc profile. Keep the Apple signing identity and the APNs provider key in separate private files. [Apple APNs registration](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns)
+
+Build or install `stillwatch-apns-worker`. Run it on the Core host using a dedicated OS identity, a topic-scoped Apple APNs P-256 key, and a random 32-byte worker credential encoded as 64 hex characters. Give each process its own private copy of that credential. Keep the provider key under the worker identity and the app signing identity on the signing host. The worker accepts authenticated connections on loopback and connects outbound to Apple over HTTP/2 with TLS. [APNs connection and requests](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns), [APNs token authentication](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)
+
+~~~text
+stillwatch-apns-worker --listen 127.0.0.1:8776 --delivery-token-file WORKER_CREDENTIAL --apple-key-file APPLE_KEY.p8 --team-id APPLE_TEAM_ID --key-id APPLE_KEY_ID --environment sandbox
+stillwatch-core --data-dir DATA_DIR --apns-worker 127.0.0.1:8776 --apns-token-file CORE_WORKER_CREDENTIAL
+~~~
+
+On Linux the optional `stillwatch-apns.service` reads `LISTEN`, `DELIVERY_TOKEN_FILE`, `APPLE_KEY_FILE`, `TEAM_ID`, `KEY_ID` and `APNS_ENVIRONMENT` from a private `/etc/stillwatch/apns-worker.conf`. Set `apns_worker` and `apns_token_file` in Core's settings file for service installations. On Windows use ACLs that restrict each credential to its service identity.
+
+Pair the iPhone, then enable **iOS background notifications** for that Core and allow system notifications. Registration needs a currently paired session and can expire after 14 days without reopening Companion. On each activation the app can refresh it. Set up the phone's pinned TLS or VPN route to Core so that tapping a notification can open the incident. APNs receives the delivery token, expiry and an opaque handle with generic alert text. The app resolves the handle only through the paired Core. A retry uses the same collapse identifier. Provider acceptance is logged separately from the receipt produced by opening the notification. Open the incident in Companion to review or acknowledge it.
+
+Delivery is subject to the phone's notification settings, Focus, connectivity, Apple service conditions and expiration. After expiry or revocation the Core rejects the handle. A notification already shown by iOS can remain in its notification center. Test the supported use on a physical phone before relying on background alerts. [Apple delivery behavior](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns)
+
 ## CUDA qualification
 
 The CUDA backend uses the same locked FP32 model tensors and policies. Pass cuda_device, cuda_provider_sha256 and cuda_shared_sha256 on the Core command line with the existing model and ORT flags. Use dashes in flag names. In core.json use a cuda object with device, provider_sha256 and shared_sha256. Keep the provider libraries beside the matching ONNX Runtime library and install the corresponding NVIDIA user-space runtime through an authorized source. An invalid or missing provider prevents the requested backend from starting.

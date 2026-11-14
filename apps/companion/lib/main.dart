@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:stillwatch_sdk/stillwatch_sdk.dart';
 
 import 'alerts.dart';
 import 'cameras.dart';
 import 'incidents.dart';
+import 'ios_push.dart';
 import 'onboarding.dart';
 import 'profiles.dart';
 import 'settings.dart';
@@ -70,31 +73,42 @@ class _StillWatchAppState extends State<StillWatchApp>
   final _navigator = GlobalKey<NavigatorState>();
   final _messages = GlobalKey<ScaffoldMessengerState>();
   final _console = ConsoleState(const ProfileStore(_storage));
+  late final _iosPush = Platform.isIOS
+      ? IosPush(_console, _storage, _openIncident, _showMessage)
+      : null;
   late final _alerts = LocalAlerts(
     _console,
     _storage,
-    onReview: (profile, incident) {
-      _navigator.currentState?.push<void>(
-        MaterialPageRoute(
-          builder: (_) => IncidentDetail(
-            console: _console,
-            profile: profile,
-            initial: incident,
-            generation: _console.streamGeneration,
-          ),
-        ),
-      );
-    },
-    onFailure: (message) =>
-        _messages.currentState?.showSnackBar(SnackBar(content: Text(message))),
+    onReview: _openIncident,
+    onFailure: _showMessage,
   );
+
+  void _openIncident(CoreProfile profile, Incident incident) {
+    _navigator.currentState?.push<void>(
+      MaterialPageRoute(
+        builder: (_) => IncidentDetail(
+          console: _console,
+          profile: profile,
+          initial: incident,
+          generation: _console.streamGeneration,
+        ),
+      ),
+    );
+  }
+
+  void _showMessage(String message) =>
+      _messages.currentState?.showSnackBar(SnackBar(content: Text(message)));
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(
-      _console.load().then((_) => mounted ? _alerts.initialize() : null),
+      _console.load().then((_) async {
+        if (!mounted) return;
+        _iosPush?.initialize();
+        await _alerts.initialize();
+      }),
     );
   }
 
@@ -102,6 +116,7 @@ class _StillWatchAppState extends State<StillWatchApp>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _alerts.refreshPermissionsOnResume();
+      _iosPush?.resume();
     }
     unawaited(
       _console.setForeground(
@@ -115,6 +130,7 @@ class _StillWatchAppState extends State<StillWatchApp>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _alerts.dispose();
+    _iosPush?.dispose();
     _console.dispose();
     super.dispose();
   }
@@ -142,14 +158,15 @@ class _StillWatchAppState extends State<StillWatchApp>
       ),
       dividerTheme: const DividerThemeData(color: Color(0xff2d3b3d)),
     ),
-    home: _Console(_console, _alerts),
+    home: _Console(_console, _alerts, _iosPush),
   );
 }
 
 class _Console extends StatefulWidget {
-  const _Console(this.state, this.alerts);
+  const _Console(this.state, this.alerts, this.iosPush);
   final ConsoleState state;
   final LocalAlerts alerts;
+  final IosPush? iosPush;
 
   @override
   State<_Console> createState() => _ConsoleState();
@@ -174,6 +191,7 @@ class _ConsoleState extends State<_Console> {
           key: ValueKey(profile.id),
           console: console,
           alerts: widget.alerts,
+          iosPush: widget.iosPush,
         ),
         _ => CameraGrid(key: ValueKey(profile.id), console: console),
       };

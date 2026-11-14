@@ -300,6 +300,8 @@ pub struct Bootstrap {
     pub camera_main_stream: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub refresh_replay: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ios_push: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
