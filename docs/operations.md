@@ -228,3 +228,9 @@ Build the CUDA profile from the local verified CPU image and use both Compose fi
 docker build --pull=false -f deploy/packaging/Dockerfile.cuda -t stillwatch-core:0.1.0-cuda .
 docker compose -f deploy/packaging/compose.cpu.yaml -f deploy/packaging/compose.cuda.yaml up -d
 ~~~
+
+## Inference diagnostics
+
+The existing `cadence` field in camera analysis status counts results over ten seconds of native source time. `wall_cadence` reports accepted Pose and Fire results during the trailing 60 monotonic seconds after a full window is available. It continues across source reconnects and worker restarts so an outage remains in the window. Capture reports the signed `relative_source_lag_ms` on live sources and paced replays after at least one second of native PTS progress and two seconds since the anchor receive. The initial delay before that anchor and absolute sensor age are unknown.
+
+Owners can read `GET /api/v2/cameras/{id}/analysis-metrics` for disjoint latency buckets and per-task counters. Subtract two snapshots from the same camera and Core process to measure an interval. Each bucket has an inclusive upper bound in microseconds and the last bucket contains values above the highest bound. The first snapshot is available after dispatch. Source epoch changes preserve counts and begin a new source-clock slot calculation. `missed_source_slots` estimates the nominal slots skipped between accepted native timestamps within one epoch. Use wall cadence and rejection or timeout counts to account for gaps with no accepted result. Metrics are retained for admitted cameras, and bounded process totals remain in the owner's `/api/v2/status` until Core exits.

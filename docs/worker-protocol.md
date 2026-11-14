@@ -2,7 +2,7 @@
 
 StillWatch compiles bundled Rust adapters with the selected Core release. The source interfaces are `sw_capture::SourceAdapter`, `sw_inference::PerceptionBackend`, `sw_domain::HazardPolicy`, `sw_engine::SemanticProvider`, and `NotificationTransport` in the alarm agent. The capture adapter owns one authorized source. Tensor evaluation is synchronous inside an inference worker and returns a borrowed output to its decoder. The policies receive typed observations and scene state. The semantic trait receives a masked evidence packet. The notification trait receives alert metadata after the agent checks its current Core session. The supervisors own deadlines, access rights, persistence and acknowledgement.
 
-Use the v1 process wire contract to implement a compatible worker. The shipped Core comes with the reviewed worker binary. Schemas are under `packages/contracts/workers/v1` in source and `docs/worker-protocol/v1` in native packages. The contract carries sensitive source information to the capture worker over an inherited pipe on the Core host. Treat the capture and perception executables as trusted local code. An operating-system process restriction, if required by the deployment, belongs to the service administrator. Companion has no plugin installation interface.
+The shipped Core comes with the reviewed worker binary. The base message schemas are under `packages/contracts/workers/v1` in source and `docs/worker-protocol/v1` in native packages. The contract carries sensitive source information to the capture worker over an inherited pipe on the Core host. Treat the capture and perception executables as trusted local code. An operating-system process restriction, if required by the deployment, belongs to the service administrator. Companion has no plugin installation interface.
 
 Core starts its workers, MediaMTX and media encoder in Windows job objects or Linux process groups. On Linux the direct child also exits when its Core parent dies, including when the foreground Core is killed. Keep the packaged service supervisor in control of the whole process tree. A Linux wrapper for a worker should use `exec` to replace itself with the worker. [Linux parent-death signals](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)
 
@@ -37,6 +37,24 @@ Use the minimum signed 64-bit value for absent timestamps. For a native clock bo
 Core launches `stillwatch-worker infer` and sends a little-endian u32 byte count followed by `InferenceConfig.json` UTF-8. The payload limit is 16,384 bytes. The worker replies with four bytes. `SWI1` means both live models are ready. `SWIM`, `SWIS` and `SWIR` report pack, session and runtime failures respectively. Startup is bounded to 30 seconds on CPU and 60 seconds on CUDA.
 
 Each request sends a 16-byte UUID in standard byte order, one task byte (`1` pose, `2` fire, `3` both), and the same `SWF1` header and RGB24 payload. The frame must have a native source timestamp and pass privacy masking in capture. Each reply has a little-endian u32 length and a UTF-8 `InferenceResult.json` body, up to 1,500,000 bytes. The reply echoes the UUID, reports inference time and includes a list or null for each task. An empty executed list is distinct from null. Results have at most 300 observations per task, use coordinates in source pixels and preserve the frame's source time. Core validates them again and terminates a worker that violates bounds or exceeds the two-second exchange deadline.
+
+When `capture-doctor` reports `inference_timing_v2=true`, Core uses `infer-v2` with ready marker `SWI2`. Each response uses the base length and body followed by a 28-byte trailer. The trailer holds seven little-endian u32 durations in microseconds, in the order below. Unexecuted task stages carry zero. Core defaults to `infer` when the capability is absent. An advertised command with inconsistent framing is a worker failure.
+
+| Offset | Stage |
+| ---: | --- |
+| 0 | `input_read_us`, after the worker reads the first request byte through completion of RGB read |
+| 4 | `preprocess_us`, RGB validation and letterbox/tensor preparation |
+| 8 | `pose_run_us`, Pose backend evaluation including input and output checks |
+| 12 | `pose_decode_us`, Pose observations including appearance computation |
+| 16 | `fire_run_us`, Fire backend evaluation including input and output checks |
+| 20 | `fire_decode_us`, Fire observations including score filtering and NMS |
+| 24 | `serialize_us`, encoding the base result JSON |
+
+Core measures round-trip, frame receive to dispatch and frame receive to acceptance on its own monotonic clock. The worker measures only durations. Round-trip includes request delivery, worker stages, response delivery and Core validation. A timed session exposes a worker stage sample for each valid reply, including replies discarded by Core for freshness or source scope. A legacy session still measures Core timings.
+
+The local `diagnose-fire` command accepts the same config and fire-only requests. Its ready marker is `SWD1`. The bounded JSON response includes the frame's source PTS, source dimensions in height/width order, the legacy observations and a `trace` object. The trace includes tensor geometry, resize and padding, a disposition count for each class and up to 16 anchors per class with their scores, boxes and rejection reasons. `tools/benchmark/fire_observations.py --diagnostic` records this output for short windows of authorized development clips. The tool processes one clip at a time with a maximum of 32 clips, 30 seconds per window and 2,048 samples per clip. Core has no HTTP route for this command.
+
+A development Core built with `cargo build -p stillwatch-core --features diagnostics` adds a local `trace-fire-policy` command. Pass that executable to the benchmark with `--policy-core`. The harness feeds the identical masked RGB, native PTS and legacy detector observations to the default fire policy. It records scene visibility, continuity, region and fire decision. The diagnostic models an unreviewed scene and a fixed offline sampling sequence. The separate paced run supplies recorded incident openings.
 
 ## Semantic provider
 

@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use inference::Mode;
 use serde_json::json;
 use sw_capture::{Decoder, PtsQuality, ReadLimits};
 use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig, ModelSelection};
@@ -29,11 +30,14 @@ fn main() -> Result<()> {
             }
         }
         [command] if command == "capture-devices" => capture::devices(),
-        [command] if command == "infer" => inference::run(),
+        [command] if command == "infer" => inference::run(Mode::Legacy),
+        [command] if command == "infer-v2" => inference::run(Mode::Timed),
+        [command] if command == "diagnose-fire" => inference::run(Mode::FireDiagnostic),
         [command] if command == "capture-doctor" => {
             println!(
                 "{}",
-                json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available(), "capture_codec": true})
+                json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available(), "capture_codec": true,
+                    "inference_timing_v2": true})
             );
             Ok(())
         }

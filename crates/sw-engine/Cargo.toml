@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+diagnostics = []
+
 [dependencies]
 base64.workspace = true
 digest_auth = "=0.3.1"

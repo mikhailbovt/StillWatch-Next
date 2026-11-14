@@ -3,8 +3,8 @@ use std::time::Duration;
 use process_wrap::tokio::ChildWrapper;
 use sw_domain::{Observation, ObservationLabel};
 use sw_protocol::worker::{
-    CONFIG_MAX_BYTES, INFERENCE_READY, InferenceConfig, InferenceResult, RESULT_MAX_BYTES, Tasks,
-    inference_startup_failure,
+    CONFIG_MAX_BYTES, ExecutionTiming, INFERENCE_READY, InferenceConfig, InferenceResult,
+    RESULT_MAX_BYTES, TIMED_INFERENCE_READY, Tasks, inference_startup_failure,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,6 +19,12 @@ pub(crate) struct InferenceProcess {
     stdin: ChildStdin,
     stdout: ChildStdout,
     result: Vec<u8>,
+    timed: bool,
+}
+
+pub(crate) struct CompletedInference {
+    pub result: InferenceResult,
+    pub worker_timing: Option<ExecutionTiming>,
 }
 
 impl InferenceProcess {
@@ -26,7 +32,8 @@ impl InferenceProcess {
         binary: &WorkerBinary,
         config: &InferenceConfig,
     ) -> Result<Self, WorkerError> {
-        let mut child = binary.spawn("infer")?;
+        let timed = binary.timed_inference().await?;
+        let mut child = binary.spawn(if timed { "infer-v2" } else { "infer" })?;
         let stdin = child.stdin().take().ok_or(WorkerError::Unavailable)?;
         let stdout = child.stdout().take().ok_or(WorkerError::Unavailable)?;
         let mut process = Self {
@@ -34,6 +41,7 @@ impl InferenceProcess {
             stdin,
             stdout,
             result: Vec::new(),
+            timed,
         };
         // A cold CUDA worker may compile kernels before it can accept live frames.
         let startup_budget = if config.cuda.is_some() {
@@ -68,7 +76,12 @@ impl InferenceProcess {
         if let Some(failure) = inference_startup_failure(ready) {
             return Err(WorkerError::InferenceStartup(failure));
         }
-        if ready != INFERENCE_READY {
+        let expected = if self.timed {
+            TIMED_INFERENCE_READY
+        } else {
+            INFERENCE_READY
+        };
+        if ready != expected {
             return Err(WorkerError::Config);
         }
         Ok(())
@@ -78,7 +91,7 @@ impl InferenceProcess {
         &mut self,
         frame: &Frame,
         tasks: Tasks,
-    ) -> Result<InferenceResult, WorkerError> {
+    ) -> Result<CompletedInference, WorkerError> {
         tokio::time::timeout(Duration::from_secs(2), self.exchange(frame, tasks))
             .await
             .map_err(|_| WorkerError::Deadline)?
@@ -88,7 +101,7 @@ impl InferenceProcess {
         &mut self,
         frame: &Frame,
         tasks: Tasks,
-    ) -> Result<InferenceResult, WorkerError> {
+    ) -> Result<CompletedInference, WorkerError> {
         let request = Uuid::new_v4();
         self.stdin.write_all(request.as_bytes()).await?;
         self.stdin.write_u8(tasks.byte()).await?;
@@ -101,6 +114,19 @@ impl InferenceProcess {
         }
         self.result.resize(length, 0);
         self.stdout.read_exact(&mut self.result).await?;
+        let worker_timing = if self.timed {
+            let mut timing = [0; ExecutionTiming::BYTES];
+            self.stdout.read_exact(&mut timing).await?;
+            let timing = ExecutionTiming::decode(timing);
+            if (!tasks.pose() && (timing.pose_run_us > 0 || timing.pose_decode_us > 0))
+                || (!tasks.fire() && (timing.fire_run_us > 0 || timing.fire_decode_us > 0))
+            {
+                return Err(WorkerError::Config);
+            }
+            Some(timing)
+        } else {
+            None
+        };
         let result: InferenceResult =
             serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?;
         if result.request != request
@@ -120,7 +146,10 @@ impl InferenceProcess {
         {
             return Err(WorkerError::Config);
         }
-        Ok(result)
+        Ok(CompletedInference {
+            result,
+            worker_timing,
+        })
     }
 
     pub async fn stop(mut self) -> Result<(), WorkerError> {

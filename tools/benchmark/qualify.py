@@ -39,6 +39,59 @@ def timing_percentiles(values):
             for percent in (50, 95, 99)}
 
 
+def histogram_interval(bounds, before, after):
+    counts = [int(new) - int(old) for old, new in zip(before, after, strict=True)]
+    if len(counts) != len(bounds) + 1 or min(counts) < 0:
+        raise ValueError("Latency histogram changed shape or reset during measurement")
+    total = sum(counts)
+    result = dict.fromkeys(("p50", "p95", "p99"))
+    for percentile in (50, 95, 99):
+        rank = (percentile * total + 99) // 100
+        seen = 0
+        for upper, count in zip(bounds, counts):
+            seen += count
+            if rank and seen >= rank:
+                result[f"p{percentile}"] = upper
+                break
+    return {"samples": total, "counts": counts, "upper_bounds_us": result}
+
+
+def analysis_metrics(client, cameras):
+    metrics = {}
+    for camera in cameras:
+        status, report = client.call("GET", f"/api/v2/cameras/{camera}/analysis-metrics")
+        # Keep comparative runs with the previous Core readable.
+        if status == 404:
+            return {}
+        if status != 200:
+            raise RuntimeError(f"Analysis metrics returned {status}")
+        if report is not None:
+            metrics[camera] = report
+    return metrics
+
+
+def measured_latency(previous, current):
+    if previous is None or current is None:
+        return None
+    bounds = current["latency_bounds_us"]
+    if bounds != previous["latency_bounds_us"]:
+        raise ValueError("Latency bucket boundaries changed during measurement")
+    result = {"bucket_upper_bounds_us": bounds, "latencies": {}, "counts": {}, "dispatched_epochs": [
+        previous["dispatched_epochs"], current["dispatched_epochs"],
+    ]}
+    for group in ("worker", "pose", "fire"):
+        result["latencies"][group] = {
+            stage: histogram_interval(bounds, previous[group][stage], counts)
+            for stage, counts in current[group].items() if isinstance(counts, list)
+        }
+        if group in current["counts"]:
+            result["counts"][group] = {key: int(value) - int(previous["counts"][group][key])
+                                       for key, value in current["counts"][group].items()}
+            if min(result["counts"][group].values()) < 0:
+                raise ValueError("Task counters reset during measurement")
+    return result
+
+
 def command(args, fixture, duration):
     subprocess.run([
         str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-stream_loop", "-1",
@@ -99,8 +152,10 @@ def measure(args, root, fixture, count, samples):
         ]
     ids = []
     data = directory / "data"
+    # Keep inherited log handles outside the transient data directory. Windows
+    # may finish terminating supervised children shortly after Core has exited.
     with run_core(args.core, args.worker, data, fixture.parent,
-                  directory / "core.log", *options) as (process, local):
+                  args.output / f"core-{count}.log", *options) as (process, local):
         for index in range(count):
             status, camera = local.call("POST", "/api/v2/cameras", {
                 "name": f"Benchmark {index + 1}", "enabled": True,
@@ -117,6 +172,7 @@ def measure(args, root, fixture, count, samples):
 
         until(capture_ready, 30)
         time.sleep(args.warmup)
+        starting_metrics = analysis_metrics(local, ids)
         began = time.monotonic()
         end = began + args.seconds
         timings = []
@@ -174,6 +230,7 @@ def measure(args, root, fixture, count, samples):
         elapsed = time.monotonic() - began
         cpu_seconds += sum(max(0.0, seconds - cpu_totals.get(identity, 0.0))
                            for identity, seconds in stats(process)[1].items())
+        ending_metrics = analysis_metrics(local, ids)
         cpu = 100 * cpu_seconds / elapsed
         rates = {}
         for camera, rows in observations.items():
@@ -190,6 +247,15 @@ def measure(args, root, fixture, count, samples):
                 **{f"{task}_fps": round(total / span, 3) if pairs and span else None for task, total in totals.items()},
                 "last_epoch": next((row["source_epoch"] for _, row in reversed(rows) if row["source_epoch"]), None),
             }
+            windows = [row["wall_cadence"] for _, row in rows if row.get("wall_cadence")]
+            if windows:
+                rates[camera]["wall_windows_observed"] = len(windows)
+                rates[camera]["minimum_accepted_per_observed_wall_window"] = {
+                    task: min(window[f"{task}_accepted"] for window in windows) for task in totals
+                }
+            metrics = measured_latency(starting_metrics.get(camera), ending_metrics.get(camera))
+            if metrics is not None:
+                rates[camera]["analysis_metrics"] = metrics
         worker_times = [item["last_worker_ms"] for rows in observations.values() for _, item in rows
                         if item["last_worker_ms"] is not None]
         frame_ages = [int(item["last_analysis_age_ms"]) for rows in observations.values() for _, item in rows

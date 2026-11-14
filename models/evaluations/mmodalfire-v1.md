@@ -33,3 +33,16 @@ Manifest SHA-256 `4731d9caedb1bc51ab8dcd297377ec0af0f753cf7bf85d28a23631db8f34c7
 An Ubuntu CPU run of `local-policy-2` used the same frozen manifest with no threshold tuning. It again matched 0/8 early flame or smoke onsets. Three late reviews appeared in the six flame clips. The two wood smoke clips produced no review. Water mist produced five reviews in 1,755 seconds. Dry ice produced none in 1,810 seconds. No negative clip produced an urgent incident. Differences from the earlier Windows run combine the policy change and the runtime host. The early-onset criterion remains unmet.
 
 Report `.local/qualification/fire-growth-repeat/mmodalfire-frozen-policy2.json`, SHA-256 `e01bb4028a2eb0add870af1e17ea03e0179199e663a70233079b1d6008ee9c3e`. The report records the Core, worker, ONNX Runtime and model pack digests.
+
+## Pre-threshold development trace
+
+On Windows the legacy and diagnostic commands returned identical observations at all 672 sampled PTS, also matching the saved legacy run. The diagnostic records the 16 highest-scoring anchors for each class. A reviewer marked the approximate search ROI for each clip before inspecting those anchors. A matching diagnostic proposal needs IoU of at least 0.10 and score of at least 0.05.
+
+| Clips | Earliest stage observed in the selected windows |
+| --- | --- |
+| Cotton 2, polyurethane 1, wood 1 | No matching proposal at or above 0.05 among the recorded anchors. |
+| Cotton 1, polyurethane 2, wood 2 | Matching proposals below the legacy score cutoff. Peak scores 0.17024, 0.07751 and 0.08044. |
+| Heptane pair 1 | A matching proposal scored 0.26477 and was suppressed by NMS at 26.64 s. No matching box survived in the selected window. |
+| Heptane pair 2 | A matching Flame box scored 0.29607 at 25.08 s, 5.08 s after the label. On those same sampled frames, the local policy reports good visibility, one continuity sample and no strong detection or matching Review. The separate paced pass has no timely durable opening. |
+
+These approximate ROIs are for development attribution and are shared by all sampled frames in a clip. The trace covers the recorded top anchors and selected times. The same-frame policy trace bypasses live scheduling and storage. Replay does not produce live alert intents. Diagnostic `.local/qualification/completion-step-1/mmodalfire-diagnostic.json`, SHA-256 `1b06f99263fb3379128f257198d5f80a134a20b18936a21d267649627b7535fb`. The policy trace with the same RGB hashes and raw proposals is `.local/qualification/completion-step-1/mmodalfire-policy-trace.json`, SHA-256 `b408455ff2e2ed4109400dcacecdd1bae90057bf6d6b187004edade4de1f4986`. ROI definitions are in `mmodalfire-v1.regions.json`.

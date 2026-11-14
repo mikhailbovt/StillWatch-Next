@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AnalysisMetrics",
+  "type": "object",
+  "properties": {
+    "counts": {
+      "$ref": "#/$defs/InferenceCounts"
+    },
+    "dispatched_epochs": {
+      "description": "Number of source epochs with a dispatch while this camera has been tracked.",
+      "$ref": "#/$defs/Counter"
+    },
+    "fire": {
+      "$ref": "#/$defs/TaskDurations"
+    },
+    "latency_bounds_us": {
+      "description": "Inclusive upper bounds in microseconds. Each distribution has an extra overflow bucket.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "maxItems": 25,
+      "minItems": 25
+    },
+    "pose": {
+      "$ref": "#/$defs/TaskDurations"
+    },
+    "source_epoch": {
+      "description": "Source epoch of the most recent dispatch. Totals include previous epochs.",
+      "$ref": "#/$defs/Counter"
+    },
+    "worker": {
+      "$ref": "#/$defs/WorkerDurations"
+    }
+  },
+  "required": [
+    "source_epoch",
+    "dispatched_epochs",
+    "counts",
+    "latency_bounds_us",
+    "worker",
+    "pose",
+    "fire"
+  ],
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "InferenceCounts": {
+      "type": "object",
+      "properties": {
+        "fire": {
+          "$ref": "#/$defs/TaskCounts"
+        },
+        "pose": {
+          "$ref": "#/$defs/TaskCounts"
+        }
+      },
+      "required": [
+        "pose",
+        "fire"
+      ]
+    },
+    "TaskCounts": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "$ref": "#/$defs/Counter"
+        },
+        "cancelled": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dispatched": {
+          "$ref": "#/$defs/Counter"
+        },
+        "intentional_burst": {
+          "description": "Accepted results from intentionally early Fire dispatches.",
+          "$ref": "#/$defs/Counter"
+        },
+        "missed_source_slots": {
+          "description": "Nominal source-clock slots crossed without an accepted result between two accepted PTS.",
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_generation": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_scope": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_stale": {
+          "$ref": "#/$defs/Counter"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Counter"
+        },
+        "worker_failed": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "dispatched",
+        "accepted",
+        "timeout",
+        "worker_failed",
+        "cancelled",
+        "rejected_stale",
+        "rejected_scope",
+        "rejected_generation",
+        "missed_source_slots",
+        "intentional_burst"
+      ]
+    },
+    "TaskDurations": {
+      "type": "object",
+      "properties": {
+        "maximum_receive_to_accept_us": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "receive_to_accept_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "receive_to_dispatch_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        }
+      },
+      "required": [
+        "receive_to_dispatch_us",
+        "receive_to_accept_us"
+      ]
+    },
+    "WorkerDurations": {
+      "type": "object",
+      "properties": {
+        "fire_decode_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "fire_run_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "input_read_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "pose_decode_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "pose_run_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "preprocess_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "round_trip_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        },
+        "serialize_us": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Counter"
+          },
+          "maxItems": 26,
+          "minItems": 26
+        }
+      },
+      "required": [
+        "round_trip_us",
+        "input_read_us",
+        "preprocess_us",
+        "pose_run_us",
+        "pose_decode_us",
+        "fire_run_us",
+        "fire_decode_us",
+        "serialize_us"
+      ]
+    }
+  }
+}

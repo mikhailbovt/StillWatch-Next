@@ -111,6 +111,16 @@
     },
     "state": {
       "$ref": "#/$defs/AnalysisState"
+    },
+    "wall_cadence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WallCadence"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -168,6 +178,32 @@
       "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
+      ]
     }
   }
 }

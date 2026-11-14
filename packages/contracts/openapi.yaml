@@ -306,6 +306,21 @@ paths:
             application/json:
               schema: { $ref: schemas/AnalysisStatus.json }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v2/cameras/{id}/analysis-metrics:
+    get:
+      operationId: getCameraAnalysisMetrics
+      parameters:
+        - $ref: '#/components/parameters/CameraId'
+      responses:
+        '200':
+          description: Owner-only task counters and latency distributions for an admitted camera, or null before its first dispatch.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: schemas/AnalysisMetrics.json
+                  - type: 'null'
+        default: { $ref: '#/components/responses/Problem' }
   /api/v2/cameras/{id}/snapshot.jpg:
     get:
       operationId: cameraSnapshot

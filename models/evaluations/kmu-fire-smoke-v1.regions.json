@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "manifest_sha256": "e1836c81374f8b7a321d9c912655ec98f3b3f3427aeda124292e23408cf60426",
+  "description": "One visual reviewer marked approximate normalized search regions before inspecting the raw anchors. Both clips depict the same room. The night clip has a camera menu overlay.",
+  "limits": {"minimum_iou": 0.1, "minimum_diagnostic_score": 0.05},
+  "clips": {
+    "indoor_daytime_smoke.mp4": {"class": "smoke", "roi": [0.31, 0.48, 0.53, 0.72], "window_s": [0, 8]},
+    "indoor_night_smoke.mp4": {"class": "smoke", "roi": [0.34, 0.36, 0.58, 0.74], "window_s": [30, 39.333333]}
+  }
+}

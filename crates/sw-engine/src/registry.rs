@@ -79,6 +79,7 @@ struct State {
     dropped: u64,
     last: Option<(u64, Instant)>,
     first_source: Option<(u64, i64)>,
+    relative_lag: Option<(u64, i32)>,
     codec: Option<Arc<str>>,
     repeated_frame: bool,
     retrying: bool,
@@ -184,6 +185,7 @@ impl CameraRegistry {
             dropped: 0,
             last: None,
             first_source: None,
+            relative_lag: None,
             codec: None,
             repeated_frame: false,
             retrying: false,
@@ -221,6 +223,10 @@ impl CameraRegistry {
                     .first_source
                     .filter(|(epoch, _)| *epoch == item.epoch)
                     .map(|(_, pts)| pts.to_string()),
+                relative_source_lag_ms: state
+                    .relative_lag
+                    .filter(|(epoch, _)| *epoch == item.epoch)
+                    .map(|(_, lag)| lag),
                 codec: state.codec.as_deref().map(str::to_owned),
                 repeated_frame: state.repeated_frame,
                 analysis: None,
@@ -703,6 +709,7 @@ impl CameraRegistry {
                 dropped: 0,
                 last: None,
                 first_source: None,
+                relative_lag: None,
                 codec: None,
                 repeated_frame: false,
                 retrying: false,
@@ -839,8 +846,14 @@ impl CameraRegistry {
         stop: &mut watch::Receiver<bool>,
     ) -> Result<CaptureState, RegistryError> {
         let mut clock = FrameClock::default();
+        let mut source_progress = SourceProgress::default();
         let mut content = RepeatedFrames::default();
         let live = camera.config.source.is_live();
+        let paced = live
+            || matches!(
+                camera.config.source,
+                CameraSource::Replay { pace: true, .. }
+            );
         let empty = Arc::<[ControlledFireRegion]>::from([]);
         let zones = Arc::from(camera.config.controlled_fire_regions.clone());
         let mut moved_since = None;
@@ -856,6 +869,7 @@ impl CameraRegistry {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
                         state.repeated_frame = false;
+                        state.relative_lag = None;
                         if state.codec.is_none() {
                             state.codec = process.codec().cloned();
                         }
@@ -900,6 +914,11 @@ impl CameraRegistry {
             }
             let frame_id = frame.header.frame;
             let source_us = frame.header.source_micros;
+            let relative_lag = if paced && usable {
+                source_progress.observe(camera.epoch, source_us, now)
+            } else {
+                None
+            };
             let scope = SourceScope {
                 camera_id: camera.id,
                 epoch: camera.epoch,
@@ -949,6 +968,7 @@ impl CameraRegistry {
                     }
                 }
                 state.repeated_frame = content.holding;
+                state.relative_lag = relative_lag.map(|lag| (scope.epoch, lag));
                 state.retrying = false;
                 state.clock_held = clock
                     .hold_started
@@ -974,6 +994,7 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
         state.phase = phase;
         state.repeated_frame = false;
         state.clock_held = false;
+        state.relative_lag = None;
         if phase != CaptureState::Completed {
             state.codec = None;
         }
@@ -1069,9 +1090,63 @@ impl FrameClock {
     }
 }
 
+#[derive(Default)]
+struct SourceProgress {
+    anchor: Option<(u64, i64, Instant)>,
+}
+
+impl SourceProgress {
+    fn observe(&mut self, epoch: u64, pts: Option<i64>, at: Instant) -> Option<i32> {
+        let pts = pts?;
+        let (old_epoch, first_pts, first_receive) = *self.anchor.get_or_insert((epoch, pts, at));
+        if old_epoch != epoch {
+            self.anchor = Some((epoch, pts, at));
+            return None;
+        }
+        let source_us = i128::from(pts) - i128::from(first_pts);
+        let wall = at - first_receive;
+        if source_us < 1_000_000 || wall < Duration::from_secs(2) {
+            return None;
+        }
+        // Relative to the first received frame of the scope. This never shifts the anchor
+        // to a late frame, which would hide a growing capture backlog.
+        let lag_ms = (wall.as_micros() as i128 - source_us) / 1_000;
+        Some(lag_ms.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_pts_advancing_at_half_speed_accumulates_lag_until_epoch_changes() {
+        let mut progress = SourceProgress::default();
+        let start = Instant::now();
+        assert_eq!(progress.observe(1, Some(-200_000), start), None);
+        assert_eq!(
+            progress.observe(1, Some(300_000), start + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            progress.observe(1, Some(800_000), start + Duration::from_secs(2)),
+            Some(1000)
+        );
+        assert_eq!(
+            progress.observe(1, Some(2_800_000), start + Duration::from_secs(6)),
+            Some(3000)
+        );
+        let restarted = start + Duration::from_secs(8);
+        assert_eq!(progress.observe(2, Some(200_000), restarted), None);
+        assert_eq!(
+            progress.observe(2, Some(2_203_000), restarted + Duration::from_secs(2)),
+            Some(-3)
+        );
+        assert_eq!(
+            progress.observe(2, Some(2_700_000), restarted + Duration::from_millis(2550)),
+            Some(50)
+        );
+    }
 
     #[test]
     fn plateau_does_not_advance_analysis_and_resumption_rotates_scope() {

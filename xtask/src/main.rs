@@ -5,13 +5,13 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, bail, ensure};
 use schemars::{JsonSchema, generate::SchemaSettings};
 use sw_protocol::{
-    AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisStatus, Bootstrap, Camera, CameraConfig,
-    CameraPage, CameraPatch, CaptureDevice, Change, CoreStatus, Counter, Cursor, Device,
-    DeviceCredentials, EvidencePacket, FeedbackRequest, Health, HealthEventPage, Incident,
-    IncidentPage, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest,
-    PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest, ReplayUpload,
-    ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe, SourceProbeRequest,
-    StreamGrant, StreamRequest,
+    AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisMetrics, AnalysisStatus, Bootstrap,
+    Camera, CameraConfig, CameraPage, CameraPatch, CaptureDevice, Change, CoreStatus, Counter,
+    Cursor, Device, DeviceCredentials, EvidencePacket, FeedbackRequest, Health, HealthEventPage,
+    Incident, IncidentPage, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
+    OnvifStreamRequest, PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest,
+    ReplayUpload, ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe,
+    SourceProbeRequest, StreamGrant, StreamRequest,
     worker::{CaptureRequest, InferenceConfig, InferenceResult},
 };
 
@@ -62,6 +62,7 @@ fn contracts(check: bool) -> Result<()> {
     write_schema::<Change>(&root, "Change", check)?;
     write_schema::<AcknowledgeRequest>(&root, "AcknowledgeRequest", check)?;
     write_schema::<AnalysisStatus>(&root, "AnalysisStatus", check)?;
+    write_schema::<AnalysisMetrics>(&root, "AnalysisMetrics", check)?;
     write_schema::<SemanticStatus>(&root, "SemanticStatus", check)?;
     write_schema::<ResolveRequest>(&root, "ResolveRequest", check)?;
     write_schema::<FeedbackRequest>(&root, "FeedbackRequest", check)?;

@@ -16,8 +16,12 @@ pub(crate) struct SceneSample {
 
 pub(crate) fn measure(frame: &Frame) -> SceneSample {
     let header = frame.header;
-    let width = header.width as usize;
-    let height = header.height as usize;
+    measure_rgb(header.width, header.height, &frame.rgb)
+}
+
+pub(crate) fn measure_rgb(width: u32, height: u32, image: &[u8]) -> SceneSample {
+    let width = width as usize;
+    let height = height as usize;
     let mut cells = [0; CELLS];
     let mut overall = 0u32;
     let mut dark = 0;
@@ -31,7 +35,7 @@ pub(crate) fn measure(frame: &Frame) -> SceneSample {
             let x = ((cell % COLS * 8 + i % 4 * 2 + 1) * width / (COLS * 8)).min(width - 1);
             let y = ((cell / COLS * 8 + i / 4 * 2 + 1) * height / (ROWS * 8)).min(height - 1);
             let index = (y * width + x) * 3;
-            let rgb = &frame.rgb[index..index + 3];
+            let rgb = &image[index..index + 3];
             *value =
                 (u32::from(rgb[0]) * 77 + u32::from(rgb[1]) * 150 + u32::from(rgb[2]) * 29) >> 8;
             energy += *value;
@@ -63,8 +67,8 @@ pub(crate) fn measure(frame: &Frame) -> SceneSample {
         Visibility::Good
     };
     let mut fingerprint = [0; FINGERPRINT_BYTES];
-    fingerprint[..4].copy_from_slice(&header.width.to_le_bytes());
-    fingerprint[4..8].copy_from_slice(&header.height.to_le_bytes());
+    fingerprint[..4].copy_from_slice(&(width as u32).to_le_bytes());
+    fingerprint[4..8].copy_from_slice(&(height as u32).to_le_bytes());
     fingerprint[8..].copy_from_slice(&cells);
     SceneSample {
         visibility,

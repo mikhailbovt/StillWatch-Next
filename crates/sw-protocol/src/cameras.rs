@@ -405,6 +405,9 @@ pub struct CameraRuntime {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_source_us: Option<String>,
+    /// Signed change in source lag since the first usable native PTS of this live or paced epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_source_lag_ms: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -513,6 +516,8 @@ pub struct AnalysisStatus {
     pub last_fire_source_us: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadence: Option<AnalysisCadence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_cadence: Option<crate::WallCadence>,
     pub last_analysis_age_ms: Option<Counter>,
     /// Time between receiving the last accepted frame and dispatching it to a worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,6 +541,7 @@ impl AnalysisStatus {
             last_pose_source_us: None,
             last_fire_source_us: None,
             cadence: None,
+            wall_cadence: None,
             last_analysis_age_ms: None,
             last_queue_age_ms: None,
             extra_fire_frames: None,

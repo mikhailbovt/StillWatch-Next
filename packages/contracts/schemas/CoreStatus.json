@@ -34,12 +34,32 @@
         "degraded"
       ]
     },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
     "InferenceBackend": {
       "type": "string",
       "enum": [
         "cpu",
         "cuda",
         "unrecognized"
+      ]
+    },
+    "InferenceCounts": {
+      "type": "object",
+      "properties": {
+        "fire": {
+          "$ref": "#/$defs/TaskCounts"
+        },
+        "pose": {
+          "$ref": "#/$defs/TaskCounts"
+        }
+      },
+      "required": [
+        "pose",
+        "fire"
       ]
     },
     "InferenceFailure": {
@@ -90,6 +110,17 @@
         },
         "state": {
           "$ref": "#/$defs/AnalysisState"
+        },
+        "totals": {
+          "description": "Task totals since Core started. Visible to the owner.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -115,6 +146,55 @@
         "router_ready",
         "video_codec",
         "redacted_transcode"
+      ]
+    },
+    "TaskCounts": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "$ref": "#/$defs/Counter"
+        },
+        "cancelled": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dispatched": {
+          "$ref": "#/$defs/Counter"
+        },
+        "intentional_burst": {
+          "description": "Accepted results from intentionally early Fire dispatches.",
+          "$ref": "#/$defs/Counter"
+        },
+        "missed_source_slots": {
+          "description": "Nominal source-clock slots crossed without an accepted result between two accepted PTS.",
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_generation": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_scope": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_stale": {
+          "$ref": "#/$defs/Counter"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Counter"
+        },
+        "worker_failed": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "dispatched",
+        "accepted",
+        "timeout",
+        "worker_failed",
+        "cancelled",
+        "rejected_stale",
+        "rejected_scope",
+        "rejected_generation",
+        "missed_source_slots",
+        "intentional_burst"
       ]
     }
   }

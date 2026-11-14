@@ -6,8 +6,8 @@ use std::{
 
 use sw_domain::{ObservationLabel, SourceScope};
 use sw_protocol::{
-    AnalysisCadence, AnalysisState, AnalysisStatus, CameraPriority, CameraSampling, Counter,
-    InferenceBackend, InferenceFailure, InferenceStatus,
+    AnalysisCadence, AnalysisMetrics, AnalysisState, AnalysisStatus, CameraPriority,
+    CameraSampling, Counter, InferenceBackend, InferenceCounts, InferenceFailure, InferenceStatus,
     worker::{InferenceConfig, InferenceResult, Tasks},
 };
 use sw_storage::Store;
@@ -18,7 +18,8 @@ use crate::{
     CameraFrame, CameraRegistry, MICROS_PER_SECOND, WorkerBinary, WorkerError,
     evidence::EvidenceSampler,
     hazards::{HazardPolicies, PendingHazards},
-    inference_process::InferenceProcess,
+    inference_process::{CompletedInference, InferenceProcess},
+    telemetry::{CameraMetrics, Outcome, record_dispatch, record_outcome},
 };
 
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
@@ -41,6 +42,8 @@ pub struct VisionScheduler {
 struct Progress {
     lanes: Vec<Lane>,
     per_camera: HashMap<Uuid, Analysis>,
+    metrics: HashMap<Uuid, CameraMetrics>,
+    totals: InferenceCounts,
 }
 
 #[derive(Clone, Copy)]
@@ -118,11 +121,13 @@ impl VisionScheduler {
             progress: RwLock::new(Progress {
                 lanes: vec![initial; lanes],
                 per_camera: HashMap::new(),
+                metrics: HashMap::new(),
+                totals: InferenceCounts::default(),
             }),
         })
     }
 
-    pub fn inference_status(&self) -> InferenceStatus {
+    pub fn inference_status(&self, include_totals: bool) -> InferenceStatus {
         let mut result = InferenceStatus {
             state: AnalysisState::Starting,
             backend: Some(if self.config.cuda.is_some() {
@@ -133,8 +138,12 @@ impl VisionScheduler {
             ready_workers: 0,
             configured_workers: self.lanes,
             failure: None,
+            totals: None,
         };
         if let Ok(progress) = self.progress.read() {
+            if include_totals {
+                result.totals = Some(progress.totals.clone());
+            }
             result.ready_workers = progress
                 .lanes
                 .iter()
@@ -159,6 +168,12 @@ impl VisionScheduler {
         result
     }
 
+    pub fn metrics(&self, camera: Uuid) -> Option<AnalysisMetrics> {
+        self.cameras.inference_lane(camera)?;
+        let progress = self.progress.read().ok()?;
+        Some(progress.metrics.get(&camera)?.report.clone())
+    }
+
     pub fn status(&self, camera: Uuid, epoch: u64) -> AnalysisStatus {
         let mut response = AnalysisStatus::with_state(AnalysisState::Degraded);
         let latest = self
@@ -173,6 +188,10 @@ impl VisionScheduler {
         {
             let state = progress.lanes[lane].state;
             response.state = state;
+            response.wall_cadence = progress
+                .metrics
+                .get(&camera)
+                .and_then(|metrics| metrics.wall.cadence(Instant::now()));
             if state == AnalysisState::Ready && source_unusable {
                 response.state = AnalysisState::Degraded;
                 return response;
@@ -304,28 +323,24 @@ impl VisionScheduler {
                             }
                         };
                         let dispatched_at = Instant::now();
-                        let Dispatch {
-                            frame,
-                            tasks,
-                            source_us,
-                            extra_fire,
-                        } = job;
-                        last_camera = Some(frame.scope.camera_id);
+                        self.record_dispatch(&job, dispatched_at);
+                        last_camera = Some(job.frame.scope.camera_id);
                         let outcome = tokio::select! {
-                            _ = shutdown.wait_for(|stop| *stop) => break None,
-                            outcome = process.infer(&frame.frame, tasks) => outcome,
+                            _ = shutdown.wait_for(|stop| *stop) => {
+                                self.finish(&job, dispatched_at, Err(Outcome::Cancelled));
+                                break None;
+                            }
+                            outcome = process.infer(&job.frame.frame, job.tasks) => outcome,
                         };
                         match outcome {
                             Ok(result) => {
-                                if !self.accept(
-                                    &frame,
-                                    source_us,
-                                    &result,
-                                    dispatched_at,
-                                    extra_fire,
-                                ) {
+                                if !self.finish(&job, dispatched_at, Ok(&result)) {
                                     continue;
                                 }
+                                let Dispatch {
+                                    frame, source_us, ..
+                                } = job;
+                                let result = result.result;
                                 policies
                                     .retain(|id, _| self.cameras.inference_lane(*id) == Some(lane));
                                 let policy = policies
@@ -342,7 +357,15 @@ impl VisionScheduler {
                                 }
                                 pending.push(frame, hazards);
                             }
-                            Err(error) => break Some(inference_failure(&error)),
+                            Err(error) => {
+                                let outcome = if matches!(error, WorkerError::Deadline) {
+                                    Outcome::Timeout
+                                } else {
+                                    Outcome::WorkerFailed
+                                };
+                                self.finish(&job, dispatched_at, Err(outcome));
+                                break Some(inference_failure(&error));
+                            }
                         }
                     };
                     if process.stop().await.is_err() {
@@ -425,69 +448,92 @@ impl VisionScheduler {
         })
     }
 
-    fn accept(
-        &self,
-        frame: &CameraFrame,
-        source_us: i64,
-        result: &InferenceResult,
-        dispatched_at: Instant,
-        extra_fire: bool,
-    ) -> bool {
-        if frame.captured_at.elapsed() > FRAME_MAX_AGE
-            || !self
-                .cameras
-                .latest(frame.scope.camera_id)
-                .is_some_and(|newest| {
-                    newest.scope == frame.scope
-                        && newest.frame.generation == frame.frame.generation
-                        && newest.usable_for_analysis
-                })
-        {
-            return false;
+    fn record_dispatch(&self, job: &Dispatch, at: Instant) {
+        let scope = job.frame.scope;
+        if let Ok(mut progress) = self.progress.write() {
+            if !progress.metrics.contains_key(&scope.camera_id) {
+                progress
+                    .metrics
+                    .retain(|id, _| self.cameras.inference_lane(*id).is_some());
+            }
+            progress
+                .metrics
+                .entry(scope.camera_id)
+                .or_insert_with(|| CameraMetrics::new(scope))
+                .dispatch(scope, job.tasks, at - job.frame.captured_at, at);
+            record_dispatch(&mut progress.totals, job.tasks);
         }
+    }
+
+    fn finish(
+        &self,
+        job: &Dispatch,
+        dispatched_at: Instant,
+        result: Result<&CompletedInference, Outcome>,
+    ) -> bool {
+        let received_at = Instant::now();
+        let frame = &job.frame;
+        let id = frame.scope.camera_id;
+        let checked = result.and_then(|result| {
+            if received_at - frame.captured_at > FRAME_MAX_AGE {
+                return Err(Outcome::Stale);
+            }
+            let latest = self.cameras.latest(id).ok_or(Outcome::Scope)?;
+            if latest.scope != frame.scope || !latest.usable_for_analysis {
+                return Err(Outcome::Scope);
+            }
+            if latest.frame.generation != frame.frame.generation {
+                return Err(Outcome::Generation);
+            }
+            Ok(result)
+        });
         let Ok(mut progress) = self.progress.write() else {
             return false;
         };
-        let current = progress
-            .per_camera
-            .entry(frame.scope.camera_id)
-            .or_insert_with(|| Analysis::new(frame.scope));
-        if current.scope != frame.scope {
-            *current = Analysis::new(frame.scope);
+        let Some(metrics) = progress.metrics.get_mut(&id) else {
+            record_outcome(&mut progress.totals, job.tasks, Outcome::Scope);
+            return false;
+        };
+        if metrics.scope() != frame.scope {
+            record_outcome(&mut progress.totals, job.tasks, Outcome::Scope);
+            return false;
         }
-        current.first_source_us.get_or_insert(source_us);
-        let cutoff = source_us.saturating_sub(CADENCE_WINDOW_US);
-        for window in [&mut current.pose_window, &mut current.fire_window] {
-            while window.front().is_some_and(|&sample| sample <= cutoff) {
-                window.pop_front();
+        if let Ok(result) = result {
+            metrics.worker_reply(received_at - dispatched_at, result.worker_timing, job.tasks);
+        }
+        let accepted_at = Instant::now();
+        let age = accepted_at - frame.captured_at;
+        let checked = checked.and_then(|result| {
+            if age > FRAME_MAX_AGE {
+                Err(Outcome::Stale)
+            } else {
+                Ok(result)
             }
-        }
-        if let Some(people) = &result.pose {
-            current.pose_frames = current.pose_frames.saturating_add(1);
-            current.pose_time = Some(source_us);
-            current.pose_window.push_back(source_us);
-            current.pose_at = Some(frame.captured_at);
-            current.people = Some(people.len() as u16);
-        }
-        if let Some(regions) = &result.fire {
-            let smoke = regions
-                .iter()
-                .filter(|item| item.label == ObservationLabel::Smoke)
-                .count();
-            current.fire_frames = current.fire_frames.saturating_add(1);
-            current.fire_time = Some(source_us);
-            current.fire_window.push_back(source_us);
-            current.fire_at = Some(frame.captured_at);
-            if extra_fire {
-                current.extra_fire_frames = current.extra_fire_frames.saturating_add(1);
+        });
+        let outcome = match checked {
+            Ok(_) => metrics.accept(
+                job.tasks,
+                frame.sampling,
+                job.source_us,
+                age,
+                accepted_at,
+                job.extra_fire,
+            ),
+            Err(outcome) => outcome,
+        };
+        record_outcome(&mut metrics.report.counts, job.tasks, outcome);
+        record_outcome(&mut progress.totals, job.tasks, outcome);
+        if let Ok(result) = checked {
+            let current = progress
+                .per_camera
+                .entry(id)
+                .or_insert_with(|| Analysis::new(frame.scope));
+            if current.scope != frame.scope {
+                *current = Analysis::new(frame.scope);
             }
-            current.smoke = Some(smoke as u16);
-            current.fire = Some((regions.len() - smoke) as u16);
+            current.update(job, &result.result, dispatched_at);
         }
-        current.last_at = frame.captured_at;
-        current.queue_ms = dispatched_at.duration_since(frame.captured_at).as_millis() as u32;
-        current.worker_ms = result.elapsed_ms;
-        true
+        checked.is_ok()
     }
 
     fn update_burst(&self, scope: SourceScope, candidate: bool, at: Instant) {
@@ -558,6 +604,43 @@ impl Analysis {
         {
             self.burst = Some(now);
         }
+    }
+
+    fn update(&mut self, job: &Dispatch, result: &InferenceResult, dispatched_at: Instant) {
+        let source_us = job.source_us;
+        let cutoff = source_us.saturating_sub(CADENCE_WINDOW_US);
+        self.first_source_us.get_or_insert(source_us);
+        for window in [&mut self.pose_window, &mut self.fire_window] {
+            while window.front().is_some_and(|&sample| sample <= cutoff) {
+                window.pop_front();
+            }
+        }
+        let captured_at = job.frame.captured_at;
+        if let Some(people) = &result.pose {
+            self.pose_frames = self.pose_frames.saturating_add(1);
+            self.pose_time = Some(source_us);
+            self.pose_window.push_back(source_us);
+            self.pose_at = Some(captured_at);
+            self.people = Some(people.len() as u16);
+        }
+        if let Some(regions) = &result.fire {
+            let smoke = regions
+                .iter()
+                .filter(|item| item.label == ObservationLabel::Smoke)
+                .count();
+            self.fire_frames = self.fire_frames.saturating_add(1);
+            self.fire_time = Some(source_us);
+            self.fire_window.push_back(source_us);
+            self.fire_at = Some(captured_at);
+            if job.extra_fire {
+                self.extra_fire_frames = self.extra_fire_frames.saturating_add(1);
+            }
+            self.smoke = Some(smoke as u16);
+            self.fire = Some((regions.len() - smoke) as u16);
+        }
+        self.last_at = captured_at;
+        self.queue_ms = dispatched_at.duration_since(captured_at).as_millis() as u32;
+        self.worker_ms = result.elapsed_ms;
     }
 
     fn cadence(&self, now: i64, sampling: CameraSampling) -> Option<AnalysisCadence> {

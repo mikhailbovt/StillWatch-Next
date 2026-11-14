@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod alerts;
+mod analysis_metrics;
 mod cameras;
 mod evidence;
 mod health;
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use alerts::*;
+pub use analysis_metrics::*;
 pub use cameras::*;
 pub use evidence::*;
 pub use health::*;
@@ -330,6 +332,9 @@ pub struct InferenceStatus {
     pub ready_workers: usize,
     pub configured_workers: usize,
     pub failure: Option<InferenceFailure>,
+    /// Task totals since Core started. Visible to the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals: Option<InferenceCounts>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

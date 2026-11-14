@@ -14,7 +14,7 @@ mod wire;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
@@ -152,6 +152,10 @@ fn router(state: Api) -> Router {
             .route(
                 "/api/v2/cameras/{id}/analysis-status",
                 get(cameras::analysis_status),
+            )
+            .route(
+                "/api/v2/cameras/{id}/analysis-metrics",
+                get(cameras::analysis_metrics),
             );
         if state.profile != Some(PairingProfile::Proxy) {
             protected = protected.route("/api/v2/replay-uploads", post(cameras::upload));
@@ -280,7 +284,10 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
     })
 }
 
-async fn core_status(State(state): State<Api>) -> Json<CoreStatus> {
+async fn core_status(
+    State(state): State<Api>,
+    Extension(principal): Extension<auth::Principal>,
+) -> Json<CoreStatus> {
     Json(CoreStatus {
         version: env!("CARGO_PKG_VERSION").into(),
         inference: state.vision.as_ref().map_or_else(
@@ -290,8 +297,9 @@ async fn core_status(State(state): State<Api>) -> Json<CoreStatus> {
                 ready_workers: 0,
                 configured_workers: 0,
                 failure: None,
+                totals: None,
             },
-            |vision| vision.inference_status(),
+            |vision| vision.inference_status(principal.owner().is_ok()),
         ),
         media: state.media.as_ref().map(|media| media.status()),
     })

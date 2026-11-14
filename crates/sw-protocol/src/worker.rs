@@ -14,6 +14,8 @@ pub const CAPTURE_SOURCE_EXIT: i32 = 4;
 pub const WINDOWS_RTSPS_OPEN_TIMEOUT: Duration = Duration::from_secs(15);
 pub const RESULT_MAX_BYTES: usize = 1_500_000;
 pub const INFERENCE_READY: [u8; 4] = *b"SWI1";
+pub const TIMED_INFERENCE_READY: [u8; 4] = *b"SWI2";
+pub const FIRE_DIAGNOSTIC_READY: [u8; 4] = *b"SWD1";
 pub const MODEL_PACK_UNAVAILABLE: [u8; 4] = *b"SWIM";
 pub const MODEL_INITIALIZATION_FAILED: [u8; 4] = *b"SWIS";
 pub const RUNTIME_UNAVAILABLE: [u8; 4] = *b"SWIR";
@@ -184,6 +186,53 @@ pub struct InferenceResult {
     pub fire: Option<Vec<sw_domain::Observation>>,
 }
 
+/// Durations on the worker's monotonic clock in the order used by the SWI2 reply.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExecutionTiming {
+    pub input_read_us: u32,
+    pub preprocess_us: u32,
+    pub pose_run_us: u32,
+    pub pose_decode_us: u32,
+    pub fire_run_us: u32,
+    pub fire_decode_us: u32,
+    pub serialize_us: u32,
+}
+
+impl ExecutionTiming {
+    pub const BYTES: usize = 7 * size_of::<u32>();
+
+    pub fn encode(self) -> [u8; Self::BYTES] {
+        let fields = [
+            self.input_read_us,
+            self.preprocess_us,
+            self.pose_run_us,
+            self.pose_decode_us,
+            self.fire_run_us,
+            self.fire_decode_us,
+            self.serialize_us,
+        ];
+        let mut bytes = [0; Self::BYTES];
+        for (field, target) in fields.into_iter().zip(bytes.chunks_exact_mut(4)) {
+            target.copy_from_slice(&field.to_le_bytes());
+        }
+        bytes
+    }
+
+    pub fn decode(bytes: [u8; Self::BYTES]) -> Self {
+        let field =
+            |at| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Self {
+            input_read_us: field(0),
+            preprocess_us: field(4),
+            pose_run_us: field(8),
+            pose_decode_us: field(12),
+            fire_run_us: field(16),
+            fire_decode_us: field(20),
+            serialize_us: field(24),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PtsQuality {
     Native,
@@ -315,6 +364,24 @@ fn invalid() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timed_inference_trailer_has_a_fixed_little_endian_layout() {
+        let timing = ExecutionTiming {
+            input_read_us: 9999,
+            preprocess_us: 660,
+            pose_run_us: 21_930,
+            pose_decode_us: 44,
+            fire_run_us: 87_000,
+            fire_decode_us: 12,
+            serialize_us: 2,
+        };
+        let encoded = timing.encode();
+        assert_eq!(encoded.len(), 28);
+        assert_eq!(encoded[0..4], 9999_u32.to_le_bytes());
+        assert_eq!(encoded[16..20], 87_000_u32.to_le_bytes());
+        assert_eq!(ExecutionTiming::decode(encoded), timing);
+    }
 
     #[test]
     fn validates_capture_codec_and_padding() {

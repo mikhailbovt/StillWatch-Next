@@ -7,16 +7,24 @@ use anyhow::{Context, Result, ensure};
 use sw_domain::Observation;
 use sw_inference::{
     CudaProvider, Image, InferenceError, Letterbox, ModelId, ModelPack, PerceptionBackend,
-    Preprocessor, Runtime, decode,
+    Preprocessor, Runtime, decode, trace_fire,
 };
 use sw_protocol::worker::{
-    CONFIG_MAX_BYTES, CudaConfig, FrameHeader, HEADER_LEN, INFERENCE_READY, InferenceConfig,
-    InferenceResult, MODEL_INITIALIZATION_FAILED, MODEL_PACK_UNAVAILABLE, PtsQuality,
-    RESULT_MAX_BYTES, RUNTIME_UNAVAILABLE, Tasks,
+    CONFIG_MAX_BYTES, CudaConfig, ExecutionTiming, FIRE_DIAGNOSTIC_READY, FrameHeader, HEADER_LEN,
+    INFERENCE_READY, InferenceConfig, InferenceResult, MODEL_INITIALIZATION_FAILED,
+    MODEL_PACK_UNAVAILABLE, PtsQuality, RESULT_MAX_BYTES, RUNTIME_UNAVAILABLE,
+    TIMED_INFERENCE_READY, Tasks,
 };
 use uuid::Uuid;
 
-pub fn run() -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Legacy,
+    Timed,
+    FireDiagnostic,
+}
+
+pub fn run(mode: Mode) -> Result<()> {
     let mut input = BufReader::new(io::stdin().lock());
     let mut output = BufWriter::new(io::stdout().lock());
     let mut length = [0; 4];
@@ -64,18 +72,29 @@ pub fn run() -> Result<()> {
             return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED);
         }
     }
-    output.write_all(&INFERENCE_READY)?;
+    output.write_all(&match mode {
+        Mode::Legacy => INFERENCE_READY,
+        Mode::Timed => TIMED_INFERENCE_READY,
+        Mode::FireDiagnostic => FIRE_DIAGNOSTIC_READY,
+    })?;
     output.flush()?;
 
+    let mut payload = Vec::new();
+    let timed = mode == Mode::Timed;
     loop {
         let mut id = [0; 16];
         if input.read(&mut id[..1])? == 0 {
             return Ok(());
         }
+        let read_started = timed.then(Instant::now);
         input.read_exact(&mut id[1..])?;
         let mut kind = [0];
         input.read_exact(&mut kind)?;
         let tasks = Tasks::from_byte(kind[0])?;
+        ensure!(
+            mode != Mode::FireDiagnostic || tasks == Tasks::Fire,
+            "fire diagnostics accepts only fire requests"
+        );
         let mut header = [0; HEADER_LEN];
         input.read_exact(&mut header)?;
         let header = FrameHeader::decode(&header)?;
@@ -87,29 +106,50 @@ pub fn run() -> Result<()> {
         pixels.resize(header.byte_length()? as usize, 0);
         input.read_exact(&mut pixels)?;
         let started = Instant::now();
+        let mut timing = ExecutionTiming::default();
+        if let Some(read_started) = read_started {
+            timing.input_read_us = micros(started.duration_since(read_started));
+        }
         let image = Image::rgb(header.width, header.height, &pixels)?;
         let (tensor, geometry) = prepare.prepare(image);
+        if timed {
+            timing.preprocess_us = micros(started.elapsed());
+        }
+        if mode == Mode::FireDiagnostic {
+            let (observations, trace) =
+                fire.evaluate(geometry.tensor_size(), tensor, |values| {
+                    trace_fire(values, image, geometry, capture_ts)
+                })??;
+            let payload = serde_json::to_vec(&serde_json::json!({
+                "request": Uuid::from_bytes(id),
+                "source_us": header.source_micros.map(|pts| pts.to_string()),
+                "source_dimensions": [header.height, header.width],
+                "fire": observations,
+                "trace": trace,
+            }))?;
+            write_result(&mut output, &payload, None)?;
+            continue;
+        }
+        let input = InferenceInput {
+            tensor,
+            image,
+            geometry,
+            capture_ts,
+        };
         let people = if tasks.pose() {
-            Some(observe(
-                &mut pose,
-                ModelId::PoseBalanced,
-                tensor,
-                image,
-                geometry,
-                capture_ts,
-            )?)
+            let (observations, run, decode) =
+                observe(&mut pose, ModelId::PoseBalanced, input, timed)?;
+            timing.pose_run_us = run;
+            timing.pose_decode_us = decode;
+            Some(observations)
         } else {
             None
         };
         let hazards = if tasks.fire() {
-            Some(observe(
-                &mut fire,
-                ModelId::Fire,
-                tensor,
-                image,
-                geometry,
-                capture_ts,
-            )?)
+            let (observations, run, decode) = observe(&mut fire, ModelId::Fire, input, timed)?;
+            timing.fire_run_us = run;
+            timing.fire_decode_us = decode;
+            Some(observations)
         } else {
             None
         };
@@ -119,28 +159,63 @@ pub fn run() -> Result<()> {
             pose: people,
             fire: hazards,
         };
-        let payload = serde_json::to_vec(&response)?;
-        ensure!(
-            payload.len() <= RESULT_MAX_BYTES,
-            "inference response exceeds limit"
-        );
-        output.write_all(&(payload.len() as u32).to_le_bytes())?;
-        output.write_all(&payload)?;
-        output.flush()?;
+        payload.clear();
+        let serialize_started = timed.then(Instant::now);
+        serde_json::to_writer(&mut payload, &response)?;
+        let timed_reply = serialize_started.map(|at| {
+            timing.serialize_us = micros(at.elapsed());
+            timing
+        });
+        write_result(&mut output, &payload, timed_reply)?;
     }
+}
+
+fn write_result(
+    output: &mut impl Write,
+    payload: &[u8],
+    timing: Option<ExecutionTiming>,
+) -> Result<()> {
+    ensure!(
+        payload.len() <= RESULT_MAX_BYTES,
+        "inference response exceeds limit"
+    );
+    output.write_all(&(payload.len() as u32).to_le_bytes())?;
+    output.write_all(payload)?;
+    if let Some(timing) = timing {
+        output.write_all(&timing.encode())?;
+    }
+    output.flush()?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct InferenceInput<'a> {
+    tensor: &'a [f32],
+    image: Image<'a>,
+    geometry: Letterbox,
+    capture_ts: f64,
 }
 
 fn observe(
     backend: &mut impl PerceptionBackend,
     model: ModelId,
-    tensor: &[f32],
-    image: Image<'_>,
-    geometry: Letterbox,
-    capture_ts: f64,
-) -> Result<Vec<Observation>, InferenceError> {
-    backend.evaluate(geometry.tensor_size(), tensor, |values| {
-        decode(model, values, image, geometry, capture_ts)
+    input: InferenceInput<'_>,
+    timed: bool,
+) -> Result<(Vec<Observation>, u32, u32), InferenceError> {
+    let started = timed.then(Instant::now);
+    backend.evaluate(input.geometry.tensor_size(), input.tensor, |values| {
+        let decoding = timed.then(Instant::now);
+        let observations = decode(model, values, input.image, input.geometry, input.capture_ts)?;
+        let run = started
+            .zip(decoding)
+            .map_or(0, |(a, b)| micros(b.duration_since(a)));
+        let decode = decoding.map_or(0, |at| micros(at.elapsed()));
+        Ok((observations, run, decode))
     })?
+}
+
+fn micros(duration: std::time::Duration) -> u32 {
+    u32::try_from(duration.as_micros()).unwrap_or(u32::MAX)
 }
 
 fn startup_failure(output: &mut impl Write, marker: [u8; 4]) -> Result<()> {

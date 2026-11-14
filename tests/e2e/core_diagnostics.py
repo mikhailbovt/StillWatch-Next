@@ -39,7 +39,12 @@ def check(args, root, name, options, expected):
             return status if inference["state"] != "starting" else None
 
         status = until(initialized, 35)
-        assert status["inference"] == expected, status
+        inference = status["inference"].copy()
+        if expected["backend"] is not None:
+            totals = inference.pop("totals")
+            assert set(totals) == {"pose", "fire"}
+            assert all(int(value) == 0 for counts in totals.values() for value in counts.values())
+        assert inference == expected, status
         assert client.call("GET", "/health/ready")[0] == 200
         report_path = root / f"{name}-diagnostics.json"
         local = client.address.removeprefix("http://")

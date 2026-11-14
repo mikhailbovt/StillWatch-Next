@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { compile } from "json-schema-to-typescript";
 
 const names = [
-  "AlertFeed", "AlertReceipt", "AnalysisStatus", "Bootstrap", "Camera", "CameraConfig", "CameraPage",
+  "AlertFeed", "AlertReceipt", "AnalysisMetrics", "AnalysisStatus", "Bootstrap", "Camera", "CameraConfig", "CameraPage",
   "CameraPatch", "CaptureDevices", "Change", "CoreStatus", "DeviceCredentials", "Devices",
   "EvidencePacket", "Health", "HealthEventPage", "Incident", "IncidentPage", "OnvifDevices", "OnvifProfiles",
   "OnvifProfilesRequest", "OnvifStream", "OnvifStreamRequest", "PairingOffer",

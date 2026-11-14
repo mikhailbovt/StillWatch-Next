@@ -177,6 +177,16 @@
         },
         "state": {
           "$ref": "#/$defs/AnalysisState"
+        },
+        "wall_cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -336,6 +346,14 @@
               "type": "null"
             }
           ]
+        },
+        "relative_source_lag_ms": {
+          "description": "Signed change in source lag since the first usable native PTS of this live or paced epoch.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
         },
         "repeated_frame": {
           "type": "boolean"
@@ -616,6 +634,32 @@
         "unconfigured",
         "needs_review",
         "confirmed"
+      ]
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
       ]
     }
   }

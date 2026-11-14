@@ -11,6 +11,10 @@ export type InferenceFailure =
   | "evidence_backpressure"
   | "unrecognized";
 export type AnalysisState = "disabled" | "starting" | "ready" | "degraded";
+/**
+ * Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.
+ */
+export type Counter = string;
 
 export interface CoreStatus {
   inference: InferenceStatus;
@@ -24,6 +28,34 @@ export interface InferenceStatus {
   failure?: InferenceFailure | null;
   ready_workers: number;
   state: AnalysisState;
+  /**
+   * Task totals since Core started. Visible to the owner.
+   */
+  totals?: InferenceCounts | null;
+  [k: string]: unknown;
+}
+export interface InferenceCounts {
+  fire: TaskCounts;
+  pose: TaskCounts;
+  [k: string]: unknown;
+}
+export interface TaskCounts {
+  accepted: Counter;
+  cancelled: Counter;
+  dispatched: Counter;
+  /**
+   * Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.
+   */
+  intentional_burst: string;
+  /**
+   * Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.
+   */
+  missed_source_slots: string;
+  rejected_generation: Counter;
+  rejected_scope: Counter;
+  rejected_stale: Counter;
+  timeout: Counter;
+  worker_failed: Counter;
   [k: string]: unknown;
 }
 export interface MediaStatus {

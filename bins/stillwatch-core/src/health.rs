@@ -47,7 +47,7 @@ pub(crate) async fn monitor(
             observations.insert(HealthObservation::global(HostClockDiscontinuity, unstable));
         }
         if let Some(vision) = &vision {
-            let status = vision.inference_status();
+            let status = vision.inference_status(false);
             if status.state != AnalysisState::Starting {
                 observations.insert(HealthObservation::global(
                     InferenceUnavailable,

@@ -121,6 +121,69 @@ def run(args):
             verify_cadence(args, root, model_options)
         if args.camera_sampling:
             verify_camera_sampling(args, root, model_options)
+        if args.timing:
+            verify_timing(args, root, model_options)
+        if args.slow_source:
+            verify_slow_source(args, root, model_options)
+
+
+def verify_timing(args, root, model_options):
+    with run_core(args.core, args.worker, root / "timing-data", root, root / "timing.log",
+                  *model_options) as (_, client):
+        status, camera = client.call("POST", "/api/v2/cameras", {
+            "name": "Timing", "enabled": True,
+            "source": {"type": "replay", "file": "pose.mp4", "pace": True, "repeat": True},
+        }, key="timing")
+        assert status == 201
+        camera_id = camera["id"]
+        path = f"/api/v2/cameras/{camera_id}/analysis-metrics"
+        assert client.call("GET", path, authorized=False)[0] == 401
+
+        def metrics(minimum):
+            status, report = client.call("GET", path)
+            assert status == 200, (status, report)
+            return report if report and int(report["counts"]["pose"]["accepted"]) >= minimum else None
+
+        first = until(lambda: metrics(6), 15)
+        worker = first["worker"]
+
+        def total(entries):
+            return sum(map(int, entries))
+
+        assert 500_000 in first["latency_bounds_us"] and 1_000_000 in first["latency_bounds_us"]
+        assert all(len(buckets) == len(first["latency_bounds_us"]) + 1 for buckets in worker.values())
+        replies = total(worker["round_trip_us"])
+        assert replies >= 6, first
+        for field in ("input_read_us", "preprocess_us", "serialize_us"):
+            assert total(worker[field]) == (0 if args.legacy_worker else replies), first
+        if not args.legacy_worker:
+            assert total(worker["pose_run_us"]) == total(worker["pose_decode_us"]) >= 6
+            assert total(worker["fire_run_us"]) == total(worker["fire_decode_us"]) > 0
+        for task in ("pose", "fire"):
+            counts = first["counts"][task]
+            assert total(first[task]["receive_to_dispatch_us"]) == int(counts["dispatched"])
+            assert total(first[task]["receive_to_accept_us"]) == int(counts["accepted"])
+            assert first[task]["maximum_receive_to_accept_us"] <= 3_000_000
+
+        def lag_report():
+            lag = client.camera(camera_id)["runtime"].get("relative_source_lag_ms")
+            return (lag,) if lag is not None else None
+
+        lag, = until(lag_report, 5)
+        assert isinstance(lag, int) and abs(lag) < 2000, lag
+
+        def rotated():
+            current = metrics(int(first["counts"]["pose"]["accepted"]) + 6)
+            return current if current and int(current["source_epoch"]) > int(first["source_epoch"]) else None
+
+        second = until(rotated, 18)
+        for task in ("pose", "fire"):
+            assert all(int(v) >= int(first["counts"][task][k]) for k, v in second["counts"][task].items())
+        code, core_status = client.call("GET", "/api/v2/status")
+        assert code == 200
+        assert int(core_status["inference"]["totals"]["pose"]["accepted"]) >= int(second["counts"]["pose"]["accepted"])
+        print(json.dumps({"timed_ipc": not args.legacy_worker, "reply_histogram_count": replies,
+                          "relative_source_lag_ms": lag, "counters_cross_epoch": True}))
 
 
 def verify_cadence(args, root, model_options):
@@ -258,7 +321,7 @@ def inference_worker(parent):
             command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         except FileNotFoundError:
             continue
-        if command[1:] == [b"infer", b""]:
+        if command[1:] in ([b"infer", b""], [b"infer-v2", b""]):
             workers.append(pid)
     return workers[0] if len(workers) == 1 else None
 
@@ -284,6 +347,7 @@ def verify_inference_recovery(args, root, model_options):
             return value if value["state"] == "ready" and int(value["fire_frames"]) > 0 else None
 
         initial = until(ready, 20)
+        metrics_path = f"/api/v2/cameras/{camera_id}/analysis-metrics"
         for fault, failure in ((signal.SIGSTOP, "worker_timeout"), (signal.SIGKILL, "worker_failed")):
             pid = until(lambda: inference_worker(process.pid))
             os.kill(pid, fault)
@@ -297,6 +361,9 @@ def verify_inference_recovery(args, root, model_options):
             assert state["state"] == "degraded"
             assert all(state[name] is None for name in ("people", "fire_regions", "smoke_regions"))
             assert client.call("GET", "/health/ready")[0] == 200
+            if fault == signal.SIGSTOP:
+                code, report = client.call("GET", metrics_path)
+                assert code == 200 and sum(int(row["timeout"]) for row in report["counts"].values()) > 0
             until(lambda: health_events(client, "inference_unavailable", active_only=True))
 
             def recovered():
@@ -366,6 +433,52 @@ paths:
   fixture:
 """)
     return port, peer, config
+
+
+def verify_slow_source(args, root, model_options):
+    port, peer, config = rtsp_router(root, "slow-source")
+    fixture = root / "paced-source.mp4"
+    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                    "-i", "testsrc2=size=320x240:rate=15:duration=45",
+                    "-c:v", "libx264", "-threads", "1", "-preset", "ultrafast",
+                    "-tune", "zerolatency", "-g", "15", str(fixture)], check=True)
+    publish = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-readrate", "0.5",
+               "-i", str(fixture), "-an", "-c:v", "copy", "-f", "rtsp",
+               "-rtsp_transport", "tcp", f"rtsp://{peer}/fixture"]
+    with launch([str(args.mediamtx), str(config)], root / "slow-source-media.log"):
+        until(lambda: check_port(port))
+        with launch(publish, root / "slow-source-publisher.log") as publisher:
+            with run_core(args.core, args.worker, root / "slow-source-data", root, root / "slow-source.log",
+                          "--rtsp-peer", peer, *model_options) as (_, client):
+                body = {"name": "Half-rate stream", "enabled": True, "source": {
+                    "type": "rtsp", "peer": peer, "stream_path": "/fixture",
+                    "secure": False, "transport": "tcp", "credential_ref": None,
+                }}
+
+                def add_camera():
+                    status, camera = client.call("POST", "/api/v2/cameras", body, key="half-rate")
+                    return camera if status == 201 else None
+
+                camera = until(add_camera, 15)
+                camera_id = camera["id"]
+
+                def full_window():
+                    assert publisher.poll() is None
+                    camera = client.camera(camera_id)
+                    return camera if camera["runtime"]["analysis"].get("wall_cadence") else None
+
+                video = until(full_window, 77)
+                runtime = video["runtime"]
+                source = runtime["analysis"]["cadence"]
+                wall = runtime["analysis"]["wall_cadence"]
+                lag = runtime["relative_source_lag_ms"]
+                assert video["source_epoch"] == camera["source_epoch"] or int(video["source_epoch"]) == 1, video
+                assert runtime["state"] == "streaming" and not source["below_target"], runtime
+                assert wall["window_seconds"] == 60 and 90 <= wall["pose_accepted"] <= 170, wall
+                assert 36 <= wall["fire_accepted"] <= 68, wall
+                assert 25_000 <= lag <= 36_000, runtime
+                print(json.dumps({"half_rate_native_rtsp": True, "source_cadence": source,
+                                  "wall_cadence": wall, "relative_source_lag_ms": lag}))
 
 
 def verify_live_outbox(args, root, model_options):
@@ -537,11 +650,16 @@ if __name__ == "__main__":
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
     parser.add_argument("--cadence", action="store_true", help="Verify measured rates for 2 fps and 15 fps replay cameras")
     parser.add_argument("--camera-sampling", action="store_true", help="Verify camera-specific sampling, evidence and restart")
+    parser.add_argument("--timing", action="store_true", help="Verify histograms, task counts and lag across replay epochs")
+    parser.add_argument("--legacy-worker", action="store_true", help="Expect v1 worker timing compatibility")
+    parser.add_argument("--slow-source", action="store_true", help="Measure a 15 fps RTSP fixture delivered at half speed")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():
         parser.error("--worker-faults requires Linux procfs")
     if options.source_freeze and not options.mediamtx:
         parser.error("--source-freeze requires --mediamtx")
+    if options.slow_source and not options.mediamtx:
+        parser.error("--slow-source requires --mediamtx")
     if options.media_encoder and not options.source_freeze:
         parser.error("--media-encoder requires --source-freeze")
     run(options)

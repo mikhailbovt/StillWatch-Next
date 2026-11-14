@@ -390,6 +390,10 @@ export interface CameraRuntime {
   first_source_us?: string | null;
   frame?: Counter | null;
   last_frame_age_ms?: Counter | null;
+  /**
+   * Signed change in source lag since the first usable native PTS of this live or paced epoch.
+   */
+  relative_source_lag_ms?: number | null;
   repeated_frame?: boolean;
   state: CaptureState;
   [k: string]: unknown;
@@ -418,6 +422,7 @@ export interface AnalysisStatus {
   smoke_regions?: number | null;
   source_epoch?: Counter | null;
   state: AnalysisState;
+  wall_cadence?: WallCadence | null;
   [k: string]: unknown;
 }
 export interface AnalysisCadence {
@@ -429,5 +434,14 @@ export interface AnalysisCadence {
    */
   pose_frames_per_minute: number;
   pose_target_per_minute: number;
+  [k: string]: unknown;
+}
+export interface WallCadence {
+  fire_accepted: number;
+  pose_accepted: number;
+  /**
+   * Accepted results in the trailing monotonic clock interval.
+   */
+  window_seconds: number;
   [k: string]: unknown;
 }

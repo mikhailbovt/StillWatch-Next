@@ -202,6 +202,21 @@ pub async fn analysis_status(
     Ok(Json(analysis))
 }
 
+pub async fn analysis_metrics(
+    State(state): State<Api>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Result<Json<Option<sw_protocol::AnalysisMetrics>>, ApiError> {
+    principal.owner()?;
+    let id = resource_id(&id)?;
+    let camera = state.store.camera(id).await?;
+    Ok(Json(if camera.config.enabled {
+        state.vision.as_ref().and_then(|vision| vision.metrics(id))
+    } else {
+        None
+    }))
+}
+
 fn analysis(state: &Api, id: Uuid, epoch: u64, enabled: bool) -> sw_protocol::AnalysisStatus {
     match &state.vision {
         Some(vision) if enabled => vision.status(id, epoch),
