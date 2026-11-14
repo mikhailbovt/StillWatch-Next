@@ -1,4 +1,4 @@
-"""Exercise the locked Firebase worker transport without sending data to Firebase."""
+"""Exercise the Firebase worker transport and opt-in live SDK routes."""
 
 from __future__ import annotations
 
@@ -85,6 +85,17 @@ def verify_waiting_browser(origin, core_credential, browser_credential):
     def healthy():
         code, body = request(origin, "/health", core_credential)
         return code == 200 and json.loads(body)["local_state"] == "ready"
+
+    def loading_with_cloud():
+        code, body = request(origin, "/health", core_credential)
+        capabilities = json.loads(body)
+        return code == 200 and capabilities["local_state"] == "initializing" and capabilities["cloud_transport"]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        browser = pool.submit(request, origin, "/device/poll", browser_credential, b'{"state":"initializing"}')
+        until(loading_with_cloud, 2)
+        assert request(origin, "/evaluate", core_credential, packet, binary=True)[0] == 503
+        assert browser.result(timeout=7)[0] == 204
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         browser = pool.submit(request, origin, "/device/poll", browser_credential, ready, include_headers=True)
@@ -210,6 +221,7 @@ def run(args):
         port = free_port()
         origin = f"http://127.0.0.1:{port}"
         config.write_text(json.dumps(fake_public_config | {"mode": "hybrid_web"}), encoding="utf8")
+        private(app_check, f"{encoded({'alg': 'RS256'})}.{encoded(valid_claims)}.fixture")
         with launch([str(node), str(entry), str(config), str(port), str(core_token), str(app_check),
                      str(browser_token)], root / "hybrid.log"):
             until(lambda: check_port(port))
@@ -223,7 +235,8 @@ def run(args):
             verify_waiting_browser(origin, core_credential, browser_credential)
         print(json.dumps({"node_and_hybrid_started": True, "scope_and_origin_enforced": True,
                           "invalid_app_check_fails_closed": True, "core_capability_handshake": bool(args.core),
-                          "bounded_browser_long_poll": True, "local_only_denies_attestation": True,
+                          "bounded_browser_long_poll": True, "independent_cloud_ready_during_local_warmup": True,
+                          "local_only_denies_attestation": True,
                           "health_route_and_quota_independent": bool(args.core),
                           "firebase_network_inference": False}))
 
@@ -256,7 +269,11 @@ def live(args):
     private_root = args.live_config.resolve(strict=True)
     token_file = private_root / "core-worker"
     if args.running_port:
-        evaluate_live(f"http://127.0.0.1:{args.running_port}", token_file, args.route, args.expect_source)
+        if args.demo:
+            with TemporaryDirectory(prefix="stillwatch-firebase-core-live-") as temporary:
+                core_round_trip(args, Path(temporary), args.running_port, token_file)
+        else:
+            evaluate_live(f"http://127.0.0.1:{args.running_port}", token_file, args.route, args.expect_source)
         return
     port = free_port()
     origin = f"http://127.0.0.1:{port}"
@@ -280,18 +297,23 @@ def core_round_trip(args, root, port, token_file):
     subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", "40", "-i", str(args.demo),
                     "-t", "8", "-vf", "scale=640:360", "-an", "-c:v", "libx264", "-threads", "1", str(path)], check=True)
     data = root / "core"
+    local_only = args.route == "local_only"
+    fallback = args.route == "prefer_local"
+    expected_source = args.expect_source or ("on_device" if local_only else "in_cloud")
     with run_core(args.core, args.worker, data, root, root / "core.log",
                   "--model-pack", str(args.models), "--model-manifest-sha256", args.manifest_sha256,
                   "--ort-library", str(args.runtime), "--ort-library-sha256", args.runtime_sha256,
                   "--semantic-worker", f"127.0.0.1:{port}", "--semantic-token-file", str(token_file),
+                  "--semantic-route", args.route.replace("_", "-"),
                   "--semantic-include-replay", "--semantic-daily-limit", "2") as (_, client):
         def semantic_ready():
             code, status = client.call("GET", "/api/v2/semantic-status")
-            return code == 200 and status["state"] == "available"
+            return code == 200 and status["state"] == "available" and (
+                not fallback or status["local_model_state"] == "unavailable")
 
-        until(semantic_ready, 12)
+        until(semantic_ready, 110 if local_only else 12)
         cameras = {}
-        for consent in (False, True):
+        for consent in ((False,) if local_only else (False, True)):
             status, camera = client.call("POST", "/api/v2/cameras", {
                 "name": f"Firebase QA {consent}", "enabled": True, "cloud_consent": consent,
                 "source": {"type": "replay", "file": path.name, "pace": True},
@@ -306,20 +328,30 @@ def core_round_trip(args, root, port, token_file):
             def result():
                 return db.execute("select * from semantic_attempts where outcome='applied' and report is not null").fetchone()
 
-            evaluation = until(result, 25)
+            try:
+                evaluation = until(result, 25)
+            except AssertionError as error:
+                attempts = [tuple(row) for row in db.execute(
+                    "SELECT outcome, count(*) FROM semantic_attempts GROUP BY outcome")]
+                _, semantic = client.call("GET", "/api/v2/semantic-status")
+                runtime_states = [client.camera(camera)["runtime"]["state"] for camera in cameras.values()]
+                raise AssertionError({"attempts_by_outcome": attempts, "semantic": semantic,
+                                      "capture_states": runtime_states}) from error
             report = json.loads(evaluation["report"])
-            assert report["inference_source"] == "in_cloud" and report["sdk_version"] == "13.3.0"
-            assert str(uuid.UUID(bytes=evaluation["camera_id"])) == cameras[True]
+            assert report["inference_source"] == expected_source and report["sdk_version"] == "13.3.0"
+            assert str(uuid.UUID(bytes=evaluation["camera_id"])) == cameras[not local_only]
             denied_id = uuid.UUID(cameras[False]).bytes
             until(lambda: db.execute("select count(*) from incidents where camera_id=?", (denied_id,)).fetchone()[0])
             until(lambda: all(client.camera(camera)["runtime"]["state"] == "completed" for camera in cameras.values()), 12)
             time.sleep(1)
-            assert db.execute("select count(*) from semantic_attempts where camera_id=?", (denied_id,)).fetchone()[0] == 0
+            if not local_only:
+                assert db.execute("select count(*) from semantic_attempts where camera_id=?", (denied_id,)).fetchone()[0] == 0
             assert db.execute("select count(*) from notification_outbox").fetchone()[0] == 0
         code, status = client.call("GET", "/api/v2/semantic-status")
-        assert code == 200 and status["last_inference_source"] == "in_cloud"
-        print(json.dumps({"core_real_evidence_applied": True, "inference_source": "in_cloud", "sdk": "13.3.0",
-                          "camera_without_consent_not_submitted": True, "no_live_alerts": True}))
+        assert code == 200 and status["last_inference_source"] == expected_source
+        consent_evidence = {"local_only_without_cloud_consent": True} if local_only else {"camera_without_consent_not_submitted": True}
+        print(json.dumps({"core_real_evidence_applied": True, "inference_source": expected_source, "sdk": "13.3.0",
+                          **consent_evidence, "no_live_alerts": True}))
 
 
 if __name__ == "__main__":
@@ -340,7 +372,11 @@ if __name__ == "__main__":
         parser.error("--core and --worker are required together")
     if options.demo and not all((options.live_config, options.core, options.ffmpeg, options.models, options.runtime,
                                  options.manifest_sha256, options.runtime_sha256)):
-        parser.error("--demo requires the live cloud Node configuration and the locked Core/model/runtime options")
+        parser.error("--demo requires live worker configuration and the locked Core, model and runtime options")
+    if options.live_config and options.route != "cloud_only" and options.running_port is None:
+        parser.error("A browser route requires an already connected hybrid worker on --running-port")
+    if options.demo and options.route == "prefer_local" and options.expect_source != "in_cloud":
+        parser.error("The prefer_local replay check requires an unavailable device model and --expect-source in_cloud")
     if options.live_config:
         live(options)
     else:

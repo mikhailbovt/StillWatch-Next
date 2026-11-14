@@ -76,6 +76,30 @@ function cloudParams(model, schema) {
 
 const expectedInputs = [{ type: "text", languages: ["en"] }, { type: "image" }];
 
+export function deviceAvailability() {
+  return globalThis.LanguageModel?.availability({ expectedInputs });
+}
+
+export async function warmDevice() {
+  const signal = AbortSignal.timeout(60_000);
+  const session = await globalThis.LanguageModel.create({ expectedInputs, signal });
+  try {
+    const canvas = new OffscreenCanvas(320, 180);
+    canvas.getContext("2d").fillRect(0, 0, canvas.width, canvas.height);
+    const image = canvas.transferToImageBitmap();
+    try {
+      await session.prompt([{ role: "user", content: [
+        { type: "text", value: "Is the image blank? Return true or false." },
+        { type: "image", value: image },
+      ] }], { responseConstraint: { type: "boolean" }, signal });
+    } finally {
+      image.close();
+    }
+  } finally {
+    session.destroy();
+  }
+}
+
 export function bootstrapDevice(ai) {
   return getGenerativeModel(ai, {
     mode: InferenceMode.ONLY_ON_DEVICE,
@@ -83,10 +107,11 @@ export function bootstrapDevice(ai) {
   });
 }
 
-export async function evaluate(ai, model, packet, signal, browser = false) {
+export async function evaluate(ai, model, packet, signal, { browser = false, deviceReady = false } = {}) {
   const { meta } = packet;
   const route = browser
-    ? { cloud_only: InferenceMode.ONLY_IN_CLOUD, local_only: InferenceMode.ONLY_ON_DEVICE, prefer_local: InferenceMode.PREFER_ON_DEVICE }[meta.route]
+    ? { cloud_only: InferenceMode.ONLY_IN_CLOUD, local_only: InferenceMode.ONLY_ON_DEVICE,
+        prefer_local: deviceReady ? InferenceMode.PREFER_ON_DEVICE : InferenceMode.ONLY_IN_CLOUD }[meta.route]
     : InferenceMode.ONLY_IN_CLOUD;
   if (!browser && meta.route !== "cloud_only") throw new Error("route_unavailable");
   const currentOverview = packet.images.findLast(image => image.kind === "overview");

@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { CustomProvider, initializeAppCheck } from "firebase/app-check";
-import { bootstrapDevice, evaluate, makeAI } from "./generate.js";
+import { bootstrapDevice, deviceAvailability, evaluate, makeAI, warmDevice } from "./generate.js";
 import { decodePacket } from "./packet.js";
 
 const status = document.querySelector("#status");
@@ -15,6 +15,7 @@ let reconnect;
 let configured;
 let ai;
 let state = "unavailable";
+let nextWarmup = 0;
 let currentJob;
 
 function request(path, options = {}) {
@@ -86,18 +87,6 @@ async function connectBrowser(value, remember) {
     prepare.disabled = false;
     status.textContent = "Connected. Initialize the Chrome model to enable local evaluation.";
     void poll();
-    try {
-      // A model previously downloaded in this profile can be ready without user activation.
-      const available = await globalThis.LanguageModel?.availability({
-        expectedInputs: [{ type: "text", languages: ["en"] }, { type: "image" }],
-      });
-      if (available === "available" && state === "unavailable") {
-        state = "ready";
-        status.textContent = "Chrome model available. Waiting for evidence.";
-      }
-    } catch {
-      // The browser can still serve a consented cloud request.
-    }
   } catch {
     credential = "";
     if (reconnect === value) {
@@ -132,14 +121,41 @@ prepare.addEventListener("click", async () => {
     await bootstrapDevice(ai).initializeDeviceModel(progress => {
       status.textContent = "Downloading Chrome model (" + Math.round(100 * progress) + "%)";
     });
+    await warmDevice();
     state = "ready";
-    status.textContent = "Chrome model initialized. Waiting for evidence.";
+    status.textContent = "Chrome model ready. Waiting for evidence.";
   } catch {
     state = "unavailable";
+    nextWarmup = performance.now() + 30_000;
     status.textContent = "The Chrome model is unavailable. Review the browser requirements and retry.";
     prepare.disabled = false;
   }
 });
+
+async function refreshDeviceAvailability() {
+  if (state !== "unavailable" || performance.now() < nextWarmup) return;
+  let available;
+  try {
+    // Chrome can discover a cached model after the worker has already connected.
+    available = await deviceAvailability();
+  } catch {
+    return;
+  }
+  if (available !== "available" || state !== "unavailable") return;
+  state = "initializing";
+  prepare.disabled = true;
+  status.textContent = "Warming the Chrome model…";
+  try {
+    await warmDevice();
+    state = "ready";
+    status.textContent = "Chrome model ready. Waiting for evidence.";
+  } catch (error) {
+    state = "unavailable";
+    nextWarmup = performance.now() + 30_000;
+    prepare.disabled = false;
+    status.textContent = `Chrome model warmup failed (${evaluationFailure(error)}). Retrying after a delay.`;
+  }
+}
 
 async function poll() {
   let reconnecting = false;
@@ -147,6 +163,7 @@ async function poll() {
   // otherwise run recurring JavaScript timers much less often.
   while (credential) {
     try {
+      void refreshDeviceAvailability();
       const response = await request("/device/poll", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state }), signal: AbortSignal.timeout(7_000),
@@ -177,7 +194,8 @@ async function serveJob(response) {
   let result;
   try {
     const packet = await decodePacket(await response.arrayBuffer());
-    result = await evaluate(ai, configured.model, packet, AbortSignal.timeout(packet.meta.timeout_ms), true);
+    result = await evaluate(ai, configured.model, packet, AbortSignal.timeout(packet.meta.timeout_ms),
+      { browser: true, deviceReady: state === "ready" });
     status.textContent = result.inference_source === "on_device" ? "Last evaluation ran on this device." : "Last evaluation ran in the cloud.";
   } catch (error) {
     result = { error: "inference_unavailable" };

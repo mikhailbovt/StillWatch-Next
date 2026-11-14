@@ -106,8 +106,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   }
 
   function browserReady() {
-    const state = browserState();
-    return state === "ready" || state === "unavailable";
+    return browserState() !== "disconnected";
   }
 
   function browserState() {
@@ -116,7 +115,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   }
 
   function dispatch() {
-    if (!waiting || !job || job.claimed || localState === "initializing"
+    if (!waiting || !job || job.claimed
         || (job.route === "local_only" && localState !== "ready")) return;
     job.claimed = true;
     waiting.finish(job);
