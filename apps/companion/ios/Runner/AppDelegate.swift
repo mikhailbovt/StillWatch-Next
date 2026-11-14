@@ -43,6 +43,13 @@ import UserNotifications
           let pending = self.pushInteractions
           self.pushInteractions.removeAll()
           result(pending)
+        case "deliveredNotices":
+          UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            DispatchQueue.main.async {
+              let notices = notifications.reversed().prefix(32).compactMap(self.notificationDelegate.pushNotice)
+              result(notices)
+            }
+          }
         default: result(FlutterMethodNotImplemented)
         }
       }
@@ -172,7 +179,7 @@ private final class StillWatchNotificationDelegate: NSObject, UNUserNotification
     }
   }
 
-  private func pushNotice(_ notification: UNNotification) -> String? {
+  func pushNotice(_ notification: UNNotification) -> String? {
     guard notification.request.trigger is UNPushNotificationTrigger,
       let value = notification.request.content.userInfo["stillwatch_notice"] as? String,
       let notice = UUID(uuidString: value) else { return nil }

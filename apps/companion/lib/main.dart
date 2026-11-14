@@ -81,6 +81,7 @@ class _StillWatchAppState extends State<StillWatchApp>
     _storage,
     onReview: _openIncident,
     onFailure: _showMessage,
+    observePlatformDelivery: _iosPush?.observeDelivered,
   );
 
   void _openIncident(CoreProfile profile, Incident incident) {

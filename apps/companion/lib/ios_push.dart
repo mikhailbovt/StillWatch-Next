@@ -27,6 +27,8 @@ final class IosPush extends ChangeNotifier {
   Completer<void>? _syncDone;
   bool _changing = false;
   bool _opening = false;
+  final _confirmedNotices = <(String, String)>{};
+  DateTime? _lastPresentationCheck;
 
   bool enabled = false;
   String state = 'off';
@@ -51,6 +53,7 @@ final class IosPush extends ChangeNotifier {
   void resume() {
     _permission = null;
     _registeredAt = null;
+    _lastPresentationCheck = null;
     unawaited(_sync());
     unawaited(_open());
   }
@@ -60,8 +63,53 @@ final class IosPush extends ChangeNotifier {
     if (profile == _profile && console.link == _link) return;
     _profile = profile;
     _link = console.link;
+    _lastPresentationCheck = null;
     unawaited(_sync());
     if (console.link == LinkState.connected) unawaited(_open());
+  }
+
+  Future<void> observeDelivered(CoreProfile profile) async {
+    if (_closed || !console.foreground || console.selected != profile) return;
+    final now = DateTime.now();
+    final previous = _lastPresentationCheck;
+    if (previous != null &&
+        now.difference(previous) < const Duration(seconds: 9)) {
+      return;
+    }
+    _lastPresentationCheck = now;
+    final notices = await _channel.invokeListMethod<String>('deliveredNotices');
+    if (notices == null || _closed || console.selected != profile) return;
+    _confirmedNotices.removeWhere((entry) => !notices.contains(entry.$2));
+    final budget = Stopwatch()..start();
+    for (final notice in notices.take(32)) {
+      if (_closed ||
+          console.selected != profile ||
+          _confirmedNotices.length >= 128 ||
+          budget.elapsed >= const Duration(seconds: 1)) {
+        return;
+      }
+      final key = (profile.id, notice);
+      if (_confirmedNotices.contains(key)) continue;
+      try {
+        final response = await profile.client
+            .iosPushNotice(notice)
+            .timeout(const Duration(seconds: 1));
+        final alert = object(response['alert']);
+        if (alert['core_id'] != profile.id ||
+            response['generation'] != console.streamGeneration) {
+          continue;
+        }
+        await profile.client
+            .alertSeen(counter(alert['id']), counter(alert['attention_cycle']))
+            .timeout(const Duration(seconds: 1));
+        _confirmedNotices.add(key);
+      } on StillWatchException catch (error) {
+        if (error.status == 404) continue;
+        return;
+      } on TimeoutException {
+        return;
+      }
+    }
   }
 
   Future<void> setEnabled(CoreProfile profile, bool value) async {

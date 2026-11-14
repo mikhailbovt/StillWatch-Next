@@ -18,6 +18,7 @@ final class LocalAlerts extends ChangeNotifier {
     this.backgroundWorker = false,
     this.onReview,
     this.onFailure,
+    this.observePlatformDelivery,
   }) {
     console.addListener(_connectionChanged);
   }
@@ -27,6 +28,7 @@ final class LocalAlerts extends ChangeNotifier {
   final bool backgroundWorker;
   final void Function(CoreProfile, Incident)? onReview;
   final void Function(String)? onFailure;
+  final Future<void> Function(CoreProfile)? observePlatformDelivery;
   static const _background = MethodChannel(
     'com.stillwatch.companion/background-alerts',
   );
@@ -357,6 +359,8 @@ final class LocalAlerts extends ChangeNotifier {
         if (permissionBlockedAt != null) await _removeWhere((_) => true);
         return;
       }
+      if (!_canNotify(profile)) return;
+      await observePlatformDelivery?.call(profile);
       if (!_canNotify(profile)) return;
       final current = <String>{};
       final tracked = _active.values
