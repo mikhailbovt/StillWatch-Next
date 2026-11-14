@@ -27,6 +27,7 @@ export type InferenceFailure =
   | "worker_failed"
   | "evidence_backpressure"
   | "unrecognized";
+export type Attention = "info" | "review" | "urgent";
 
 export interface CoreStatus {
   analysis_capacity?: AnalysisCapacity | null;
@@ -35,6 +36,10 @@ export interface CoreStatus {
    */
   camera_coverage?: CameraCoverage[] | null;
   inference: InferenceStatus;
+  /**
+   * Highest attention level available from currently loaded local models.
+   */
+  local_attention_ceiling?: Attention | null;
   media?: MediaStatus | null;
   version: string;
   writer?: WriterStatus | null;

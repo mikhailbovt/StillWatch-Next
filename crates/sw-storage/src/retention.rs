@@ -69,6 +69,7 @@ impl Store {
                 ("idempotency_records", "expires_at"),
                 ("pairing_grants", "expires_at"),
                 ("retired_refresh_credentials", "expires_at"),
+                ("refresh_receipts", "expires_at"),
                 ("device_sessions", "refresh_expiry"),
             ] {
                 let statement = format!(

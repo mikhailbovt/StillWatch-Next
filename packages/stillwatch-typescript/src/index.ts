@@ -167,6 +167,10 @@ export class StillWatchClient {
     return this.#json("GET", "/api/v2/alerts", { signal });
   }
 
+  alertPage(after?: string, limit = 128, signal?: AbortSignal): Promise<AlertFeed> {
+    return this.#json("GET", page("/api/v2/alerts", after, limit), { signal });
+  }
+
   async alertSeen(id: string, cycle: string, signal?: AbortSignal): Promise<void> {
     await this.#request("POST", "/api/v2/alerts/" + counter(id) + "/seen", {
       signal, headers: { "Content-Type": "application/json" },

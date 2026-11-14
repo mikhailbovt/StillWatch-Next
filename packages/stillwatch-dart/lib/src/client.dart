@@ -34,8 +34,10 @@ final class StillWatchClient {
     required String seed,
     required Json credentials,
     required SessionWriter save,
+    SessionReader? reload,
+    SessionLock? lock,
   }) {
-    final session = DeviceSession(core, seed, credentials, save);
+    final session = DeviceSession(core, seed, credentials, save, reload, lock);
     return StillWatchClient._(core.transport(), session.access, core.id);
   }
 
@@ -213,6 +215,11 @@ final class StillWatchClient {
 
   Future<List<Json>> alerts() async =>
       objects(await _json('GET', '/api/v2/alerts'), 'alerts');
+
+  Future<AlertPage> alertPage({String? after, int limit = 128}) async =>
+      AlertPage.fromJson(
+        await _json('GET', _page('/api/v2/alerts', after, limit)),
+      );
 
   Future<void> alertSeen(String id, String cycle) async {
     await _request(

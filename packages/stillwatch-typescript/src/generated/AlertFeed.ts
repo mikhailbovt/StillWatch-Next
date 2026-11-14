@@ -9,6 +9,22 @@ export type UtcTimestamp = string;
 
 export interface AlertFeed {
   alerts: AlertDelivery[];
+  /**
+   * Changes when Core invalidates all delivery state during restore.
+   */
+  generation?: string | null;
+  /**
+   * Highest notification ID included in this scan.
+   */
+  head?: Counter | null;
+  /**
+   * Device-scoped continuation for the current feed scan.
+   */
+  next?: string | null;
+  /**
+   * Server time at which this page was evaluated.
+   */
+  observed_at?: UtcTimestamp | null;
   [k: string]: unknown;
 }
 export interface AlertDelivery {

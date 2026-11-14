@@ -85,14 +85,19 @@ def python_client():
 
     async def check():
         refreshes = 0
+        pending_writes = 0
 
-        async def persist(_):
-            nonlocal refreshes
-            refreshes += 1
+        async def persist(state):
+            nonlocal refreshes, pending_writes
+            if state.get("pending_refresh"):
+                pending_writes += 1
+            else:
+                refreshes += 1
 
         async with AsyncClient(registration.core, seed=registration.seed, credentials=registration.credentials, persist=persist) as client:
             snapshot, _, cameras = await asyncio.gather(client.snapshot(), client.snapshot(), client.cameras())
             assert refreshes == 1
+            assert pending_writes == 1
             assert [camera["id"] for camera in cameras["cameras"]] == [options["camera"]]
             health = await client.health_events(limit=1)
             assert health["events"][0]["camera_id"] == options["camera"] and health["next"]

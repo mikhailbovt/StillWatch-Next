@@ -14,7 +14,8 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use stillwatch_sdk::{
-    Client, DeviceKey, DeviceSession, Error, PairedEndpoint, SessionPersistence, enroll,
+    Client, DeviceKey, DeviceSession, Error, PairedEndpoint, PendingRefresh, SessionPersistence,
+    enroll,
     protocol::{AlertDelivery, Attention, Counter, DeviceCredentials, PairingOffer},
 };
 use transport::{LogOutput, NotificationTransport};
@@ -65,6 +66,8 @@ struct State {
     certificate: String,
     seed: [u8; 32],
     credentials: DeviceCredentials,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_refresh: Option<PendingRefresh>,
 }
 
 struct Persist(PathBuf);
@@ -80,6 +83,26 @@ impl SessionPersistence for Persist {
                 &serde_json::to_vec(credentials).map_err(|_| Error::Credentials)?,
             )
             .map_err(|_| Error::Credentials)?;
+            state.pending_refresh = None;
+            write_state(&self.0, &state).map_err(|_| Error::Credentials)
+        })
+    }
+
+    fn save_pending<'a>(
+        &'a self,
+        _credentials: &'a DeviceCredentials,
+        pending: &'a PendingRefresh,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = read_state(&self.0).map_err(|_| Error::Credentials)?;
+            if state
+                .pending_refresh
+                .as_ref()
+                .is_some_and(|saved| saved.request.nonce == pending.request.nonce)
+            {
+                return Ok(());
+            }
+            state.pending_refresh = Some(pending.clone());
             write_state(&self.0, &state).map_err(|_| Error::Credentials)
         })
     }
@@ -111,6 +134,7 @@ async fn main() -> Result<()> {
                     certificate,
                     seed: key.export_seed(),
                     credentials,
+                    pending_refresh: None,
                 },
             )?;
             println!("Alarm agent paired. Start it in this user session.");
@@ -152,10 +176,11 @@ fn open_client(state: PathBuf) -> Result<(Client, Uuid)> {
         &saved.digest,
         &saved.certificate,
     )?;
-    let session = DeviceSession::new(
+    let session = DeviceSession::restore(
         &endpoint,
         DeviceKey::from_seed(&saved.seed),
         saved.credentials,
+        saved.pending_refresh,
         Some(Arc::new(Persist(state))),
     )?;
     Ok((
@@ -237,13 +262,33 @@ async fn watch(client: Client, core: Uuid, output: impl NotificationTransport) -
             if !online {
                 client.capabilities().await?;
             }
-            client.alerts().await
+            let mut page = client.alerts().await?;
+            let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+            let mut repeating = None;
+            loop {
+                for alert in page
+                    .alerts
+                    .into_iter()
+                    .filter(|alert| fresh_urgent(alert, core, now))
+                {
+                    if alert.client_seen_at.is_none() {
+                        return Ok((Some(alert), repeating));
+                    }
+                    if ringing.is_some_and(|(id, _)| id == alert.id) {
+                        repeating = Some(alert);
+                    }
+                }
+                let Some(next) = page.next else {
+                    return Ok((None, repeating));
+                };
+                page = client.alert_page(Some(&next), 128).await?;
+            }
         };
         let result = tokio::select! {
             result = &mut stop => return result.context("alarm agent shutdown"),
             result = poll => result,
         };
-        let feed = match result {
+        let (pending, repeating) = match result {
             Ok(feed) => {
                 if !online {
                     eprintln!("StillWatch alarm agent connected");
@@ -265,27 +310,22 @@ async fn watch(client: Client, core: Uuid, output: impl NotificationTransport) -
                 continue;
             }
         };
-        let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
-        let mut urgent = feed
-            .alerts
-            .iter()
-            .filter(|alert| fresh_urgent(alert, core, now));
-        if let Some(alert) = urgent.clone().find(|alert| alert.client_seen_at.is_none()) {
+        if let Some(alert) = pending {
             let already_played = ringing.is_some_and(|(id, _)| id == alert.id);
             if !already_played {
                 let start = Instant::now();
-                if let Err(error) = output.present(alert).await {
+                if let Err(error) = output.present(&alert).await {
                     eprintln!("StillWatch notification: {error}");
                     continue;
                 }
                 ringing = Some((alert.id, start));
             }
             let _ = client.alert_seen(alert.id, alert.attention_cycle).await;
-        } else if let Some((id, start)) = ringing
+        } else if let Some((_, start)) = ringing
             && start.elapsed() < Duration::from_secs(30)
-            && let Some(alert) = urgent.find(|alert| alert.id == id)
+            && let Some(alert) = repeating
         {
-            if let Err(error) = output.repeat(alert).await {
+            if let Err(error) = output.repeat(&alert).await {
                 eprintln!("StillWatch notification: {error}");
             }
         } else {

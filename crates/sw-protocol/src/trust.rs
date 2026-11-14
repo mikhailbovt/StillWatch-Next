@@ -95,7 +95,7 @@ pub struct PairingFinish {
     pub signature: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
@@ -125,6 +125,14 @@ pub struct DeviceCredentials {
     pub access_expires_at: UtcTimestamp,
     pub refresh_token: String,
     pub refresh_expires_at: UtcTimestamp,
+}
+
+/// Persist together with the current credentials before transmitting the proof.
+/// The replacement credentials and cleared pending operation commit together.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct PendingRefresh {
+    pub replay_supported: bool,
+    pub request: RefreshRequest,
 }
 
 /// Ed25519 proof over the one-time challenge, enrollment secret and device label.

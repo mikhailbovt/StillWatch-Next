@@ -103,7 +103,8 @@ def run(args):
             assert client.call("GET", f"{path}/0", binary=True) == (200, expected_jpeg)
             status, archived = client.call("GET", f"/api/v2/incidents/{overview_id}")
             assert status == 200 and archived["category"] == "overview" and archived["lifecycle"] == "resolved"
-            assert client.call("GET", "/api/v2/alerts") == (200, {"alerts": []})
+            status, feed = client.call("GET", "/api/v2/alerts")
+            assert status == 200 and feed["alerts"] == [] and feed.get("next") is None
         print(json.dumps({"read_only_source": True, "dry_run": True, "historic_evidence": True,
                           "preserved_incident_ids": True, "no_historic_alerts": True}))
 

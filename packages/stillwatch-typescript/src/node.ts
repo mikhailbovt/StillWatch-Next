@@ -6,9 +6,17 @@ import type { RequestInit as NativeInit } from "undici";
 import { StillWatchClient, fetchResponse, interruptible, read } from "./index.js";
 import type { Credentials, Fetch, PairingOffer } from "./index.js";
 import type { DeviceCredentials } from "./generated/DeviceCredentials.js";
+import type { RefreshRequest } from "./generated/RefreshRequest.js";
 import { CoreError, json, object, origin, responseError, token, uuid } from "./wire.js";
 
 export type { DeviceCredentials };
+
+interface PendingRefresh {
+  replay_supported: boolean;
+  request: RefreshRequest;
+}
+
+export type PersistedDeviceCredentials = DeviceCredentials & { pending_refresh?: PendingRefresh };
 
 export interface EndpointPin {
   endpoint: string;
@@ -62,8 +70,8 @@ export class NodeStillWatchClient extends StillWatchClient {
 
   constructor(pin: EndpointPin, options: {
     seed?: Uint8Array;
-    credentials?: DeviceCredentials;
-    persist?: (value: DeviceCredentials) => Promise<void>;
+    credentials?: PersistedDeviceCredentials;
+    persist?: (value: PersistedDeviceCredentials) => Promise<void>;
   } = {}) {
     const endpoint = origin(pin.endpoint).origin;
     const instance = uuid(pin.core_instance_id);
@@ -123,23 +131,30 @@ export async function enroll(offer: PairingOffer, deviceLabel: string, signal?: 
 class DeviceSession implements Credentials {
   readonly #key;
   #value: DeviceCredentials;
+  #pending?: PendingRefresh;
   #flight?: Promise<void>;
   #terminal = false;
   #dirty = false;
 
   constructor(readonly core: EndpointPin, readonly fetch: Fetch, seed: Uint8Array,
-              value: DeviceCredentials, readonly persist: (value: DeviceCredentials) => Promise<void>) {
+              value: PersistedDeviceCredentials, readonly persist: (value: PersistedDeviceCredentials) => Promise<void>) {
     if (seed.length !== 32) throw new CoreError("credentials");
     const prefix = Buffer.from("302e020100300506032b657004220420", "hex");
     this.#key = createPrivateKey({ key: Buffer.concat([prefix, seed]), format: "der", type: "pkcs8" });
     if (createPublicKey(this.#key).asymmetricKeyType !== "ed25519") throw new CoreError("credentials");
-    this.#value = validate(value);
+    const { pending_refresh: pending, ...credentials } = value;
+    this.#value = validate(credentials);
+    this.#pending = pending === undefined ? undefined : structuredClone(pending);
+    this.#terminal = this.#pending !== undefined && this.#pending.replay_supported !== true;
   }
 
   async access(signal: AbortSignal, rejected?: string): Promise<string> {
-    if (this.#flight) await interruptible(this.#flight, signal);
+    if (this.#flight) {
+      await interruptible(this.#flight, signal);
+      return this.access(signal, rejected);
+    }
     if (this.#terminal) throw new CoreError("credentials");
-    const refresh = Date.parse(this.#value.access_expires_at) <= Date.now() + 15_000 ||
+    const refresh = this.#pending !== undefined || Date.parse(this.#value.access_expires_at) <= Date.now() + 15_000 ||
       rejected === this.#value.access_token;
     if (refresh || this.#dirty) {
       const work = this.#update(refresh);
@@ -151,23 +166,62 @@ class DeviceSession implements Credentials {
   }
 
   async #update(refresh: boolean): Promise<void> {
+    await this.#saveReplacement();
     if (refresh) {
-      if (Date.parse(this.#value.refresh_expires_at) <= Date.now()) throw new CoreError("credentials");
+      if (Date.parse(this.#value.refresh_expires_at) <= Date.now()) {
+        this.#terminal = true;
+        throw new CoreError("credentials");
+      }
       const device = this.#value.device.id;
       const refreshToken = this.#value.refresh_token;
-      const nonce = randomUUID();
-      const message = proof("refresh", [this.core.core_instance_id, device, nonce], refreshToken);
-      // A lost response may have consumed the token. Do not automatically reuse it.
-      this.#terminal = true;
-      const updated = await command(this.fetch, this.core.endpoint, "/api/v2/device-session/refresh", {
-        device_id: device, nonce, refresh_token: refreshToken,
-        signature: sign(null, message, this.#key).toString("hex"),
-      });
-      if (updated.device.id !== device) throw new CoreError("identity");
+      const signature = (nonce: string) => sign(null,
+        proof("refresh", [this.core.core_instance_id, device, nonce], refreshToken), this.#key).toString("hex");
+      const signal = AbortSignal.timeout(12_000);
+      const response = await fetchResponse(this.fetch, new URL("/bootstrap/info", this.core.endpoint).href, {}, signal);
+      const bytes = await read(response, 16 * 1024, signal);
+      if (!response.ok) throw responseError(response.status, bytes);
+      const bootstrap = object(json(bytes));
+      if (bootstrap.instance_id !== this.core.core_instance_id || object(bootstrap.version).major !== 2) {
+        throw new CoreError("identity");
+      }
+      if (this.#pending === undefined) {
+        const nonce = randomUUID();
+        this.#pending = { replay_supported: bootstrap.refresh_replay === true, request: {
+          device_id: device, nonce, refresh_token: refreshToken, signature: signature(nonce),
+        } };
+      } else if (bootstrap.refresh_replay !== true) throw new CoreError("credentials");
+      const pending = this.#pending;
+      const request = pending.request;
+      if (!request || request.device_id !== device || request.refresh_token !== refreshToken ||
+          request.signature !== signature(uuid(request.nonce))) {
+        this.#terminal = true;
+        throw new CoreError("credentials");
+      }
+      await this.persist(structuredClone({ ...this.#value, pending_refresh: pending }));
+      this.#terminal = !pending.replay_supported;
+      let updated: DeviceCredentials;
+      try {
+        updated = await command(this.fetch, this.core.endpoint, "/api/v2/device-session/refresh", request);
+      } catch (error) {
+        if (error instanceof CoreError && (error.status === 401 || error.status === 403)) {
+          this.#terminal = true;
+          throw new CoreError("credentials");
+        }
+        throw error;
+      }
+      if (updated.device.id !== device) {
+        this.#terminal = true;
+        throw new CoreError("identity");
+      }
       this.#value = updated;
+      this.#pending = undefined;
       this.#dirty = true;
       this.#terminal = false;
     }
+    await this.#saveReplacement();
+  }
+
+  async #saveReplacement(): Promise<void> {
     if (this.#dirty) {
       await this.persist(structuredClone(this.#value));
       this.#dirty = false;

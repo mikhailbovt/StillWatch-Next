@@ -27,11 +27,18 @@ Future<void> main(List<String> arguments) async {
   final credentials = Map<String, Object?>.of(enrollment.credentials)
     ..['access_expires_at'] = DateTime.utc(2001).toIso8601String();
   var refreshes = 0;
+  var pendingWrites = 0;
   final client = StillWatchClient.paired(
     enrollment.core,
     seed: enrollment.seed,
     credentials: credentials,
-    save: (_) async => refreshes++,
+    save: (value) async {
+      if (value['pending_refresh'] == null) {
+        refreshes++;
+      } else {
+        pendingWrites++;
+      }
+    },
   );
   try {
     check((await client.core()).id == offer.core.id, 'Core ID mismatch');
@@ -41,6 +48,7 @@ Future<void> main(List<String> arguments) async {
       client.cameras(),
     ]);
     check(refreshes == 1, 'Refresh was not single-flight');
+    check(pendingWrites == 1, 'Pending refresh was not persisted');
     final cameras = reads[2] as Page<Camera>;
     check(
       cameras.items.length == 1 && cameras.items.single.id == options['camera'],

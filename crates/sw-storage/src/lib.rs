@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod admission;
 mod alerts;
@@ -10,6 +10,7 @@ mod evidence;
 mod health;
 mod legacy;
 mod recovery;
+mod refresh_key;
 mod retention;
 mod semantic;
 #[cfg(test)]
@@ -38,6 +39,7 @@ use uuid::Uuid;
 use db::Database;
 
 pub use admission::{AnalysisAdmission, CameraSourceMeasurements};
+pub use alerts::{AlertScan, MAX_ALERT_PAGE, StoredAlertPage};
 pub use backup::{BackupLimits, restore_backup, restore_backup_with_limits};
 pub use budget::DEFAULT_DATABASE_QUOTA_BYTES;
 pub use cameras::{

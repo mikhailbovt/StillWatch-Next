@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   stillwatch_sdk:
     path: ../../packages/stillwatch-dart
+  crypto: 3.0.8
   file_selector: 1.1.0
   material_ui: 1.1.0
   flutter_webrtc: 1.6.3

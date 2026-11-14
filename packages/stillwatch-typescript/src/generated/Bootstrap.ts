@@ -7,6 +7,7 @@ export interface Bootstrap {
   camera_probe_capacity?: boolean;
   camera_sampling?: boolean;
   instance_id: string;
+  refresh_replay?: boolean;
   version: ApiVersion;
   [k: string]: unknown;
 }

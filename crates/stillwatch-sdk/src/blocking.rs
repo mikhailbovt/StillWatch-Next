@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use sw_protocol::{
-    Bootstrap, Counter, Health, HealthEventPage, Snapshot, SourceProbe, SourceProbeRequest,
+    AlertFeed, Bootstrap, Counter, Health, HealthEventPage, Snapshot, SourceProbe,
+    SourceProbeRequest,
 };
 use uuid::Uuid;
 
@@ -64,6 +65,12 @@ impl Client {
     }
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
         self.get("/api/v2/snapshot")
+    }
+    pub fn alerts(&self) -> Result<AlertFeed, Error> {
+        self.get("/api/v2/alerts")
+    }
+    pub fn alert_page(&self, after: Option<&str>, limit: u16) -> Result<AlertFeed, Error> {
+        self.get(&super::alerts_path(after, limit)?)
     }
     pub fn camera(&self, id: Uuid) -> Result<sw_protocol::Camera, Error> {
         self.get(&format!("/api/v2/cameras/{id}"))

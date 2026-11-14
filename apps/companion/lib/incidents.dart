@@ -129,7 +129,7 @@ class _IncidentHistoryState extends State<IncidentHistory> {
                           : const Text('Pending action'),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => _IncidentDetail(
+                          builder: (_) => IncidentDetail(
                             console: console,
                             profile: profile,
                             initial: item,
@@ -147,8 +147,9 @@ class _IncidentHistoryState extends State<IncidentHistory> {
   }
 }
 
-class _IncidentDetail extends StatefulWidget {
-  const _IncidentDetail({
+class IncidentDetail extends StatefulWidget {
+  const IncidentDetail({
+    super.key,
     required this.console,
     required this.profile,
     required this.initial,
@@ -162,10 +163,10 @@ class _IncidentDetail extends StatefulWidget {
   final String? cameraName;
 
   @override
-  State<_IncidentDetail> createState() => _IncidentDetailState();
+  State<IncidentDetail> createState() => _IncidentDetailState();
 }
 
-class _IncidentDetailState extends State<_IncidentDetail> {
+class _IncidentDetailState extends State<IncidentDetail> {
   late Incident _item = widget.initial;
   late String? _streamGeneration = widget.generation;
   Future<Json>? _evidence;

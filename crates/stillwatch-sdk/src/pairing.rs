@@ -5,8 +5,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use reqwest::{Method, Url};
 use sha2::{Digest, Sha256};
 use sw_protocol::{
-    ApiVersion, Device, DeviceCredentials, PairingFinish, PairingOffer, RefreshRequest,
-    pairing_message, refresh_message,
+    ApiVersion, Device, DeviceCredentials, PairingFinish, PairingOffer, PendingRefresh,
+    RefreshRequest, pairing_message, refresh_message,
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -127,10 +127,21 @@ pub type SaveFuture<'a> =
 
 pub trait SessionPersistence: Send + Sync {
     fn save<'a>(&'a self, credentials: &'a DeviceCredentials) -> SaveFuture<'a>;
+
+    /// Persist the signed pending request alongside credentials. Existing
+    /// stores that only implement `save` can recover responses within a process.
+    fn save_pending<'a>(
+        &'a self,
+        _credentials: &'a DeviceCredentials,
+        _pending: &'a PendingRefresh,
+    ) -> SaveFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 struct SessionState {
     value: DeviceCredentials,
+    pending: Option<PendingRefresh>,
     dirty: bool,
     terminal: bool,
 }
@@ -150,13 +161,41 @@ impl DeviceSession {
         credentials: DeviceCredentials,
         persistence: Option<Arc<dyn SessionPersistence>>,
     ) -> Result<Self, Error> {
+        Self::restore(endpoint, key, credentials, None, persistence)
+    }
+
+    pub fn restore(
+        endpoint: &PairedEndpoint,
+        key: DeviceKey,
+        credentials: DeviceCredentials,
+        pending: Option<PendingRefresh>,
+        persistence: Option<Arc<dyn SessionPersistence>>,
+    ) -> Result<Self, Error> {
         validate(&credentials)?;
+        if let Some(pending) = &pending {
+            let request = &pending.request;
+            if !pending.replay_supported
+                || request.nonce.is_nil()
+                || request.device_id != credentials.device.id
+                || request.refresh_token != credentials.refresh_token
+                || request.signature
+                    != key.sign(&refresh_message(
+                        endpoint.instance,
+                        request.device_id,
+                        request.nonce,
+                        &request.refresh_token,
+                    ))
+            {
+                return Err(Error::Credentials);
+            }
+        }
         Ok(Self {
             client: Client::unauthenticated(endpoint)?,
             key,
             instance: endpoint.instance,
             state: Mutex::new(SessionState {
                 value: credentials,
+                pending,
                 dirty: false,
                 terminal: false,
             }),
@@ -173,43 +212,82 @@ impl DeviceSession {
         if state.terminal {
             return Err(Error::Credentials);
         }
+        if state.dirty {
+            if let Some(persistence) = &self.persistence {
+                persistence.save(&state.value).await?;
+            }
+            state.dirty = false;
+        }
         let expires = state.value.access_expires_at.unix_millis() <= now_ms() + 15_000;
-        if expires || rejected.is_some_and(|old| old == state.value.access_token) {
+        if state.pending.is_some()
+            || expires
+            || rejected.is_some_and(|old| old == state.value.access_token)
+        {
             if state.value.refresh_expires_at.unix_millis() <= now_ms() {
                 state.terminal = true;
                 return Err(Error::Credentials);
             }
             let device = state.value.device.id;
-            let nonce = Uuid::new_v4();
-            let request = RefreshRequest {
-                device_id: device,
-                nonce,
-                signature: self.key.sign(&refresh_message(
-                    self.instance,
-                    device,
-                    nonce,
-                    &state.value.refresh_token,
-                )),
-                refresh_token: state.value.refresh_token.clone(),
-            };
-            // A lost refresh response may have consumed the token. Require
-            // re-enrollment rather than automatically replaying that credential.
-            state.terminal = true;
-            let next: DeviceCredentials = self
+            let replay_supported = self.client.capabilities().await?.refresh_replay;
+            if state.pending.is_none() {
+                let nonce = Uuid::new_v4();
+                let pending = PendingRefresh {
+                    replay_supported,
+                    request: RefreshRequest {
+                        device_id: device,
+                        nonce,
+                        signature: self.key.sign(&refresh_message(
+                            self.instance,
+                            device,
+                            nonce,
+                            &state.value.refresh_token,
+                        )),
+                        refresh_token: state.value.refresh_token.clone(),
+                    },
+                };
+                state.pending = Some(pending);
+            }
+            let pending = state.pending.as_ref().expect("pending refresh prepared");
+            if pending.replay_supported && !replay_supported {
+                return Err(Error::Credentials);
+            }
+            if let Some(persistence) = &self.persistence {
+                persistence.save_pending(&state.value, pending).await?;
+            }
+            let request_body = body(&pending.request)?;
+            state.terminal = !pending.replay_supported;
+            let response: Result<DeviceCredentials, Error> = self
                 .client
                 .json(
                     Method::POST,
                     "/api/v2/device-session/refresh",
-                    Some(body(&request)?),
+                    Some(request_body),
                     None,
                     false,
                 )
-                .await?;
-            validate(&next)?;
-            if next.device.id != device {
+                .await;
+            let next = match response {
+                Ok(value) => value,
+                Err(error) => {
+                    if matches!(
+                        error,
+                        Error::Http {
+                            status: 401 | 403,
+                            ..
+                        } | Error::Identity
+                    ) {
+                        state.terminal = true;
+                        return Err(Error::Credentials);
+                    }
+                    return Err(error);
+                }
+            };
+            if validate(&next).is_err() || next.device.id != device {
+                state.terminal = true;
                 return Err(Error::Identity);
             }
             state.value = next;
+            state.pending = None;
             state.dirty = true;
             state.terminal = false;
         }

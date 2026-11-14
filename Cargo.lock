@@ -2245,6 +2245,7 @@ dependencies = [
  "async-stream",
  "axum",
  "base64",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
@@ -2342,6 +2343,7 @@ dependencies = [
  "ed25519-dalek",
  "fs4",
  "getrandom 0.4.3",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2353,6 +2355,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

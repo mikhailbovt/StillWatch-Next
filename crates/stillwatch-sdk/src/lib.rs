@@ -15,6 +15,7 @@ use uuid::Uuid;
 pub use pairing::{DeviceKey, DeviceSession, PairedEndpoint, SessionPersistence, enroll};
 pub use stream::{ChangeStream, StreamMessage};
 pub use sw_protocol as protocol;
+pub use sw_protocol::PendingRefresh;
 use sw_protocol::{
     AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisStatus, ApiVersion, Bootstrap, Camera,
     CameraConfig, CameraPage, CameraPatch, CaptureDevice, Counter, Device, EvidencePacket,
@@ -33,6 +34,23 @@ const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 fn health_events_path(before: Option<Counter>, limit: u16, active_only: bool) -> String {
     let before = before.map_or_else(String::new, |sequence| format!("&before={sequence}"));
     format!("/api/v2/health-events?limit={limit}&active_only={active_only}{before}")
+}
+
+fn alerts_path(after: Option<&str>, limit: u16) -> Result<String, Error> {
+    if !(1..=128).contains(&limit)
+        || after.is_some_and(|token| {
+            !(1..=512).contains(&token.len())
+                || !token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+    {
+        return Err(Error::Protocol);
+    }
+    Ok(after.map_or_else(
+        || format!("/api/v2/alerts?limit={limit}"),
+        |token| format!("/api/v2/alerts?limit={limit}&after={token}"),
+    ))
 }
 
 #[derive(Debug, Error)]
@@ -329,6 +347,10 @@ impl Client {
 
     pub async fn alerts(&self) -> Result<AlertFeed, Error> {
         self.get("/api/v2/alerts").await
+    }
+
+    pub async fn alert_page(&self, after: Option<&str>, limit: u16) -> Result<AlertFeed, Error> {
+        self.get(&alerts_path(after, limit)?).await
     }
 
     pub async fn alert_seen(&self, alert: Counter, attention_cycle: Counter) -> Result<(), Error> {

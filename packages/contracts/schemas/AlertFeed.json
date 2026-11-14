@@ -8,6 +8,43 @@
       "items": {
         "$ref": "#/$defs/AlertDelivery"
       }
+    },
+    "generation": {
+      "description": "Changes when Core invalidates all delivery state during restore.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "head": {
+      "description": "Highest notification ID included in this scan.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "next": {
+      "description": "Device-scoped continuation for the current feed scan.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "description": "Server time at which this page was evaluated.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

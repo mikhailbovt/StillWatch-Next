@@ -168,6 +168,8 @@ final class Camera {
   String get state => text(runtime, 'state');
   bool get repeatedFrame => runtime['repeated_frame'] == true;
   bool get sourceLagging => runtime['source_lagging'] == true;
+  bool get controlledSceneSuspended =>
+      runtime['controlled_scene_suspended'] == true;
 }
 
 final class AnalysisOrigin {
@@ -237,6 +239,25 @@ final class HealthEvent {
   final String code;
   final DateTime openedAt;
   final DateTime? endedAt;
+}
+
+final class AlertPage {
+  AlertPage.fromJson(Json value)
+    : alerts = List.unmodifiable(objects(value, 'alerts')),
+      next = value['next'] == null ? null : text(value, 'next'),
+      generation = value['generation'] == null
+          ? null
+          : uuid(value['generation']),
+      head = value['head'] == null ? null : counter(value['head']),
+      observedAt = value['observed_at'] == null
+          ? null
+          : timestamp(value, 'observed_at');
+
+  final List<Json> alerts;
+  final String? next;
+  final DateTime? observedAt;
+  final String? generation;
+  final String? head;
 }
 
 final class Page<T> {

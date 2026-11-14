@@ -14,14 +14,19 @@ const options = JSON.parse(await readFile(credentialsFile, "utf8"));
 const registration = await enroll(options.offer, "SDK QA TypeScript");
 registration.credentials.access_expires_at = "2001-01-01T00:00:00Z";
 let refreshes = 0;
+let pendingWrites = 0;
 const client = new NodeStillWatchClient(registration.core, {
   seed: registration.seed, credentials: registration.credentials,
-  persist: async () => { refreshes++; },
+  persist: async (state) => {
+    if (state.pending_refresh) pendingWrites++;
+    else refreshes++;
+  },
 });
 try {
   assert.equal((await client.core()).instance_id, registration.core.core_instance_id);
   const [snapshot, , cameras] = await Promise.all([client.snapshot(), client.snapshot(), client.cameras()]);
   assert.equal(refreshes, 1);
+  assert.equal(pendingWrites, 1);
   assert.deepEqual(cameras.cameras.map(camera => camera.id), [options.camera]);
   const health = await client.healthEvents({ limit: 1 });
   assert.deepEqual(health.events.map(event => event.camera_id), [options.camera]);

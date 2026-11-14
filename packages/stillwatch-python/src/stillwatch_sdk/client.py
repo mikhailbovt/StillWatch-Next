@@ -66,8 +66,11 @@ class AsyncClient:
         if credentials is not None:
             validate_session(credentials)
         self._session = dict(credentials) if credentials is not None else None
+        self._pending = self._session.pop("pending_refresh", None) if self._session else None
         self._persist = persist
         self._dirty = self._terminal = False
+        if self._pending is not None and (not isinstance(self._pending, dict) or self._pending.get("replay_supported") is not True):
+            self._terminal = True
         self._lock = anyio.Lock()
         self._http = httpx.AsyncClient(
             base_url=self._endpoint,
@@ -116,20 +119,49 @@ class AsyncClient:
             if self._session is None or self._key is None or self._pin is None or self._persist is None or self._terminal:
                 raise CoreError("credentials")
             current = self._session
+            if self._dirty:
+                await self._persist(dict(current))
+                self._dirty = False
             refresh = timestamp(current["access_expires_at"]) <= datetime.now(UTC) + timedelta(seconds=15)
-            if refresh or current["access_token"] == rejected:
+            if self._pending is not None or refresh or current["access_token"] == rejected:
+                if timestamp(current["refresh_expires_at"]) <= datetime.now(UTC):
+                    self._terminal = True
+                    raise CoreError("credentials")
                 device = validate_session(current)
-                nonce = str(uuid4())
                 value = current["refresh_token"]
-                signature = proof(self._key, "refresh", [self._pin.instance, device, nonce], value)
-                # A lost response can mean the previous refresh token was consumed.
-                self._terminal = True
-                updated = await self._object("POST", "/api/v2/device-session/refresh", authorized=False, body={
-                    "device_id": device, "nonce": nonce, "refresh_token": value, "signature": signature,
-                })
-                if validate_session(updated) != device:
+                capabilities = await self.core()
+                if self._pending is None:
+                    nonce = str(uuid4())
+                    signature = proof(self._key, "refresh", [self._pin.instance, device, nonce], value)
+                    self._pending = {"replay_supported": capabilities.get("refresh_replay") is True, "request": {
+                        "device_id": device, "nonce": nonce, "refresh_token": value, "signature": signature,
+                    }}
+                elif capabilities.get("refresh_replay") is not True:
+                    raise CoreError("credentials")
+                request = self._pending.get("request")
+                if (not isinstance(request, dict) or request.get("device_id") != device or request.get("refresh_token") != value
+                        or request.get("signature") != proof(self._key, "refresh", [self._pin.instance, device, uuid(request.get("nonce"))], value)):
+                    self._terminal = True
+                    raise CoreError("credentials")
+                await self._persist(dict(current, pending_refresh=self._pending))
+                self._terminal = self._pending.get("replay_supported") is not True
+                try:
+                    updated = await self._object("POST", "/api/v2/device-session/refresh", authorized=False, body=request)
+                except CoreError as error:
+                    if error.status in (401, 403):
+                        self._terminal = True
+                        raise CoreError("credentials") from None
+                    raise
+                try:
+                    returned_device = validate_session(updated)
+                except CoreError:
+                    self._terminal = True
+                    raise
+                if returned_device != device:
+                    self._terminal = True
                     raise CoreError("identity")
                 self._session = updated
+                self._pending = None
                 self._terminal = False
                 self._dirty = True
             if self._dirty:
@@ -227,6 +259,9 @@ class AsyncClient:
 
     async def alerts(self) -> Json:
         return await self._object("GET", "/api/v2/alerts")
+
+    async def alert_page(self, *, after: str | None = None, limit: int = 128) -> Json:
+        return await self._object("GET", "/api/v2/alerts", params=_page(after, limit))
 
     async def alert_seen(self, alert: str, cycle: str) -> None:
         await self._request("POST", f"/api/v2/alerts/{counter(alert)}/seen",

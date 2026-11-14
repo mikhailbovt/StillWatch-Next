@@ -268,6 +268,29 @@ class _CoreSettingsState extends State<CoreSettings> {
                 );
               },
             ),
+            if (Platform.isAndroid)
+              ListenableBuilder(
+                listenable: widget.alerts,
+                builder: (context, _) => SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Monitor in the background'),
+                  subtitle: Text(switch (widget.alerts.backgroundState) {
+                    'connected' => 'Monitoring the selected Core. Stop from the system notification.',
+                    'offline' =>
+                      'Core is unreachable. Monitoring will reconnect.',
+                    'connecting' => 'Connecting to Core.',
+                    _ => 'Keep a system notification while monitoring this Core with the app closed.',
+                  }),
+                  value: widget.alerts.backgroundState != 'stopped',
+                  onChanged: (value) async {
+                    try {
+                      await widget.alerts.setBackground(value);
+                    } catch (error) {
+                      if (context.mounted) showFailure(context, error);
+                    }
+                  },
+                ),
+              ),
             if (Platform.isWindows || Platform.isLinux)
               ListTile(
                 contentPadding: EdgeInsets.zero,

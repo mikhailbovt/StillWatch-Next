@@ -6,7 +6,7 @@ const names = [
   "CameraPatch", "CaptureDevices", "Change", "CoreStatus", "DeviceCredentials", "Devices",
   "EvidencePacket", "Health", "HealthEventPage", "Incident", "IncidentPage", "OnvifDevices", "OnvifProfiles",
   "OnvifProfilesRequest", "OnvifStream", "OnvifStreamRequest", "PairingOffer",
-  "PairingRequest", "Problem", "ReplayUpload", "SemanticStatus", "Snapshot", "SourceProbe", "SourceProbeRequest",
+  "PairingRequest", "Problem", "RefreshRequest", "ReplayUpload", "SemanticStatus", "Snapshot", "SourceProbe", "SourceProbeRequest",
   "StreamGrant", "StreamRequest",
 ];
 for (const name of names) {

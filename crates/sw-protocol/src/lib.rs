@@ -298,6 +298,8 @@ pub struct Bootstrap {
     pub camera_priority: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_main_stream: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_replay: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -417,6 +419,9 @@ impl MediaWorkloadLimits {
 pub struct CoreStatus {
     pub version: String,
     pub inference: InferenceStatus,
+    /// Highest attention level available from currently loaded local models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_attention_ceiling: Option<Attention>,
     pub media: Option<MediaStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writer: Option<WriterStatus>,

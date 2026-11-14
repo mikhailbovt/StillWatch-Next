@@ -26,6 +26,17 @@
     "inference": {
       "$ref": "#/$defs/InferenceStatus"
     },
+    "local_attention_ceiling": {
+      "description": "Highest attention level available from currently loaded local models.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Attention"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "media": {
       "anyOf": [
         {
@@ -200,6 +211,14 @@
         "min_pose_per_wall_minute",
         "min_fire_per_wall_minute",
         "media"
+      ]
+    },
+    "Attention": {
+      "type": "string",
+      "enum": [
+        "info",
+        "review",
+        "urgent"
       ]
     },
     "CameraCoverage": {

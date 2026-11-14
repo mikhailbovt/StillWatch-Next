@@ -1,6 +1,6 @@
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use sw_domain::UnixMillis;
-use sw_protocol::{AlertDelivery, AlertFeed, Attention, Counter, UtcTimestamp};
+use sw_protocol::{AlertDelivery, Attention, Counter, UtcTimestamp};
 use uuid::Uuid;
 
 use crate::{
@@ -9,8 +9,21 @@ use crate::{
     db::{id, row_counter, sql_counter},
 };
 
-const MAX_FEED: usize = 128;
+pub const MAX_ALERT_PAGE: usize = 128;
 const AUDIT_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+#[derive(Clone, Copy, Debug)]
+pub struct AlertScan {
+    pub head: Counter,
+    pub attention: u8,
+    pub id: Counter,
+}
+
+pub struct StoredAlertPage {
+    pub alerts: Vec<AlertDelivery>,
+    pub next: Option<AlertScan>,
+    pub head: Counter,
+}
 
 impl Store {
     pub async fn active_alerts(
@@ -18,10 +31,40 @@ impl Store {
         actor: Uuid,
         cameras: Option<Vec<Uuid>>,
         now: UnixMillis,
-    ) -> Result<AlertFeed, StoreError> {
+    ) -> Result<sw_protocol::AlertFeed, StoreError> {
+        let page = self
+            .active_alert_page(actor, cameras, now, None, MAX_ALERT_PAGE)
+            .await?;
+        Ok(sw_protocol::AlertFeed {
+            alerts: page.alerts,
+            next: None,
+            observed_at: Some(timestamp(now)?),
+            generation: Some(self.identity().generation),
+            head: Some(page.head),
+        })
+    }
+
+    pub async fn active_alert_page(
+        &self,
+        actor: Uuid,
+        cameras: Option<Vec<Uuid>>,
+        now: UnixMillis,
+        after: Option<AlertScan>,
+        limit: usize,
+    ) -> Result<StoredAlertPage, StoreError> {
+        if !(1..=MAX_ALERT_PAGE).contains(&limit) {
+            return Err(StoreError::Invalid);
+        }
         let filter = camera_filter(cameras)?;
         let instance = self.identity().instance_id;
         self.call(move |db| {
+            let current = db.conn.query_row("SELECT head FROM notification_sequence WHERE singleton = 1", [], |row| row_counter(row, 0))?;
+            let (head, attention, last) = match after {
+                Some(after) if after.head.0 <= current && (1..=2).contains(&after.attention)
+                    && (1..=after.head.0).contains(&after.id.0) => (after.head.0, after.attention, after.id.0),
+                Some(_) => return Err(StoreError::CursorExpired),
+                None => (current, 3, 0),
+            };
             let mut query = db.conn.prepare(
                 "SELECT n.id, n.incident_id, i.camera_id, i.revision, n.attention_cycle, n.attention, n.expires_at, r.client_seen_at
                  FROM notification_outbox n JOIN incidents i ON i.id = n.incident_id
@@ -32,9 +75,10 @@ impl Store {
                    AND json_extract(i.state, '$.acknowledgement') IS NULL
                    AND coalesce(s.until_utc, 0) <= ?2
                    AND (?3 IS NULL OR lower(hex(i.camera_id)) IN (SELECT value FROM json_each(?3)))
-                 ORDER BY n.attention DESC, r.client_seen_at IS NOT NULL, n.created_at DESC, n.id DESC LIMIT ?4",
+                   AND n.id <= ?4 AND (n.attention < ?5 OR (n.attention = ?5 AND n.id > ?6))
+                 ORDER BY n.attention DESC, n.id ASC LIMIT ?7",
             )?;
-            let rows = query.query_map(params![id(&actor), now, filter, MAX_FEED as i64], |row| {
+            let rows = query.query_map(params![id(&actor), now, filter, sql_counter(head)?, attention, sql_counter(last)?, limit as i64 + 1], |row| {
                 Ok((
                     row_counter(row, 0)?,
                     row.get::<_, Vec<u8>>(1)?,
@@ -65,7 +109,17 @@ impl Store {
                     client_seen_at: seen.map(timestamp).transpose()?,
                 });
             }
-            Ok(AlertFeed { alerts })
+            let next = if alerts.len() > limit {
+                alerts.pop();
+                alerts.last().map(|alert| AlertScan {
+                    head: Counter(head),
+                    attention: if alert.attention == Attention::Urgent { 2 } else { 1 },
+                    id: alert.id,
+                })
+            } else {
+                None
+            };
+            Ok(StoredAlertPage { alerts, next, head: Counter(head) })
         }).await
     }
 
@@ -84,8 +138,14 @@ impl Store {
             let allowed = tx.query_row(
                 "SELECT 1 FROM notification_outbox n JOIN incidents i ON i.id = n.incident_id
                  WHERE n.id = ?1 AND n.attention_cycle = ?2 AND n.expires_at > ?3
+                   AND (EXISTS(SELECT 1 FROM notification_receipts WHERE alert_id = n.id AND device_id = ?5)
+                        OR (n.state = 'queued' AND n.next_attempt_at <= ?3
+                            AND i.resolved = 0 AND i.attention = n.attention
+                            AND json_extract(i.state, '$.acknowledgement') IS NULL
+                            AND NOT EXISTS(SELECT 1 FROM alert_silences s WHERE s.incident_id = i.id
+                                AND s.device_id = ?5 AND s.attention_cycle = n.attention_cycle AND s.until_utc > ?3)))
                    AND (?4 IS NULL OR lower(hex(i.camera_id)) IN (SELECT value FROM json_each(?4)))",
-                params![row_id, sql_counter(cycle.0)?, now, filter],
+                params![row_id, sql_counter(cycle.0)?, now, filter, id(&actor)],
                 |_| Ok(()),
             ).optional()?;
             if allowed.is_none() {

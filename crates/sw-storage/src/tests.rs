@@ -1627,6 +1627,240 @@ async fn scoped_alert_receipts_do_not_acknowledge_and_expired_alerts_do_not_repl
     );
 }
 
+#[tokio::test]
+async fn alert_scan_keeps_old_cycles_reachable_while_receipts_and_new_intents_arrive() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let actor = Uuid::new_v4();
+    let camera = Uuid::new_v4();
+    let scope = Some(vec![camera]);
+    let sample = |assessment| NewIncident {
+        scope: SourceScope {
+            camera_id: camera,
+            epoch: 1,
+            scene_revision: 1,
+        },
+        assessment,
+        ..incident()
+    };
+    let oldest = store
+        .create(sample(Assessment::Concern), 1_000)
+        .await
+        .unwrap();
+    let mut urgent = Vec::new();
+    for _ in 0..130 {
+        urgent.push(
+            store
+                .create(sample(Assessment::ImmediateVisibleConcern), 1_200)
+                .await
+                .unwrap(),
+        );
+    }
+    let page = store
+        .active_alert_page(actor, scope.clone(), 2_000, None, 128)
+        .await
+        .unwrap();
+    assert_eq!(page.alerts.len(), 128);
+    assert_eq!(page.alerts[0].incident_id, urgent[0].id);
+    let receipt = &page.alerts[0];
+    for now in [2_001, 2_002] {
+        store
+            .record_alert_seen(
+                actor,
+                receipt.id,
+                receipt.attention_cycle,
+                scope.clone(),
+                now,
+            )
+            .await
+            .unwrap();
+    }
+    let new = store
+        .create(sample(Assessment::ImmediateVisibleConcern), 2_500)
+        .await
+        .unwrap();
+    let deadline = 2_501;
+    store
+        .apply(
+            OperatorCommand {
+                incident_id: urgent[128].id,
+                actor_id: actor,
+                idempotency_key: "test-mute-one".into(),
+                expected_revision: urgent[128].revision,
+                action: OperatorAction::Silence {
+                    duration_seconds: 4,
+                },
+            },
+            deadline,
+        )
+        .await
+        .unwrap();
+    let next = store
+        .active_alert_page(actor, scope.clone(), deadline, page.next, 128)
+        .await
+        .unwrap();
+    let ids: Vec<_> = next.alerts.iter().map(|alert| alert.incident_id).collect();
+    assert_eq!(ids, [urgent[129].id, oldest.id]);
+    assert!(next.next.is_none());
+    let renewed = store
+        .active_alert_page(actor, scope.clone(), 7_000, None, 128)
+        .await
+        .unwrap();
+    let tail = store
+        .active_alert_page(actor, scope.clone(), 7_000, renewed.next, 128)
+        .await
+        .unwrap();
+    assert!(tail.alerts.iter().any(|alert| alert.incident_id == new.id));
+    assert!(
+        tail.alerts
+            .iter()
+            .any(|alert| alert.incident_id == urgent[128].id)
+    );
+    assert_eq!(
+        renewed.alerts[0].client_seen_at.unwrap().unix_millis(),
+        2_001
+    );
+    assert!(
+        store
+            .active_alert_page(actor, Some(vec![]), 7_000, page.next, 128)
+            .await
+            .unwrap()
+            .alerts
+            .is_empty()
+    );
+    assert!(
+        store
+            .active_alert_page(actor, scope, 3_603_000, page.next, 128)
+            .await
+            .unwrap()
+            .alerts
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn refresh_replays_one_signed_rotation_across_reopen_and_revokes_new_proof_reuse() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use sw_protocol::{
+        DeviceRole, PairingFinish, PairingRequest, RefreshRequest, pairing_message, refresh_message,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let instance = store.identity().instance_id;
+    let signer = SigningKey::from_bytes(&[43; 32]);
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let grant = store
+        .issue_pairing(
+            instance,
+            PairingRequest {
+                role: DeviceRole::Owner,
+                camera_ids: vec![],
+                scopes: vec![],
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let label = "Refresh receipt regression";
+    let message = pairing_message(instance, grant.challenge, &grant.secret, label);
+    let initial = store
+        .finish_pairing(
+            PairingFinish {
+                challenge: grant.challenge,
+                secret: grant.secret,
+                label: label.into(),
+                public_key: hex(&signer.verifying_key().to_bytes()),
+                signature: hex(&signer.sign(&message).to_bytes()),
+            },
+            200,
+        )
+        .await
+        .unwrap();
+    let device = initial.device.id;
+    let request = |token: &str, nonce| RefreshRequest {
+        device_id: device,
+        nonce,
+        refresh_token: token.into(),
+        signature: hex(&signer
+            .sign(&refresh_message(instance, device, nonce, token))
+            .to_bytes()),
+    };
+    let first = request(&initial.refresh_token, Uuid::new_v4());
+    let (committed, duplicate) = tokio::join!(
+        store.refresh_device(first.clone(), 1_000),
+        store.refresh_device(first.clone(), 1_000)
+    );
+    let (committed, duplicate) = (committed.unwrap(), duplicate.unwrap());
+    assert_eq!(committed.access_token, duplicate.access_token);
+    assert_eq!(committed.refresh_token, duplicate.refresh_token);
+    drop(store);
+    let db = Connection::open(root.path().join(DATABASE_FILE)).unwrap();
+    let encrypted: Vec<u8> = db
+        .query_row("SELECT envelope FROM refresh_receipts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(
+        !encrypted
+            .windows(64)
+            .any(|part| part == committed.refresh_token.as_bytes()
+                || part == committed.access_token.as_bytes())
+    );
+    drop(db);
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let replay = store.refresh_device(first.clone(), 120_999).await.unwrap();
+    assert_eq!(replay.access_token, committed.access_token);
+    assert_eq!(replay.refresh_token, committed.refresh_token);
+    assert_eq!(replay.access_expires_at, committed.access_expires_at);
+    assert!(matches!(
+        store.refresh_device(first.clone(), 121_000).await,
+        Err(StoreError::Credential)
+    ));
+    assert!(
+        store
+            .device_access(&committed.access_token, 121_000)
+            .await
+            .is_ok()
+    );
+
+    let current = request(&committed.refresh_token, Uuid::new_v4());
+    let replacement = store
+        .refresh_device(current.clone(), 122_000)
+        .await
+        .unwrap();
+    assert!(matches!(
+        store.refresh_device(first, 122_001).await,
+        Err(StoreError::Credential)
+    ));
+    assert!(
+        store
+            .device_access(&replacement.access_token, 122_001)
+            .await
+            .is_ok()
+    );
+    let different = request(&committed.refresh_token, Uuid::new_v4());
+    assert!(matches!(
+        store.refresh_device(different, 122_002).await,
+        Err(StoreError::Credential)
+    ));
+    assert!(matches!(
+        store.refresh_device(current, 122_003).await,
+        Err(StoreError::Credential)
+    ));
+    assert!(matches!(
+        store
+            .device_access(&replacement.access_token, 122_003)
+            .await,
+        Err(StoreError::Credential)
+    ));
+}
+
 #[test]
 fn sqlite_full_and_read_only_keep_last_committed_state() {
     let root = tempfile::tempdir().unwrap();

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import hashlib
+import http.client
 import json
 import ssl
+import sqlite3
 import subprocess
 import urllib.error
 import urllib.request
@@ -53,6 +57,7 @@ class Client:
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                                   urllib.request.HTTPSHandler(context=context))
         self.endpoint = endpoint
+        self.context = context
 
     def request(self, method, path, body=None, token=None, extra=None):
         headers = dict(extra or {})
@@ -70,7 +75,6 @@ class Client:
             raw = response.read(64 * 1024)
             return response.status, json.loads(raw) if raw else None
 
-
 def offer_from_cli(cli, local, data, camera):
     command = [str(cli), "pair", "--local", local, "--data-dir", str(data),
                "--role", "viewer", "--camera", camera, "--scope", "streams-read", "--json"]
@@ -85,6 +89,8 @@ def run(args):
         local_root = root / "replays"
         local_root.mkdir()
         address = f"127.0.0.1:{free_port()}"
+        database = data / "stillwatch.sqlite3"
+        from alarm_agent import insert_urgent
         with run_core(args.core, args.worker, data, local_root, root / "core.log",
                       "--lan-listen", address) as (_, local):
             visible = create_camera(local, "Visible")
@@ -123,22 +129,57 @@ def run(args):
             assert lan.request("POST", "/api/v2/cameras", visible["config"], token)[0] == 403
             assert lan.request("GET", "/api/v2/cameras", token=token,
                                extra={"Origin": "https://example.invalid"})[0] == 403
+            alerts = [uuid.uuid4() for _ in range(131)]
+            for incident in alerts:
+                insert_urgent(database, visible["id"], incident)
+            insert_urgent(database, hidden["id"], uuid.uuid4())
+            status, first_page = lan.request("GET", "/api/v2/alerts", token=token)
+            assert status == 200 and first_page["next"] and len(first_page["alerts"]) == 128
+            assert [item["incident_id"] for item in first_page["alerts"]] == list(map(str, alerts[:128]))
+            receipt = first_page["alerts"][0]
+            for _ in range(2):
+                assert lan.request("POST", f"/api/v2/alerts/{receipt['id']}/seen",
+                                   {"attention_cycle": receipt["attention_cycle"]}, token=token)[0] == 204
+            late = uuid.uuid4()
+            insert_urgent(database, visible["id"], late)
+            path = "/api/v2/alerts?after=" + first_page["next"]
+            assert local.call("GET", path)[0] == 409
+            status, tail = lan.request("GET", path, token=token)
+            assert status == 200 and tail.get("next") is None and tail["head"] == first_page["head"]
+            assert [item["incident_id"] for item in tail["alerts"]] == list(map(str, alerts[128:]))
+            assert local.call("GET", f"/api/v2/incidents/{alerts[0]}")[1]["acknowledgement"] is None
             refresh = refresh_request(args.node, key, offer, session)
-            status, rotated = lan.request("POST", "/api/v2/device-session/refresh", refresh)
-            assert status == 200 and rotated["refresh_token"] != session["refresh_token"]
-            assert lan.request("GET", "/api/v2/cameras", token=token)[0] == 401
-            assert lan.request("GET", "/api/v2/cameras", token=rotated["access_token"])[0] == 200
-            assert lan.request("POST", "/api/v2/device-session/refresh", refresh)[0] == 401
-            assert lan.request("GET", "/api/v2/cameras", token=rotated["access_token"])[0] == 401
-            status, devices = local.call("GET", "/api/v2/devices")
-            assert status == 200 and devices[0]["id"] == device_id and devices[0]["revoked_at"]
+            assert lan.request("GET", "/bootstrap/info")[1]["refresh_replay"] is True
+            def rotated_on_disk():
+                with closing(sqlite3.connect(data / "stillwatch.sqlite3")) as db:
+                    return db.execute("SELECT count(*) FROM refresh_receipts").fetchone()[0] == 1
+            # Keep the socket open until SQLite commits and discard the response
+            # without reading it, regardless of when the TLS server wrote it.
+            with closing(http.client.HTTPSConnection(address, context=lan.context, timeout=4)) as connection:
+                connection.request("POST", "/api/v2/device-session/refresh", json.dumps(refresh),
+                                   {"Content-Type": "application/json"})
+                until(rotated_on_disk)
+            assert lan.request("GET", "/api/v2/alerts", token=token)[0] == 401
         with run_core(args.core, args.worker, data, local_root, root / "restart.log", "--lan-listen", address) as (_, local):
             until(lambda: lan.request("GET", "/bootstrap/info")[0] == 200)
-            assert lan.request("GET", "/api/v2/cameras", token=rotated["access_token"])[0] == 401
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first, second = list(pool.map(lambda _: lan.request("POST", "/api/v2/device-session/refresh", refresh), range(2)))
+            assert first == second and first[0] == 200
+            rotated = first[1]
+            assert rotated["refresh_token"] != session["refresh_token"]
+            assert lan.request("GET", "/api/v2/alerts", token=rotated["access_token"])[0] == 200
+            assert lan.request("GET", path, token=rotated["access_token"])[0] == 409
+            assert lan.request("POST", "/api/v2/device-session/refresh",
+                               refresh_request(args.node, key, offer, session))[0] == 401
+            assert lan.request("GET", "/api/v2/alerts", token=rotated["access_token"])[0] == 401
+            status, devices = local.call("GET", "/api/v2/devices")
+            assert status == 200 and devices[0]["id"] == device_id and devices[0]["revoked_at"]
             next_offer = offer_from_cli(args.cli, local.address.removeprefix("http://"), data, visible["id"])
             assert next_offer["tls_certificate_sha256"] == offer["tls_certificate_sha256"]
         print(json.dumps({"certificate_pin": True, "tls_identity_survives_restart": True, "ed25519_pairing": True,
-                          "scope": True, "single_use_pairing": True, "refresh_rotation_and_reuse_revoke": True}))
+                          "scope": True, "single_use_pairing": True, "refresh_rotation_and_reuse_revoke": True,
+                          "lost_response_restart_and_concurrent_replay": True,
+                          "alert_pages_scoped_and_stable": True, "alert_count": len(alerts)}))
 
 
 def refresh_request(node, key, offer, session):

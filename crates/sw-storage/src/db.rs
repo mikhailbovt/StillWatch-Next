@@ -25,7 +25,7 @@ use crate::{
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
 pub const APPLICATION_ID: i64 = 0x53574e32;
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 16;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
@@ -40,6 +40,7 @@ pub(crate) struct Database {
     pub(crate) blob_recount: Option<crate::evidence::BlobRecount>,
     evidence_recovery_pending: bool,
     pub(crate) notify: watch::Sender<()>,
+    pub(crate) refresh_key: ring::aead::LessSafeKey,
     _lock: File,
 }
 
@@ -98,6 +99,7 @@ impl Database {
             blob_recount: None,
             evidence_recovery_pending: false,
             notify,
+            refresh_key: crate::refresh_key::load(root)?,
             _lock: lock,
         };
         if let Err(error) = db.recover_semantic_jobs()
@@ -792,7 +794,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match (application_id, version) {
         (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
-        (APPLICATION_ID, 1..=13) => {
+        (APPLICATION_ID, 1..=15) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 1 {
                 tx.execute_batch(include_str!("migrations/002.sql"))?;
@@ -830,7 +832,13 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             if version <= 12 {
                 tx.execute_batch(include_str!("migrations/013.sql"))?;
             }
-            tx.execute_batch(include_str!("migrations/014.sql"))?;
+            if version <= 13 {
+                tx.execute_batch(include_str!("migrations/014.sql"))?;
+            }
+            if version <= 14 {
+                tx.execute_batch(include_str!("migrations/015.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/016.sql"))?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -859,6 +867,8 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             tx.execute_batch(include_str!("migrations/012.sql"))?;
             tx.execute_batch(include_str!("migrations/013.sql"))?;
             tx.execute_batch(include_str!("migrations/014.sql"))?;
+            tx.execute_batch(include_str!("migrations/015.sql"))?;
+            tx.execute_batch(include_str!("migrations/016.sql"))?;
             tx.execute(
                 "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
                 params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],
@@ -952,8 +962,8 @@ pub(crate) fn append_change(
     }
     if let Some(level) = transition.notification {
         tx.execute(
-            "INSERT INTO notification_outbox(incident_id, attention_cycle, attention, state, created_at, expires_at, next_attempt_at)
-             VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+            "INSERT INTO notification_outbox(id, incident_id, attention_cycle, attention, state, created_at, expires_at, next_attempt_at)
+             VALUES ((SELECT head + 1 FROM notification_sequence WHERE singleton = 1), ?, ?, ?, 'queued', ?, ?, ?)",
             params![incident_id, cycle, attention(level), incident.updated_at, incident.updated_at.saturating_add(ALERT_TTL), incident.updated_at],
         )?;
     }

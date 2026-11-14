@@ -506,7 +506,15 @@ paths:
   /api/v2/alerts:
     get:
       operationId: listActiveAlerts
-      description: Active, unacknowledged and unsilenced notification intents scoped to the authenticated device.
+      description: Active, unacknowledged and unsilenced notification intents scoped to the authenticated device. Urgent intents precede Review intents. Each level is visited oldest first. A scan is bounded by the newest intent at the initial request. Follow next until absent. New intents and newly eligible intents can appear on the next scan. Each page checks current visibility, acknowledgement, silence and expiry. Restart the scan after a cursor_expired response.
+      parameters:
+        - name: after
+          in: query
+          description: Recent opaque continuation issued to this device for this listener and scope.
+          schema: { type: string, minLength: 1, maxLength: 512 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 128, default: 128 }
       responses:
         '200':
           description: Current alert feed

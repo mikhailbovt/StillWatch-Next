@@ -1,4 +1,5 @@
 use ed25519_dalek::{Signature, VerifyingKey};
+use ring::aead;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -14,6 +15,7 @@ use crate::{Store, StoreError, db::id};
 const PAIR_TTL_MS: i64 = 5 * 60 * 1000;
 const ACCESS_TTL_MS: i64 = 10 * 60 * 1000;
 const REFRESH_TTL_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+const RETRY_TTL_MS: i64 = 2 * 60 * 1000;
 const MAX_GRANTS: u32 = 16;
 const MAX_DEVICES: u32 = 128;
 
@@ -156,25 +158,42 @@ impl Store {
         }
         let signature = Signature::from_bytes(&decode_hex::<64>(&request.signature)?);
         let old = hash(&request.refresh_token);
-        let next = Tokens::new(now)?;
         let instance = self.identity().instance_id;
         self.call(move |db| {
             let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let record = read_device(&tx, request.device_id)?.filter(|device| device.revoked_at.is_none())
                 .ok_or(StoreError::Credential)?;
-            let (public, digest, expires) = tx.query_row(
-                "SELECT d.public_key, s.refresh_hash, s.refresh_expiry FROM trusted_devices d
+            let (public, digest, expires, access_digest, access_expires) = tx.query_row(
+                "SELECT d.public_key, s.refresh_hash, s.refresh_expiry, s.access_hash, s.access_expiry FROM trusted_devices d
                  JOIN device_sessions s ON d.id = s.device_id WHERE d.id = ?",
-                [id(&record.id)], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?)),
+                [id(&record.id)], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?,
+                    r.get::<_, Vec<u8>>(3)?, r.get::<_, i64>(4)?)),
             ).optional()?.ok_or(StoreError::Credential)?;
-            verify(&public.try_into().map_err(|_| StoreError::Schema)?,
-                &refresh_message(instance, request.device_id, request.nonce, &request.refresh_token), &signature)?;
+            let message = refresh_message(instance, request.device_id, request.nonce, &request.refresh_token);
+            verify(&public.try_into().map_err(|_| StoreError::Schema)?, &message, &signature)?;
+            let request_digest: [u8; 32] = Sha256::new().chain_update(&message)
+                .chain_update(signature.to_bytes()).finalize().into();
+            let actor = id(&record.id);
             if !bool::from(digest.ct_eq(&old)) {
-                let reused = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM retired_refresh_credentials WHERE digest = ? AND device_id = ? AND expires_at > ?)",
-                    params![&old[..], id(&record.id), now], |r| r.get::<_, bool>(0),
-                )?;
-                if reused {
+                let retired = tx.query_row(
+                    "SELECT request_digest FROM retired_refresh_credentials WHERE digest = ? AND device_id = ? AND expires_at > ?",
+                    params![&old[..], actor, now], |r| r.get::<_, Option<Vec<u8>>>(0),
+                ).optional()?;
+                if let Some(expected) = retired {
+                    if expected.as_ref().is_some_and(|expected| bool::from(expected.ct_eq(&request_digest))) {
+                        if expires <= now || access_expires <= now { return Err(StoreError::Credential); }
+                        let receipt = tx.query_row(
+                            "SELECT envelope FROM refresh_receipts WHERE device_id = ? AND request_digest = ?
+                                AND response_refresh_hash = ? AND expires_at > ?",
+                            params![actor, &request_digest[..], &digest, now], |r| r.get::<_, Vec<u8>>(0),
+                        ).optional()?.ok_or(StoreError::Credential)?;
+                        let tokens = Tokens::unseal(&db.refresh_key, &request_digest, receipt, access_expires, expires)?;
+                        if !bool::from(hash(&tokens.refresh).ct_eq(&digest))
+                            || !bool::from(hash(&tokens.access).ct_eq(&access_digest)) {
+                            return Err(StoreError::Credential);
+                        }
+                        return tokens.response(record);
+                    }
                     revoke(&tx, record.id, now)?;
                     audit(&tx, record.id, Some(record.id), "refresh_reuse", now)?;
                     tx.commit()?;
@@ -183,9 +202,17 @@ impl Store {
                 return Err(StoreError::Credential);
             }
             if expires <= now { return Err(StoreError::Credential); }
-            tx.execute("INSERT INTO retired_refresh_credentials VALUES (?, ?, ?)",
-                params![&old[..], id(&record.id), expires])?;
+            let next = Tokens::new(now)?;
+            let envelope = next.seal(&db.refresh_key, &request_digest)?;
+            tx.execute("INSERT INTO retired_refresh_credentials(digest, device_id, expires_at, request_digest) VALUES (?, ?, ?, ?)",
+                params![&old[..], actor, expires, &request_digest[..]])?;
             next.store(&tx, record.id)?;
+            tx.execute("INSERT INTO refresh_receipts VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(device_id) DO UPDATE SET request_digest = excluded.request_digest,
+                            response_refresh_hash = excluded.response_refresh_hash, envelope = excluded.envelope,
+                            expires_at = excluded.expires_at",
+                params![actor, &request_digest[..], &hash(&next.refresh)[..], envelope,
+                        now.saturating_add(RETRY_TTL_MS).min(expires)])?;
             tx.commit()?;
             db.notify.send_replace(());
             next.response(record)
@@ -390,6 +417,62 @@ impl Tokens {
             access_expiry: now.saturating_add(ACCESS_TTL_MS),
             refresh_expiry: now.saturating_add(REFRESH_TTL_MS),
         })
+    }
+
+    fn seal(
+        &self,
+        key: &aead::LessSafeKey,
+        request_digest: &[u8; 32],
+    ) -> Result<Vec<u8>, StoreError> {
+        let mut nonce = [0_u8; aead::NONCE_LEN];
+        getrandom::fill(&mut nonce).map_err(|_| StoreError::Unavailable)?;
+        let mut envelope = Vec::with_capacity(aead::NONCE_LEN + 128 + aead::MAX_TAG_LEN);
+        envelope.extend_from_slice(&nonce);
+        envelope.extend_from_slice(self.access.as_bytes());
+        envelope.extend_from_slice(self.refresh.as_bytes());
+        let tag = key
+            .seal_in_place_separate_tag(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::from(request_digest),
+                &mut envelope[aead::NONCE_LEN..],
+            )
+            .map_err(|_| StoreError::Unavailable)?;
+        envelope.extend_from_slice(tag.as_ref());
+        Ok(envelope)
+    }
+
+    fn unseal(
+        key: &aead::LessSafeKey,
+        request_digest: &[u8; 32],
+        mut envelope: Vec<u8>,
+        access_expiry: i64,
+        refresh_expiry: i64,
+    ) -> Result<Self, StoreError> {
+        if envelope.len() != aead::NONCE_LEN + 128 + aead::MAX_TAG_LEN {
+            return Err(StoreError::Credential);
+        }
+        let (nonce, encrypted) = envelope.split_at_mut(aead::NONCE_LEN);
+        let nonce =
+            aead::Nonce::try_assume_unique_for_key(nonce).map_err(|_| StoreError::Credential)?;
+        let bytes = key
+            .open_in_place(nonce, aead::Aad::from(request_digest), encrypted)
+            .map_err(|_| StoreError::Credential)?;
+        let result = (|| {
+            let (access, refresh) = bytes.split_at(64);
+            let access = std::str::from_utf8(access).map_err(|_| StoreError::Credential)?;
+            let refresh = std::str::from_utf8(refresh).map_err(|_| StoreError::Credential)?;
+            if !token_format(access) || !token_format(refresh) {
+                return Err(StoreError::Credential);
+            }
+            Ok(Self {
+                access: access.to_owned(),
+                refresh: refresh.to_owned(),
+                access_expiry,
+                refresh_expiry,
+            })
+        })();
+        bytes.fill(0);
+        result
     }
 
     fn store(&self, tx: &Transaction<'_>, device: Uuid) -> Result<(), StoreError> {

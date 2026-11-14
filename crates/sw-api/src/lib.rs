@@ -43,6 +43,7 @@ struct Api {
     endpoints: PairingEndpoints,
     profile: Option<PairingProfile>,
     enrollment_slots: Arc<auth::EnrollmentLimit>,
+    alert_cursor_key: Arc<ring::hmac::Key>,
 }
 
 /// Builds the first, loopback-only trust profile. LAN binding has its own TLS and device checks.
@@ -101,6 +102,7 @@ pub fn local_router(
         endpoints,
         profile: None,
         enrollment_slots: Arc::new(auth::EnrollmentLimit::default()),
+        alert_cursor_key: Arc::new(alerts::cursor_key()),
     };
     Some(router(state))
 }
@@ -242,6 +244,7 @@ pub fn network_router(
         endpoints,
         profile: Some(profile),
         enrollment_slots: Arc::new(auth::EnrollmentLimit::default()),
+        alert_cursor_key: Arc::new(alerts::cursor_key()),
     };
     router(state)
 }
@@ -282,6 +285,7 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
         analysis_capacity_probe: state.cameras.is_some(),
         camera_priority: state.cameras.is_some(),
         camera_main_stream: state.cameras.is_some(),
+        refresh_replay: true,
     })
 }
 
@@ -292,6 +296,10 @@ async fn core_status(
     let local = matches!(principal, auth::Principal::Local(_));
     Json(CoreStatus {
         version: env!("CARGO_PKG_VERSION").into(),
+        local_attention_ceiling: state
+            .vision
+            .as_ref()
+            .map(|_| sw_protocol::Attention::Review),
         inference: state.vision.as_ref().map_or_else(
             || InferenceStatus {
                 state: AnalysisState::Disabled,

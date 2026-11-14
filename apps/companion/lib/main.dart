@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'alerts.dart';
@@ -15,6 +16,47 @@ void main() {
   runApp(const StillWatchApp());
 }
 
+@pragma('vm:entry-point')
+Future<void> androidAlarmMain(List<String> arguments) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  const channel = MethodChannel('com.stillwatch.companion/alarm-worker');
+  const storage = FlutterSecureStorage();
+  final console = ConsoleState(const ProfileStore(storage));
+  final alerts = LocalAlerts(console, storage, backgroundWorker: true);
+  if (arguments.length != 1) {
+    await channel.invokeMethod<void>('status', 'revoked');
+    return;
+  }
+  await console.load(preferredCore: arguments.single);
+  final profile = console.selected;
+  if (profile == null) {
+    await channel.invokeMethod<void>('status', 'revoked');
+    return;
+  }
+  await alerts.initialize();
+  String? previous;
+  void status() {
+    final state =
+        !alerts.enabled ||
+            !alerts.available ||
+            alerts.permissionBlockedAt != null
+        ? 'permission'
+        : switch (console.link) {
+            LinkState.connected => 'connected',
+            LinkState.offline || LinkState.connecting => 'offline',
+            LinkState.untrusted || LinkState.revoked => 'revoked',
+          };
+    if (state != previous) {
+      previous = state;
+      unawaited(channel.invokeMethod<void>('status', state));
+    }
+  }
+
+  console.addListener(status);
+  alerts.addListener(status);
+  status();
+}
+
 class StillWatchApp extends StatefulWidget {
   const StillWatchApp({super.key});
 
@@ -25,8 +67,27 @@ class StillWatchApp extends StatefulWidget {
 class _StillWatchAppState extends State<StillWatchApp>
     with WidgetsBindingObserver {
   static const _storage = FlutterSecureStorage();
+  final _navigator = GlobalKey<NavigatorState>();
+  final _messages = GlobalKey<ScaffoldMessengerState>();
   final _console = ConsoleState(const ProfileStore(_storage));
-  late final _alerts = LocalAlerts(_console, _storage);
+  late final _alerts = LocalAlerts(
+    _console,
+    _storage,
+    onReview: (profile, incident) {
+      _navigator.currentState?.push<void>(
+        MaterialPageRoute(
+          builder: (_) => IncidentDetail(
+            console: _console,
+            profile: profile,
+            initial: incident,
+            generation: _console.streamGeneration,
+          ),
+        ),
+      );
+    },
+    onFailure: (message) =>
+        _messages.currentState?.showSnackBar(SnackBar(content: Text(message))),
+  );
 
   @override
   void initState() {
@@ -60,6 +121,8 @@ class _StillWatchAppState extends State<StillWatchApp>
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: _navigator,
+    scaffoldMessengerKey: _messages,
     debugShowCheckedModeBanner: false,
     title: 'StillWatch',
     theme: ThemeData(

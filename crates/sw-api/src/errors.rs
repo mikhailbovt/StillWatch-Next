@@ -83,6 +83,14 @@ impl ApiError {
     pub fn stream_limit() -> Self {
         Self::rate_limited("Change stream capacity reached")
     }
+    pub fn alert_cursor_expired() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            ProblemCode::CursorExpired,
+            "Alert scan expired",
+            Some("Request the first alert page again".into()),
+        )
+    }
     pub fn rate_limited(title: &'static str) -> Self {
         Self::new(
             StatusCode::TOO_MANY_REQUESTS,

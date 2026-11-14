@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:stillwatch_sdk/stillwatch_sdk.dart';
 
@@ -23,14 +25,15 @@ final class PendingIncidentAction {
     this._reviewed,
     this._streamGeneration,
     this._reason,
-  );
+    String? key,
+  ) : _key = key ?? operationId();
 
   static const lifetime = Duration(minutes: 2);
   final IncidentAction action;
   final Incident _reviewed;
   final String _streamGeneration;
   final String _reason;
-  final String _key = operationId();
+  final String _key;
   final DateTime _expires = DateTime.now().add(lifetime);
   final Stopwatch _age = Stopwatch()..start();
   late final Timer _timer;
@@ -44,6 +47,7 @@ final class PendingIncidentAction {
       current.id == _reviewed.id &&
       current.cameraId == _reviewed.cameraId &&
       current.revision == _reviewed.revision &&
+      current.attentionCycle == _reviewed.attentionCycle &&
       current.evidenceVersion == _reviewed.evidenceVersion &&
       current.packetId == _reviewed.packetId &&
       current.lifecycle == 'open' &&
@@ -71,6 +75,8 @@ final class CoreProfile {
     this.credentials,
     this._save, {
     StillWatchClient? client,
+    SessionReader? reload,
+    SessionLock? lock,
   }) {
     this.client =
         client ??
@@ -78,6 +84,8 @@ final class CoreProfile {
           core,
           seed: seed,
           credentials: credentials,
+          reload: reload,
+          lock: lock,
           save: (value) async {
             await _save(this, value);
             credentials = value;
@@ -112,6 +120,40 @@ final class ProfileStore {
   const ProfileStore(this._secure);
   final FlutterSecureStorage _secure;
   static const _prefix = 'stillwatch.profile.v1.';
+  static const _locks = MethodChannel('com.stillwatch.companion/session-lock');
+
+  Future<T> _exclusive<T>(String core, Future<T> Function() run) async {
+    if (!Platform.isAndroid) return run();
+    final handle = await _locks.invokeMethod<int>('acquire', core);
+    if (handle == null) throw const StillWatchException('transport');
+    try {
+      return await run();
+    } finally {
+      await _locks.invokeMethod<void>('release', handle);
+    }
+  }
+
+  CoreProfile _profile(
+    String name,
+    PinnedCore core,
+    String seed,
+    Json credentials,
+  ) => CoreProfile(
+    name,
+    core,
+    seed,
+    credentials,
+    save,
+    reload: !Platform.isAndroid
+        ? null
+        : () async {
+            final raw = await _secure.read(key: '$_prefix${core.id}');
+            return raw == null
+                ? null
+                : object(object(jsonDecode(raw))['credentials']);
+          },
+    lock: !Platform.isAndroid ? null : (run) => _exclusive(core.id, run),
+  );
 
   Future<List<CoreProfile>> load() async {
     final values = await _secure.readAll();
@@ -124,12 +166,11 @@ final class ProfileStore {
         final core = PinnedCore.fromJson(object(value['core']));
         if (entry.key != '$_prefix${core.id}') continue;
         profiles.add(
-          CoreProfile(
+          _profile(
             text(value, 'name'),
             core,
             text(value, 'seed'),
             object(value['credentials']),
-            save,
           ),
         );
       } on FormatException {
@@ -146,8 +187,10 @@ final class ProfileStore {
     value: jsonEncode(profile.serialize(credentials)),
   );
 
-  Future<void> remove(CoreProfile profile) =>
-      _secure.delete(key: '$_prefix${profile.id}');
+  Future<void> remove(CoreProfile profile) => _exclusive(
+    profile.id,
+    () => _secure.delete(key: '$_prefix${profile.id}'),
+  );
 }
 
 final class ConsoleState extends ChangeNotifier {
@@ -180,12 +223,18 @@ final class ConsoleState extends ChangeNotifier {
 
   bool _current(int generation) => !_disposed && generation == _generation;
 
-  Future<void> load() async {
+  Future<void> load({String? preferredCore}) async {
     try {
       profiles = await store.load();
       if (_disposed) return;
       loading = false;
-      await select(profiles.firstOrNull);
+      await select(
+        preferredCore == null
+            ? profiles.firstOrNull
+            : profiles
+                  .where((profile) => profile.id == preferredCore)
+                  .firstOrNull,
+      );
     } catch (_) {
       if (_disposed) return;
       error = 'Secure storage is unavailable. Unlock the device key store and retry.';
@@ -202,15 +251,17 @@ final class ConsoleState extends ChangeNotifier {
       throw const StillWatchException('identity');
     }
     final enrollment = await offer.enroll(label);
-    final profile = CoreProfile(
+    final profile = store._profile(
       name,
       enrollment.core,
       enrollment.seed,
       enrollment.credentials,
-      store.save,
     );
     try {
-      await store.save(profile, enrollment.credentials);
+      await store._exclusive(
+        profile.id,
+        () => store.save(profile, enrollment.credentials),
+      );
     } catch (_) {
       profile.client.close();
       throw const StillWatchException('secure_storage');
@@ -426,6 +477,7 @@ final class ConsoleState extends ChangeNotifier {
     String? reviewedGeneration,
     IncidentAction action, {
     String reason = '',
+    String? operationKey,
   }) async {
     if (_disposed ||
         !foreground ||
@@ -449,6 +501,7 @@ final class ConsoleState extends ChangeNotifier {
       reviewed,
       reviewedGeneration,
       reason,
+      operationKey,
     );
     final latest = incidents
         .where((item) => item.id == reviewed.id)
