@@ -14,7 +14,7 @@ use std::{
 };
 
 use ort::{
-    environment::Environment,
+    environment::{Environment, GlobalThreadPoolOptions},
     session::{Session, builder::GraphOptimizationLevel},
     value::{Outlet, TensorElementType, TensorRef, ValueType},
 };
@@ -61,7 +61,6 @@ fn ort_error(error: impl std::fmt::Display) -> InferenceError {
 /// selected from a trusted directory and checked before any ORT API is used.
 pub struct Runtime {
     environment: Environment,
-    threads: usize,
     cuda: Option<CudaProvider>,
 }
 
@@ -118,8 +117,16 @@ impl Runtime {
         }
         let builder = ort::init_from(&path).map_err(ort_error)?;
         *loaded = Some((path, expected_sha256.to_owned()));
+        // A worker runs its model sessions serially. They can use the same CPU threads.
+        let pool = GlobalThreadPoolOptions::default()
+            .with_intra_threads(threads)
+            .and_then(|pool| pool.with_inter_threads(1))
+            .and_then(|pool| pool.with_spin_control(false))
+            .map_err(ort_error)?;
         let environment = builder
             .with_name("StillWatch worker")
+            .with_telemetry(false)
+            .with_global_thread_pool(pool)
             .build()
             .map_err(ort_error)?;
         if cuda.is_some() {
@@ -128,11 +135,7 @@ impl Runtime {
                 return Err(InferenceError::CudaUnavailable);
             }
         }
-        Ok(Self {
-            environment,
-            threads,
-            cuda,
-        })
+        Ok(Self { environment, cuda })
     }
 
     pub fn build_info(&self) -> &'static str {
@@ -193,12 +196,6 @@ impl Model {
         bytes: &[u8],
     ) -> Result<Self, InferenceError> {
         let mut builder = Session::builder(&runtime.environment)
-            .map_err(ort_error)?
-            .with_intra_threads(runtime.threads)
-            .map_err(ort_error)?
-            .with_inter_threads(1)
-            .map_err(ort_error)?
-            .with_intra_op_spinning(false)
             .map_err(ort_error)?
             .with_optimization_level(GraphOptimizationLevel::All)
             .map_err(ort_error)?;
