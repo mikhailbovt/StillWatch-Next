@@ -8,7 +8,7 @@ use sw_domain::{ObservationLabel, SourceScope};
 use sw_protocol::{
     AnalysisCadence, AnalysisMetrics, AnalysisState, AnalysisStatus, CameraPriority,
     CameraSampling, Counter, InferenceBackend, InferenceCounts, InferenceFailure, InferenceStatus,
-    worker::{InferenceConfig, InferenceResult, Tasks},
+    worker::{InferenceConfig, Tasks},
 };
 use sw_storage::Store;
 use tokio::sync::watch;
@@ -29,6 +29,7 @@ const FIRE_BURST_FPS: u8 = 3;
 const PRIORITY_BONUS: Duration = Duration::from_millis(150);
 const FIRE_BURST_TIME: Duration = Duration::from_secs(2);
 const FIRE_BURST_COOLDOWN: Duration = Duration::from_secs(10);
+const FIRE_EXPLORATION_PERIOD: Duration = Duration::from_secs(10);
 
 pub struct VisionScheduler {
     config: InferenceConfig,
@@ -59,6 +60,7 @@ struct Analysis {
     pose_at: Option<Instant>,
     fire_at: Option<Instant>,
     burst: Option<Instant>,
+    last_exploration: Option<Instant>,
     extra_fire_frames: u64,
     pose_frames: u64,
     fire_frames: u64,
@@ -82,6 +84,7 @@ struct Dispatch {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum DispatchRank {
+    Explore,
     Burst,
     Due(Duration),
     LateFire(Duration),
@@ -370,7 +373,11 @@ impl VisionScheduler {
                                 let Dispatch {
                                     frame, source_us, ..
                                 } = job;
-                                let result = result.result;
+                                let CompletedInference {
+                                    result,
+                                    fire_proposals,
+                                    ..
+                                } = result;
                                 policies
                                     .retain(|id, _| self.cameras.inference_lane(*id) == Some(lane));
                                 let policy = policies
@@ -384,7 +391,8 @@ impl VisionScheduler {
                                         Instant::now(),
                                     );
                                 }
-                                let hazards = policy.update(&frame, source_us, result);
+                                let hazards =
+                                    policy.update(&frame, source_us, result, &fire_proposals);
                                 if fire_executed && frame.live {
                                     self.update_burst(
                                         frame.scope,
@@ -463,8 +471,14 @@ impl VisionScheduler {
                 .per_camera
                 .get(&frame.scope.camera_id)
                 .filter(|state| state.scope == frame.scope);
-            let Some(job) = next_job(previous, source_us, now, frame.sampling, frame.priority)
-            else {
+            let Some(job) = next_job(
+                previous,
+                source_us,
+                now,
+                frame.sampling,
+                frame.priority,
+                frame.live,
+            ) else {
                 continue;
             };
             if selected
@@ -478,7 +492,7 @@ impl VisionScheduler {
             frame: frame.clone(),
             tasks,
             source_us,
-            extra_fire: rank == DispatchRank::Burst,
+            extra_fire: matches!(rank, DispatchRank::Burst | DispatchRank::Explore),
         })
     }
 
@@ -565,7 +579,7 @@ impl VisionScheduler {
             if current.scope != frame.scope {
                 *current = Analysis::new(frame.scope);
             }
-            current.update(job, &result.result, dispatched_at);
+            current.update(job, result, dispatched_at);
         }
         checked.is_ok()
     }
@@ -615,6 +629,7 @@ impl Analysis {
             pose_at: None,
             fire_at: None,
             burst: None,
+            last_exploration: None,
             extra_fire_frames: 0,
             pose_frames: 0,
             fire_frames: 0,
@@ -640,7 +655,8 @@ impl Analysis {
         }
     }
 
-    fn update(&mut self, job: &Dispatch, result: &InferenceResult, dispatched_at: Instant) {
+    fn update(&mut self, job: &Dispatch, reply: &CompletedInference, dispatched_at: Instant) {
+        let result = &reply.result;
         let source_us = job.source_us;
         let cutoff = source_us.saturating_sub(CADENCE_WINDOW_US);
         self.first_source_us.get_or_insert(source_us);
@@ -666,6 +682,11 @@ impl Analysis {
             self.fire_time = Some(source_us);
             self.fire_window.push_back(source_us);
             self.fire_at = Some(captured_at);
+            if job.extra_fire || !regions.is_empty() || !reply.fire_proposals.is_empty() {
+                self.last_exploration = Some(dispatched_at);
+            } else {
+                self.last_exploration.get_or_insert(dispatched_at);
+            }
             if job.extra_fire {
                 self.extra_fire_frames = self.extra_fire_frames.saturating_add(1);
             }
@@ -714,6 +735,7 @@ fn next_job(
     now: Instant,
     sampling: CameraSampling,
     priority: CameraPriority,
+    live: bool,
 ) -> Option<Job> {
     let fire = due(
         previous.and_then(|state| state.fire_time),
@@ -741,14 +763,28 @@ fn next_job(
         (false, true) => (Tasks::Fire, fire_age),
         (false, false) => {
             let state = previous?;
-            return (state
+            let burst = state
                 .burst
                 .is_some_and(|at| now.duration_since(at) < FIRE_BURST_TIME)
-                && due(state.fire_time, source_us, FIRE_BURST_FPS))
-            .then_some(Job {
-                tasks: Tasks::Fire,
-                rank: DispatchRank::Burst,
-            });
+                && due(state.fire_time, source_us, FIRE_BURST_FPS);
+            let exploration = live
+                && state
+                    .last_exploration
+                    .is_some_and(|at| now.duration_since(at) >= FIRE_EXPLORATION_PERIOD)
+                && state.smoke == Some(0)
+                && state.fire == Some(0)
+                && due(state.fire_time, source_us, FIRE_BURST_FPS);
+            return match (burst, exploration) {
+                (true, _) => Some(Job {
+                    tasks: Tasks::Fire,
+                    rank: DispatchRank::Burst,
+                }),
+                (false, true) => Some(Job {
+                    tasks: Tasks::Fire,
+                    rank: DispatchRank::Explore,
+                }),
+                _ => None,
+            };
         }
     };
     let bonus = if priority == CameraPriority::High {
@@ -796,7 +832,7 @@ mod tests {
         let normal = analysis(now - Duration::from_millis(330));
         let older = analysis(now - Duration::from_millis(400));
         let rank = |camera: &Analysis, priority| {
-            let job = next_job(Some(camera), 1_300_000, now, sampling, priority).unwrap();
+            let job = next_job(Some(camera), 1_300_000, now, sampling, priority, true).unwrap();
             assert_eq!(job.tasks, Tasks::Pose);
             job.rank
         };
@@ -815,6 +851,7 @@ mod tests {
             now,
             CameraSampling::default(),
             CameraPriority::Normal,
+            true,
         )
         .unwrap();
         assert_eq!(job.tasks, Tasks::Fire);
@@ -829,7 +866,14 @@ mod tests {
         let mut state = analysis(now);
         state.pose_time = Some(1_350_000);
         let select = |state: &Analysis, source, at| {
-            next_job(Some(state), source, at, sampling, CameraPriority::Normal)
+            next_job(
+                Some(state),
+                source,
+                at,
+                sampling,
+                CameraPriority::Normal,
+                true,
+            )
         };
         assert!(select(&state, 1_400_000, now).is_none());
         state.update_burst(true, now);
@@ -841,5 +885,30 @@ mod tests {
         assert!(select(&state, 1_400_000, now + FIRE_BURST_TIME).is_none());
         state.update_burst(true, now + FIRE_BURST_COOLDOWN);
         assert_eq!(state.burst, Some(now + FIRE_BURST_COOLDOWN));
+    }
+
+    #[test]
+    fn zero_proposal_scan_uses_only_spare_live_slots() {
+        let now = Instant::now();
+        let mut state = analysis(now);
+        state.pose_time = Some(1_350_000);
+        state.smoke = Some(0);
+        state.fire = Some(0);
+        state.last_exploration = Some(now - FIRE_EXPLORATION_PERIOD);
+        let choose = |source, live| {
+            next_job(
+                Some(&state),
+                source,
+                now,
+                CameraSampling::default(),
+                CameraPriority::Normal,
+                live,
+            )
+        };
+        assert!(choose(1_400_000, false).is_none());
+        let idle = choose(1_400_000, true).unwrap();
+        assert_eq!(idle.rank, DispatchRank::Explore);
+        let base = choose(1_650_000, true).unwrap();
+        assert!(base.rank > idle.rank && base.tasks.fire());
     }
 }

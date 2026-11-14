@@ -7,13 +7,13 @@ use anyhow::{Context, Result, ensure};
 use sw_domain::Observation;
 use sw_inference::{
     CudaProvider, Image, InferenceError, Letterbox, ModelId, ModelPack, PerceptionBackend,
-    Preprocessor, Runtime, decode, trace_fire,
+    Preprocessor, Runtime, decode, decode_fire_with_proposals, trace_fire,
 };
 use sw_protocol::worker::{
-    CONFIG_MAX_BYTES, CudaConfig, ExecutionTiming, FIRE_DIAGNOSTIC_READY, FrameHeader, HEADER_LEN,
-    INFERENCE_READY, InferenceConfig, InferenceResult, MODEL_INITIALIZATION_FAILED,
-    MODEL_PACK_UNAVAILABLE, PtsQuality, RESULT_MAX_BYTES, RUNTIME_UNAVAILABLE,
-    TIMED_INFERENCE_READY, Tasks,
+    CONFIG_MAX_BYTES, CudaConfig, ExecutionTiming, FIRE_DIAGNOSTIC_READY, FireProposalResult,
+    FrameHeader, HEADER_LEN, INFERENCE_READY, InferenceConfig, InferenceResult,
+    MODEL_INITIALIZATION_FAILED, MODEL_PACK_UNAVAILABLE, PtsQuality, RESULT_MAX_BYTES,
+    RUNTIME_UNAVAILABLE, TIMED_INFERENCE_READY, Tasks,
 };
 use uuid::Uuid;
 
@@ -21,6 +21,7 @@ use uuid::Uuid;
 pub enum Mode {
     Legacy,
     Timed,
+    TimedProposals,
     FireDiagnostic,
 }
 
@@ -74,13 +75,13 @@ pub fn run(mode: Mode) -> Result<()> {
     }
     output.write_all(&match mode {
         Mode::Legacy => INFERENCE_READY,
-        Mode::Timed => TIMED_INFERENCE_READY,
+        Mode::Timed | Mode::TimedProposals => TIMED_INFERENCE_READY,
         Mode::FireDiagnostic => FIRE_DIAGNOSTIC_READY,
     })?;
     output.flush()?;
 
     let mut payload = Vec::new();
-    let timed = mode == Mode::Timed;
+    let timed = matches!(mode, Mode::Timed | Mode::TimedProposals);
     loop {
         let mut id = [0; 16];
         if input.read(&mut id[..1])? == 0 {
@@ -130,23 +131,29 @@ pub fn run(mode: Mode) -> Result<()> {
             write_result(&mut output, &payload, None)?;
             continue;
         }
-        let input = InferenceInput {
-            tensor,
-            image,
-            geometry,
-            capture_ts,
-        };
+        let input = InferenceInput { tensor, geometry };
         let people = if tasks.pose() {
-            let (observations, run, decode) =
-                observe(&mut pose, ModelId::PoseBalanced, input, timed)?;
+            let (observations, run, decode) = observe(&mut pose, input, timed, |values| {
+                decode(ModelId::PoseBalanced, values, image, geometry, capture_ts)
+            })?;
             timing.pose_run_us = run;
             timing.pose_decode_us = decode;
             Some(observations)
         } else {
             None
         };
+        let mut proposals = Vec::new();
         let hazards = if tasks.fire() {
-            let (observations, run, decode) = observe(&mut fire, ModelId::Fire, input, timed)?;
+            let (observations, run, decode) = observe(&mut fire, input, timed, |values| {
+                if mode == Mode::TimedProposals {
+                    let (detections, weak) =
+                        decode_fire_with_proposals(values, image, geometry, capture_ts)?;
+                    proposals = weak;
+                    Ok(detections)
+                } else {
+                    decode(ModelId::Fire, values, image, geometry, capture_ts)
+                }
+            })?;
             timing.fire_run_us = run;
             timing.fire_decode_us = decode;
             Some(observations)
@@ -161,7 +168,17 @@ pub fn run(mode: Mode) -> Result<()> {
         };
         payload.clear();
         let serialize_started = timed.then(Instant::now);
-        serde_json::to_writer(&mut payload, &response)?;
+        if mode == Mode::TimedProposals {
+            serde_json::to_writer(
+                &mut payload,
+                &FireProposalResult {
+                    inference: response,
+                    fire_proposals: proposals,
+                },
+            )?;
+        } else {
+            serde_json::to_writer(&mut payload, &response)?;
+        }
         let timed_reply = serialize_started.map(|at| {
             timing.serialize_us = micros(at.elapsed());
             timing
@@ -191,21 +208,19 @@ fn write_result(
 #[derive(Clone, Copy)]
 struct InferenceInput<'a> {
     tensor: &'a [f32],
-    image: Image<'a>,
     geometry: Letterbox,
-    capture_ts: f64,
 }
 
 fn observe(
     backend: &mut impl PerceptionBackend,
-    model: ModelId,
     input: InferenceInput<'_>,
     timed: bool,
+    decode: impl FnOnce(&[f32]) -> Result<Vec<Observation>, InferenceError>,
 ) -> Result<(Vec<Observation>, u32, u32), InferenceError> {
     let started = timed.then(Instant::now);
     backend.evaluate(input.geometry.tensor_size(), input.tensor, |values| {
         let decoding = timed.then(Instant::now);
-        let observations = decode(model, values, input.image, input.geometry, input.capture_ts)?;
+        let observations = decode(values)?;
         let run = started
             .zip(decoding)
             .map_or(0, |(a, b)| micros(b.duration_since(a)));

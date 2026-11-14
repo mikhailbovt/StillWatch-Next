@@ -55,8 +55,7 @@ class CameraGrid extends StatelessWidget {
           itemBuilder: (context, index) {
             final camera = console.cameras[index];
             final running =
-                !camera.repeatedFrame &&
-                (camera.state == 'streaming' || camera.state == 'replaying');
+                camera.state == 'streaming' || camera.state == 'replaying';
             final canView =
                 online &&
                 console.foreground &&
@@ -65,7 +64,7 @@ class CameraGrid extends StatelessWidget {
             final status = !online
                 ? 'Core offline'
                 : camera.repeatedFrame
-                ? 'Repeated camera frame'
+                ? 'Visual changes unconfirmed'
                 : readable(camera.state);
             final analysis = camera.runtime['analysis'];
             final cadence = analysis is Map ? analysis['cadence'] : null;

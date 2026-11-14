@@ -103,6 +103,8 @@ pub struct EvidenceLineage {
 pub struct EvidenceContext {
     pub observed_interval: EvidenceInterval,
     pub coverage: EvidenceCoverage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<EvidenceSampling>,
     pub local_facts: LocalFacts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage: Option<EvidenceLineage>,
@@ -111,6 +113,18 @@ pub struct EvidenceContext {
     pub limitations: Vec<EvidenceLimitation>,
     pub policy_version: String,
     pub prompt_version: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceSampling {
+    pub configured_fps: u8,
+    pub window_ms: u32,
+    pub distinct_frames: u16,
+    pub attached_overviews: u8,
+    pub attached_crops: u8,
+    pub motion_coverage: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

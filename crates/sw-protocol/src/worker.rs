@@ -186,6 +186,16 @@ pub struct InferenceResult {
     pub fire: Option<Vec<sw_domain::Observation>>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FireProposalResult {
+    pub inference: InferenceResult,
+    #[cfg_attr(feature = "schema", schemars(length(max = 8)))]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fire_proposals: Vec<sw_domain::Observation>,
+}
+
 /// Durations on the worker's monotonic clock in the order used by the SWI2 reply.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExecutionTiming {

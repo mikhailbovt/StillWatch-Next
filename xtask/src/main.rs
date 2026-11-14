@@ -12,7 +12,7 @@ use sw_protocol::{
     OnvifStreamRequest, PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest,
     ReplayUpload, ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe,
     SourceProbeRequest, StreamGrant, StreamRequest,
-    worker::{CaptureRequest, InferenceConfig, InferenceResult},
+    worker::{CaptureRequest, FireProposalResult, InferenceConfig, InferenceResult},
 };
 
 fn main() -> Result<()> {
@@ -77,6 +77,11 @@ fn contracts(check: bool) -> Result<()> {
     write_schema::<CaptureRequest>(&workers, "CaptureRequest", check)?;
     write_schema::<InferenceConfig>(&workers, "InferenceConfig", check)?;
     write_schema::<InferenceResult>(&workers, "InferenceResult", check)?;
+    let proposals = root.join("../workers/v2-proposals");
+    if !check {
+        fs::create_dir_all(&proposals)?;
+    }
+    write_schema::<FireProposalResult>(&proposals, "FireProposalResult", check)?;
     Ok(())
 }
 

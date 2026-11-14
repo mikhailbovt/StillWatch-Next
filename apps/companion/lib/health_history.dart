@@ -167,7 +167,7 @@ class _EventTile extends StatelessWidget {
     final end = event.endedAt;
     final title = switch (event.code) {
       'camera_offline' => 'Camera offline',
-      'camera_frozen' => 'Camera frames frozen',
+      'camera_frozen' => 'Visual changes unconfirmed',
       'camera_capacity_exceeded' => 'Camera exceeds capture capacity',
       'invalid_source_clock' => 'Camera timestamps stalled or invalid',
       'host_clock_discontinuity' => 'Core system clock changed abruptly',

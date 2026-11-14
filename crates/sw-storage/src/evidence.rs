@@ -99,6 +99,13 @@ impl EvidenceWrite {
                 || !interval.end_source_s.is_finite()
                 || interval.end_source_s < interval.start_source_s
                 || coverage.expected_samples < coverage.received_samples
+                || context.sampling.is_some_and(|sampling| {
+                    !(1..=5).contains(&sampling.configured_fps)
+                        || sampling.distinct_frames != coverage.received_samples
+                        || usize::from(sampling.attached_overviews)
+                            + usize::from(sampling.attached_crops)
+                            != self.images.len()
+                })
                 || context.limitations.len() > 8
                 || [&context.policy_version, &context.prompt_version]
                     .into_iter()

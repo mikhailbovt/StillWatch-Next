@@ -162,6 +162,13 @@ fn main() -> Result<()> {
             std::io::BufWriter::new(std::io::stdout().lock()),
         )?);
     }
+    #[cfg(feature = "diagnostics")]
+    if std::env::args_os().skip(1).eq(["trace-pose-association"]) {
+        return Ok(sw_engine::trace_pose_association(
+            std::io::stdin().lock(),
+            std::io::BufWriter::new(std::io::stdout().lock()),
+        )?);
+    }
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mut config = Config::parse();
     if let Some(path) = config.settings_file.as_deref() {

@@ -47,7 +47,6 @@ impl FireEpisodeManager {
             for episode in self.episodes.values_mut() {
                 episode.quiet_since = None;
             }
-            return;
         }
 
         // Compare all tracks against the previous observation before changing geometry.

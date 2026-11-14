@@ -205,7 +205,6 @@ class _LiveViewState extends State<LiveView> {
         console.link == LinkState.connected &&
         widget.profile.can('streams_read') &&
         camera != null &&
-        !camera.repeatedFrame &&
         (camera.state == 'streaming' || camera.state == 'replaying');
     final previousCamera = _camera;
     final newScope =
@@ -225,7 +224,11 @@ class _LiveViewState extends State<LiveView> {
     }
     _active = active;
     if (active) {
-      unawaited(_connect());
+      if (newScope || _playback == null && !_starting) {
+        unawaited(_connect());
+      } else {
+        setState(() {});
+      }
     } else {
       _generation++;
       final previous = _playback;
@@ -391,6 +394,8 @@ class _LiveViewState extends State<LiveView> {
                     ),
                     if (!_starting && playback == null && _active)
                       const Text('Camera snapshots'),
+                    if (_camera?.repeatedFrame == true)
+                      const Text('Visual changes unconfirmed'),
                   ],
                 ),
               ),

@@ -301,8 +301,15 @@ def verify_camera_sampling(args, root, model_options):
         status, packet = client.call("GET", f"/api/v2/incidents/{incident['id']}/evidence/{incident['evidence_packet_id']}")
         assert status == 200, packet
         coverage = packet["context"]["coverage"]
-        assert 3 <= coverage["received_samples"] <= coverage["expected_samples"] <= 17, coverage
-        assert coverage["max_gap_ms"] >= 400, coverage
+        sampling = packet["context"]["sampling"]
+        assert sampling["configured_fps"] == 2
+        assert sampling["distinct_frames"] == coverage["received_samples"]
+        assert sampling["attached_overviews"] + sampling["attached_crops"] == len(packet["images"])
+        assert 2 <= len(packet["images"]) <= 5
+        assert 1 <= coverage["received_samples"] <= coverage["expected_samples"] <= 17, coverage
+        assert 0 <= coverage["max_gap_ms"] <= 8_000, coverage
+        if coverage["received_samples"] == 1:
+            assert sampling["motion_coverage"] is False
         status, prioritized = client.call("PATCH", path, {"priority": "high"},
                                           key="camera-priority", revision=before_priority["revision"])
         assert status == 200 and prioritized["config"]["priority"] == "high", prioritized
@@ -333,7 +340,7 @@ def inference_worker(parent):
             command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         except FileNotFoundError:
             continue
-        if command[1:] in ([b"infer", b""], [b"infer-v2", b""]):
+        if len(command) == 3 and command[1] in (b"infer", b"infer-v2", b"infer-v2-proposals"):
             workers.append(pid)
     return workers[0] if len(workers) == 1 else None
 
@@ -764,20 +771,27 @@ def verify_repeated_frames(args, root, model_options):
                 normal_camera = until(normal, 8)
                 expect_snapshot(args, client, cam_id, 200)
                 frozen = until(lambda: value if (value := client.camera(cam_id))["runtime"].get("repeated_frame") else None, 22)
-                assert frozen["runtime"]["state"] == "unavailable"
+                assert frozen["runtime"]["state"] == "streaming"
                 assert frozen["source_epoch"] == normal_camera["source_epoch"]
                 status, analysis = client.call("GET", path)
                 assert status == 200 and analysis["state"] == "degraded", analysis
                 assert analysis["people"] is analysis["smoke_regions"] is analysis["fire_regions"] is None
+                def accepted():
+                    code, metrics = client.call("GET", f"/api/v2/cameras/{cam_id}/analysis-metrics")
+                    assert code == 200 and metrics is not None
+                    return tuple(int(metrics["counts"][task]["accepted"]) for task in ("pose", "fire"))
+                held = accepted()
+                time.sleep(0.8)
+                assert accepted() == held
                 assert client.call("GET", "/health/ready")[0] == 200
-                expect_snapshot(args, client, cam_id, 503)
+                expect_snapshot(args, client, cam_id, 200)
                 freeze_events = until(lambda: health_events(client, "camera_frozen", cam_id), 4)
                 assert len(freeze_events) == 1 and freeze_events[0]["ended_at"] is None, freeze_events
                 assert not health_events(client, "camera_offline", cam_id, active_only=True)
 
                 def recovered():
                     item = normal()
-                    return item if item and int(item["source_epoch"]) > int(frozen["source_epoch"]) else None
+                    return item if item and item["source_epoch"] == frozen["source_epoch"] else None
 
                 try:
                     after = until(recovered, 12)
@@ -804,9 +818,9 @@ def verify_repeated_frames(args, root, model_options):
             assert health_events(client, "camera_frozen", cam_id) == [ended]
             assert health_events(client, "camera_offline", cam_id)[0]["ended_at"] is not None
     print(json.dumps({"repeated_pixels_detected_with_native_pts": True, "observations_withheld": True,
-                      "moving_pixels_rotated_source_epoch": True, "rtsp_publisher_unchanged": True,
+                      "moving_pixels_resumed_same_source_epoch": True, "rtsp_publisher_unchanged": True,
                       "freeze_and_disconnect_history_survived_restart": True,
-                      "snapshot_unavailable_during_hold": True if args.media_encoder else None}))
+                      "transport_snapshot_available_during_hold": True if args.media_encoder else None}))
 
 
 def snapshot_flags(args):
@@ -845,7 +859,7 @@ if __name__ == "__main__":
     parser.add_argument("--runtime-sha256", required=True)
     parser.add_argument("--mediamtx", type=lambda value: Path(value).resolve(strict=True))
     parser.add_argument("--media-encoder", type=lambda value: Path(value).resolve(strict=True),
-                        help="Also verify JPEG availability during the source-freeze test")
+                        help="Also verify JPEG availability during the repeated-frame test")
     parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
     parser.add_argument("--model-fault", action="store_true", help="Reject a corrupted, disposable copy of the model pack")
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")

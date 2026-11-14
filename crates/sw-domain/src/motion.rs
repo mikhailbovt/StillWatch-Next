@@ -589,7 +589,7 @@ impl Track {
     }
 
     fn controlled(&self, pose: &Pose, settings: MedicalSettings) -> Option<&Pose> {
-        if !pose.low || !pose.torso_visible || self.history.len() < 7 {
+        if !pose.low || !pose.torso_visible || self.unresolved_landing {
             return None;
         }
         let sequence: Vec<_> = self
@@ -598,17 +598,24 @@ impl Track {
             .filter(|p| pose.ts() - p.ts() <= 5.0)
             .chain([pose])
             .collect();
-        if sequence.len() < 8 || sequence.iter().any(|p| !p.torso_visible) {
+        // Require separate observations across both preparation and descent.
+        // Four seated samples span one second at 3 fps.
+        if sequence.len() < 6 || sequence.iter().any(|p| !p.torso_visible) {
             return None;
         }
         for (end, &reference) in sequence[..sequence.len() - 1].iter().enumerate() {
-            if pose.ts() - reference.ts() < 0.8 {
+            if pose.ts() - reference.ts() < 0.8 - EPSILON {
                 continue;
             }
-            let start = sequence[..=end].partition_point(|p| reference.ts() - p.ts() > 1.2);
+            let start =
+                sequence[..=end].partition_point(|p| reference.ts() - p.ts() > 1.2 + EPSILON);
             let prepared = &sequence[start..=end];
-            if prepared.len() < 5
+            if prepared.len() < 4
                 || reference.ts() - prepared[0].ts() < 0.8 - EPSILON
+                || prepared.windows(2).any(|pair| {
+                    let gap = pair[1].ts() - pair[0].ts();
+                    gap <= 0.0 || gap > settings.lost_track_seconds + EPSILON
+                })
                 || prepared
                     .iter()
                     .any(|p| !p.reliable || p.posture != Posture::Seated)
@@ -622,7 +629,8 @@ impl Track {
                 });
             let height = reference.height();
             let recline = &sequence[end..];
-            if high - low <= height * 0.08
+            if recline.len() >= 3
+                && high - low <= height * 0.08
                 && recline
                     .iter()
                     .all(|p| (p.center_y - reference.center_y).abs() <= height * 0.18)
@@ -722,6 +730,94 @@ impl Track {
             }
         } else {
             self.reobserved = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use std::sync::Arc;
+
+    use crate::{Keypoint, Observation, ObservationLabel};
+
+    use super::*;
+
+    fn supported_recline(at: f64, drop: f64) -> Pose {
+        let settled = at >= 1.4;
+        let low = at >= 2.3;
+        let height = if low { 65.0 } else { 100.0 };
+        let center_y = 65.0
+            + drop
+            + if settled {
+                ((at - 1.4) * 12.0).min(13.0)
+            } else {
+                0.0
+            };
+        Pose {
+            observation: Arc::new(Observation {
+                capture_ts: at,
+                region: Box2d {
+                    x1: 10.0,
+                    y1: 20.0,
+                    x2: 100.0,
+                    y2: 20.0 + height,
+                },
+                score: 0.95,
+                label: ObservationLabel::Person,
+                track_id: Some(1),
+                keypoints: vec![Keypoint(0.0, 0.0, 0.0); 17],
+                limited: false,
+                truncated: false,
+                association_uncertain: false,
+                torso_histogram: Vec::new(),
+            }),
+            center_y,
+            lean: Some(if low { 2.0 } else { 0.1 }),
+            low,
+            posture: if low {
+                Posture::Low
+            } else if settled {
+                Posture::Uncertain
+            } else {
+                Posture::Seated
+            },
+            reliable: true,
+            torso_visible: true,
+            legs_visible: true,
+            body_visible: true,
+            shoulder_y: Some(center_y - 20.0),
+            torso_length: 35.0,
+        }
+    }
+
+    #[test]
+    fn controlled_descent_uses_observed_span_and_coverage_at_each_allowed_pose_rate() {
+        let settings = MedicalSettings::default();
+        for fps in [3, 4, 5] {
+            for offset in [0.0, 0.04] {
+                let mut track = Track::new(1, 1, 0.0);
+                for step in 0..fps * 3 {
+                    let jitter = if step % 2 == 0 { 0.0 } else { 0.008 };
+                    let at = f64::from(step) / f64::from(fps) + offset + jitter;
+                    track.history.push_back(supported_recline(at, 0.0));
+                }
+                let current = supported_recline(3.0 + offset, 0.0);
+                assert!(
+                    track.controlled(&current, settings).is_some(),
+                    "{fps} fps, {offset} s"
+                );
+                let rapid = supported_recline(current.ts(), 35.0);
+                assert!(track.controlled(&rapid, settings).is_none());
+                track
+                    .history
+                    .retain(|sample| sample.ts() <= 1.45 || sample.ts() >= 2.4);
+                assert!(
+                    track.controlled(&current, settings).is_none(),
+                    "missing descent, {fps} fps"
+                );
+                track.unresolved_landing = true;
+                assert!(track.controlled(&current, settings).is_none());
+            }
         }
     }
 }

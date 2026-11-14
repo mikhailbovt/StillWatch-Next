@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::{Keypoint, Observation, ObservationLabel};
+use serde::Serialize;
 
 const TRACK_LIMIT: usize = 128;
 const TENTATIVE_RETENTION: f64 = 0.6 + 1e-6;
@@ -35,6 +36,28 @@ pub struct PoseTracker {
     epoch: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssociationOutcome {
+    Confirmed,
+    Tentative,
+    New,
+    Ambiguous,
+    Missing,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct AssociationDiagnostic {
+    pub track_id: u64,
+    pub source_seconds: f64,
+    pub outcome: AssociationOutcome,
+    pub score: f64,
+    pub previous_gap_seconds: Option<f64>,
+    pub chosen_cost: Option<f64>,
+    pub alternate_cost: Option<f64>,
+    pub visible_torso_joints: u8,
+}
+
 impl Default for PoseTracker {
     fn default() -> Self {
         Self {
@@ -54,9 +77,29 @@ impl PoseTracker {
 
     pub fn update(
         &mut self,
+        observations: Vec<Observation>,
+        ts: f64,
+        epoch: u64,
+    ) -> Result<Vec<Observation>, TrackingError> {
+        self.associate_with_trace(observations, ts, epoch, None)
+    }
+
+    pub fn associate(
+        &mut self,
+        observations: Vec<Observation>,
+        ts: f64,
+        epoch: u64,
+        trace: &mut impl FnMut(AssociationDiagnostic),
+    ) -> Result<Vec<Observation>, TrackingError> {
+        self.associate_with_trace(observations, ts, epoch, Some(trace))
+    }
+
+    fn associate_with_trace(
+        &mut self,
         mut observations: Vec<Observation>,
         ts: f64,
         epoch: u64,
+        mut trace: Option<&mut dyn FnMut(AssociationDiagnostic)>,
     ) -> Result<Vec<Observation>, TrackingError> {
         if !ts.is_finite()
             || observations.len() > 300
@@ -91,6 +134,9 @@ impl PoseTracker {
             .map(|obs| tracks.iter().map(|(_, track)| cost(track, obs)).collect())
             .collect();
         let matches = matches(&unique, &tracks, &costs)?;
+        let trace_tracks = trace
+            .is_some()
+            .then(|| tracks.iter().map(|(id, _)| **id).collect::<Vec<_>>());
         let mut output = Vec::with_capacity(unique.len());
         for (index, mut obs) in unique.into_iter().enumerate() {
             let (tid, previous, uncertain, hits, confirmed) = if let Some((tid, ambiguous)) =
@@ -129,6 +175,38 @@ impl PoseTracker {
             };
             obs.track_id = Some(tid);
             obs.association_uncertain = uncertain;
+            if let (Some(columns), Some(trace)) = (&trace_tracks, trace.as_mut()) {
+                let selected = columns.binary_search(&tid).ok();
+                trace(AssociationDiagnostic {
+                    track_id: tid,
+                    source_seconds: ts,
+                    outcome: if uncertain {
+                        AssociationOutcome::Ambiguous
+                    } else if previous.is_none() {
+                        AssociationOutcome::New
+                    } else if confirmed {
+                        AssociationOutcome::Confirmed
+                    } else {
+                        AssociationOutcome::Tentative
+                    },
+                    score: obs.score,
+                    previous_gap_seconds: previous.as_ref().map(|old| ts - old.capture_ts),
+                    chosen_cost: selected.map(|column| costs[index][column]),
+                    alternate_cost: costs[index]
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(column, &cost)| {
+                            (Some(column) != selected && cost.is_finite()).then_some(cost)
+                        })
+                        .min_by(f64::total_cmp),
+                    visible_torso_joints: TORSO
+                        .iter()
+                        .filter(|&&joint| {
+                            obs.keypoints.get(joint).is_some_and(|point| point.2 >= 0.4)
+                        })
+                        .count() as u8,
+                });
+            }
             if confirmed {
                 output.push(obs.clone());
             }
@@ -164,6 +242,21 @@ impl PoseTracker {
             }
         }
         for (id, track) in &mut self.tracks {
+            if track.confirmed
+                && track.current.capture_ts < ts
+                && let Some(trace) = trace.as_mut()
+            {
+                trace(AssociationDiagnostic {
+                    track_id: *id,
+                    source_seconds: ts,
+                    outcome: AssociationOutcome::Missing,
+                    score: track.current.score,
+                    previous_gap_seconds: Some(ts - track.current.capture_ts),
+                    chosen_cost: None,
+                    alternate_cost: None,
+                    visible_torso_joints: 0,
+                });
+            }
             if track.confirmed
                 && !output.iter().any(|item| item.track_id == Some(*id))
                 && output

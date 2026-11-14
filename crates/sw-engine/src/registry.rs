@@ -35,6 +35,7 @@ use crate::{
 
 pub(crate) const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
 const CONTENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(650);
+const CONTENT_CONFIRM_AFTER: Duration = Duration::from_secs(1);
 const CONTENT_HOLD_AFTER: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Error)]
@@ -68,12 +69,14 @@ pub struct CameraFrame {
     pub captured_at: Instant,
     pub(crate) observation_time: ObservationTime,
     pub usable_for_analysis: bool,
+    pub(crate) transport_valid: bool,
     pub live: bool,
     pub(crate) sampling: CameraSampling,
     pub(crate) priority: CameraPriority,
     pub(crate) inference_lane: usize,
     pub(crate) visibility: Visibility,
     pub(crate) scene_signature: sw_domain::SceneSignature,
+    pub(crate) masks: Arc<[scene::PixelMask]>,
     pub(crate) controlled: Arc<[ControlledFireRegion]>,
     pub frame: Frame,
 }
@@ -505,7 +508,19 @@ impl CameraRegistry {
         let codec = process.codec().map(|codec| codec.to_string());
         process.stop().await?;
         let (header, sample) = match result? {
-            CaptureRead::Frame(frame) => (frame.header, Some(scene::measure(&frame))),
+            CaptureRead::Frame(frame) => {
+                let header = frame.header;
+                let masks = scene::pixel_masks(&request.masks, header.width, header.height);
+                (
+                    header,
+                    Some(scene::measure_masked(
+                        header.width,
+                        header.height,
+                        &frame.rgb,
+                        &masks,
+                    )),
+                )
+            }
             // A decoded frame with no Core buffer permit still supplies dimensions.
             CaptureRead::Dropped(header) => (header, None),
             CaptureRead::End => return Err(RegistryError::Source),
@@ -972,6 +987,8 @@ impl CameraRegistry {
         let empty = Arc::<[ControlledFireRegion]>::from([]);
         let zones = Arc::from(camera.config.controlled_fire_regions.clone());
         let mut moved_since = None;
+        let mut mask_dimensions = (0, 0);
+        let mut masks: Arc<[scene::PixelMask]> = Arc::from([]);
         loop {
             let read = tokio::select! {
                 _ = stop.wait_for(|value| *value) => return Ok(CaptureState::Disabled),
@@ -996,16 +1013,20 @@ impl CameraRegistry {
             let now = Instant::now();
             let observation_time = ObservationTime::new(sw_storage::utc_ms(), now);
             let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
-            let sample = scene::measure(&frame);
+            let dimensions = (frame.header.width, frame.header.height);
+            if dimensions != mask_dimensions {
+                mask_dimensions = dimensions;
+                masks =
+                    scene::pixel_masks(&camera.config.privacy_masks, dimensions.0, dimensions.1);
+            }
+            let sample = scene::measure_masked(dimensions.0, dimensions.1, &frame.rgb, &masks);
             if reset {
                 content.clear();
             }
-            let was_held = content.holding;
             if live && has_native_time {
                 content.observe(&frame.rgb, sample.fingerprint, now);
             }
-            let usable = has_native_time && !content.holding;
-            let resumed = was_held && usable;
+            let usable = has_native_time && !content.unconfirmed(now);
             let moved = camera.reviewed_scene.as_ref().is_some_and(|reference| {
                 usable
                     && sample.visibility == Visibility::Good
@@ -1022,7 +1043,7 @@ impl CameraRegistry {
                     .store
                     .invalidate_camera_scene(camera.id, camera.revision)
                     .await?;
-            } else if reset || resumed {
+            } else if reset {
                 *camera = self
                     .store
                     .bump_camera_epoch(camera.id, camera.revision)
@@ -1030,7 +1051,7 @@ impl CameraRegistry {
             }
             let frame_id = frame.header.frame;
             let source_us = frame.header.source_micros;
-            let relative_lag = if paced && usable {
+            let relative_lag = if paced && has_native_time {
                 source_progress.observe(camera.epoch, source_us, now)
             } else {
                 None
@@ -1045,12 +1066,14 @@ impl CameraRegistry {
                 captured_at: now,
                 observation_time,
                 usable_for_analysis: usable,
+                transport_valid: has_native_time,
                 live,
                 sampling: camera.config.sampling,
                 priority: camera.config.priority,
                 inference_lane,
                 visibility: sample.visibility,
                 scene_signature: sw_domain::SceneSignature(sample.fingerprint),
+                masks: Arc::clone(&masks),
                 controlled: if camera.reviewed_scene.is_some()
                     && !moved
                     && sample.visibility == Visibility::Good
@@ -1065,18 +1088,16 @@ impl CameraRegistry {
                 if state.codec.is_none() {
                     state.codec = process.codec().cloned();
                 }
-                state.phase = if usable {
+                state.phase = if has_native_time {
                     if live {
                         CaptureState::Streaming
                     } else {
                         CaptureState::Replaying
                     }
-                } else if content.holding {
-                    CaptureState::Unavailable
                 } else {
                     CaptureState::ClockHold
                 };
-                if usable {
+                if has_native_time {
                     state.last = Some((frame_id, now));
                     if state
                         .first_source
@@ -1157,15 +1178,20 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
 }
 
 #[derive(Default)]
-pub(crate) struct RepeatedFrames {
+struct RepeatedFrames {
     hasher: RandomState,
     fingerprint: Option<[u8; scene::FINGERPRINT_BYTES]>,
     last_sample: Option<Instant>,
     repeat: Option<(u64, Instant)>,
-    pub(crate) holding: bool,
+    holding: bool,
 }
 
 impl RepeatedFrames {
+    fn unconfirmed(&self, now: Instant) -> bool {
+        self.repeat
+            .is_some_and(|(_, since)| now.duration_since(since) >= CONTENT_CONFIRM_AFTER)
+    }
+
     fn clear(&mut self) {
         self.fingerprint = None;
         self.last_sample = None;
@@ -1173,12 +1199,7 @@ impl RepeatedFrames {
         self.holding = false;
     }
 
-    pub(crate) fn observe(
-        &mut self,
-        rgb: &[u8],
-        fingerprint: [u8; scene::FINGERPRINT_BYTES],
-        now: Instant,
-    ) {
+    fn observe(&mut self, rgb: &[u8], fingerprint: [u8; scene::FINGERPRINT_BYTES], now: Instant) {
         if self.fingerprint.replace(fingerprint) != Some(fingerprint) {
             self.last_sample = Some(now);
             self.repeat = None;

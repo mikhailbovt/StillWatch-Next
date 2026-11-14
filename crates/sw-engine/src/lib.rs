@@ -29,7 +29,7 @@ pub use inference_process::verify_inference_startup;
 pub use media::{MediaAnswer, MediaConfig, MediaError, MediaService, TurnConfig};
 pub use onvif::{OnvifConfig, OnvifError};
 #[cfg(feature = "diagnostics")]
-pub use policy_trace::trace_fire_policy;
+pub use policy_trace::{trace_fire_policy, trace_pose_association};
 pub use registry::{CameraFrame, CameraHealth, CameraRegistry, RegistryError, SourceConfig};
 pub use semantic::{
     FirebaseProvider, SemanticConfig, SemanticProvider, SemanticProviderError, SemanticSupervisor,

@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub use pack::{InputProfile, ModelId, ModelPack, TensorSize};
-pub use postprocess::{FireTrace, decode, trace_fire};
+pub use postprocess::{FireTrace, decode, decode_fire_with_proposals, trace_fire};
 pub use preprocess::{Image, Letterbox, Preprocessor};
 
 const RUNTIME_VERSION: &str = "1.31.0";

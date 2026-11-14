@@ -1,8 +1,9 @@
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 
 use serde::Serialize;
 use sw_domain::{
-    Box2d, FireDecision, FireFacts, FirePolicy, FireSample, FireSettings, SourceScope,
+    Box2d, FireDecision, FireFacts, FirePolicy, FireSample, FireSettings, Observation,
+    ObservationLabel, PoseTracker, SourceScope,
 };
 use sw_protocol::worker::{FrameHeader, HEADER_LEN, InferenceResult, PtsQuality, RESULT_MAX_BYTES};
 use uuid::Uuid;
@@ -67,13 +68,27 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
         rgb.resize(header.byte_length()? as usize, 0);
         input.read_exact(&mut rgb)?;
         let visibility = scene::measure_rgb(header.width, header.height, &rgb).visibility;
+        let view = scene::VisibleFrame {
+            width: header.width as usize,
+            height: header.height as usize,
+            rgb: &rgb,
+            masks: &[],
+            overview: visibility,
+        };
         let decisions = policy
             .update(FireSample {
                 scope,
                 source_us: pts,
                 dimensions: (header.width, header.height),
                 regions: &regions,
+                weak_proposals: &[],
                 visibility,
+                region_visibility: &|observation| {
+                    view.region(
+                        observation.region,
+                        observation.label == ObservationLabel::Fire,
+                    )
+                },
                 controlled_overlap: &|_| None,
             })
             .into_iter()
@@ -98,4 +113,47 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
 
 fn invalid_frame() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid policy trace frame")
+}
+
+/// One JSON line per accepted pose inference result. Inputs contain detector
+/// observations from one camera with a native source clock.
+pub fn trace_pose_association(input: impl Read, mut output: impl Write) -> io::Result<()> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Sample {
+        epoch: u64,
+        source_seconds: f64,
+        observations: Vec<Observation>,
+    }
+
+    let mut input = BufReader::new(input);
+    let mut tracker = PoseTracker::default();
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        if (&mut input)
+            .take(RESULT_MAX_BYTES as u64 + 1)
+            .read_until(b'\n', &mut buffer)?
+            == 0
+        {
+            return Ok(());
+        }
+        if buffer.len() > RESULT_MAX_BYTES {
+            return Err(invalid_frame());
+        }
+        let Sample {
+            epoch,
+            source_seconds,
+            observations,
+        } = serde_json::from_slice(&buffer)?;
+        let mut diagnostics = Vec::new();
+        tracker
+            .associate(observations, source_seconds, epoch, &mut |result| {
+                diagnostics.push(result)
+            })
+            .map_err(io::Error::other)?;
+        serde_json::to_writer(&mut output, &diagnostics)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
 }

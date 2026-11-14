@@ -33,8 +33,7 @@ use crate::{
     CameraFrame, CameraRegistry, CaptureProcess, CaptureRead, Frame, FrameBudget,
     capture_process::reap,
     child_process::command,
-    registry::{FRAME_TIMEOUT, FrameClock, RepeatedFrames, same_aspect_ratio},
-    scene,
+    registry::{FRAME_TIMEOUT, FrameClock, same_aspect_ratio},
 };
 
 const SDP_LIMIT: usize = 48 * 1024;
@@ -974,7 +973,6 @@ impl MediaService {
         latest: watch::Sender<Option<(Instant, Arc<Frame>)>>,
     ) {
         let mut clock = FrameClock::default();
-        let mut content = RepeatedFrames::default();
         loop {
             let read = tokio::select! {
                 biased;
@@ -1008,10 +1006,6 @@ impl MediaService {
                     !same_aspect_ratio(dimensions(analysis.frame.header), dimensions(frame.header))
                 })
             {
-                return;
-            }
-            content.observe(&frame.rgb, scene::measure(&frame).fingerprint, now);
-            if content.holding {
                 return;
             }
             latest.send_replace(Some((now, Arc::new(frame))));
@@ -1244,7 +1238,7 @@ fn authorized(state: &mut State, actor: Uuid, id: Uuid) -> Result<&mut Viewer, M
 }
 
 fn usable(frame: &CameraFrame) -> bool {
-    frame.usable_for_analysis && frame.captured_at.elapsed() <= STALE
+    frame.transport_valid && frame.captured_at.elapsed() <= STALE
 }
 
 fn dimensions(header: FrameHeader) -> Dimensions {

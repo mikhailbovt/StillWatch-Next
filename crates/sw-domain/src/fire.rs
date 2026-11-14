@@ -60,7 +60,9 @@ pub struct FireSample<'a> {
     pub source_us: i64,
     pub dimensions: (u32, u32),
     pub regions: &'a [Observation],
+    pub weak_proposals: &'a [Observation],
     pub visibility: Visibility,
+    pub region_visibility: &'a dyn Fn(&Observation) -> Visibility,
     /// Fraction of the current flame box inside a reviewed region.
     /// None represents missing or invalidated scene context.
     pub controlled_overlap: &'a dyn Fn(Box2d) -> Option<f64>,
@@ -105,6 +107,7 @@ struct Region {
     region: Box2d,
     history: VecDeque<Measurement>,
     was_contained: bool,
+    missing_since: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +122,7 @@ struct Cluster {
     smoke: Option<Box2d>,
     combined: Box2d,
     confidence: f64,
+    visibility: Visibility,
 }
 
 impl<'a> HazardPolicy<FireSample<'a>> for FirePolicy {
@@ -176,18 +180,12 @@ impl FirePolicy {
         self.last_us = Some(sample.source_us);
         self.regions
             .retain(|old| sample.source_us.saturating_sub(old.last_us) <= MAX_QUIET_US);
-        if gap || sample.visibility == Visibility::Poor {
+        if gap {
             for old in &mut self.regions {
                 old.history.clear();
                 old.was_contained = false;
+                old.missing_since = None;
             }
-        }
-        if sample.visibility == Visibility::Poor {
-            // A box inferred under an unusable view must not become the
-            // geometry used to associate the next clear observation.
-            self.episodes
-                .update(sample.source_us, sample.visibility, &mut []);
-            return Vec::new();
         }
         let frame_area = f64::from(width) * f64::from(height);
         let mut clusters = Vec::<Cluster>::new();
@@ -207,20 +205,31 @@ impl FirePolicy {
             .collect();
         observations.sort_by(|a, b| b.score.total_cmp(&a.score));
         for observed in observations.into_iter().take(MAX_REGIONS) {
+            let visibility = (sample.region_visibility)(observed);
+            if visibility == Visibility::Poor {
+                continue;
+            }
             if let Some(cluster) = clusters
                 .iter_mut()
                 .find(|c| adjacent(c.combined, observed.region))
             {
-                cluster.add(observed);
+                cluster.add(observed, visibility);
             } else {
                 let mut cluster = Cluster {
                     flame: None,
                     smoke: None,
                     combined: observed.region,
                     confidence: observed.score,
+                    visibility,
                 };
-                cluster.add(observed);
+                cluster.add(observed, visibility);
                 clusters.push(cluster);
+            }
+        }
+        if sample.visibility == Visibility::Poor && clusters.is_empty() {
+            for region in &mut self.regions {
+                region.history.clear();
+                region.was_contained = false;
             }
         }
         let mut used = vec![false; self.regions.len()];
@@ -251,6 +260,7 @@ impl FirePolicy {
                     region: cluster.combined,
                     history: VecDeque::new(),
                     was_contained: false,
+                    missing_since: None,
                 });
                 used.push(true);
                 self.regions.len() - 1
@@ -276,12 +286,37 @@ impl FirePolicy {
                     region: cluster.combined,
                     history: VecDeque::new(),
                     was_contained: false,
+                    missing_since: None,
                 };
                 index
             };
             let region = &mut self.regions[track];
             let report = region.observe(&sample, cluster, frame_area, self.settings);
             reports.push((track, region.episode_id, report));
+        }
+        for (index, region) in self.regions.iter_mut().enumerate() {
+            if used[index] {
+                continue;
+            }
+            let supported = sample.weak_proposals.iter().any(|weak| {
+                weak.region.iou(region.region) >= 0.55
+                    && region.history.back().is_some_and(|last| match weak.label {
+                        ObservationLabel::Fire => last.flame_area.is_some(),
+                        ObservationLabel::Smoke => last.smoke_area.is_some(),
+                        ObservationLabel::Person => false,
+                    })
+                    && (sample.region_visibility)(weak) != Visibility::Poor
+            });
+            if !supported && sample.visibility == Visibility::Good {
+                if region
+                    .missing_since
+                    .is_some_and(|missing| sample.source_us.saturating_sub(missing) > 600_000)
+                {
+                    region.history.clear();
+                    region.was_contained = false;
+                }
+                region.missing_since.get_or_insert(sample.source_us);
+            }
         }
         self.episodes
             .update(sample.source_us, sample.visibility, &mut reports);
@@ -308,7 +343,7 @@ impl FirePolicy {
 }
 
 impl Cluster {
-    fn add(&mut self, observation: &Observation) {
+    fn add(&mut self, observation: &Observation, visibility: Visibility) {
         let part = if observation.label == ObservationLabel::Fire {
             &mut self.flame
         } else {
@@ -317,6 +352,9 @@ impl Cluster {
         *part = Some(part.map_or(observation.region, |old| old.union(observation.region)));
         self.combined = self.combined.union(observation.region);
         self.confidence = self.confidence.max(observation.score);
+        if visibility == Visibility::Limited {
+            self.visibility = visibility;
+        }
     }
 }
 
@@ -329,7 +367,10 @@ impl Region {
         settings: FireSettings,
     ) -> FireEpisode {
         let at = sample.source_us;
-        if at.saturating_sub(self.last_us) > CONTINUITY_US {
+        let missed = self.missing_since.take();
+        if at.saturating_sub(self.last_us) > CONTINUITY_US
+            || missed.is_some_and(|since| at.saturating_sub(since) > 900_000)
+        {
             self.history.clear();
             self.was_contained = false;
         }
@@ -350,7 +391,7 @@ impl Region {
         {
             self.history.pop_front();
         }
-        if sample.visibility != Visibility::Poor {
+        if cluster.visibility != Visibility::Poor {
             if self.history.is_empty() {
                 self.segment_start = at;
             }
@@ -370,7 +411,7 @@ impl Region {
             continuity_samples: self.history.len() as u16,
             detector_confidence: cluster.confidence,
             strong_detection: cluster.confidence >= settings.immediate_confidence,
-            visibility: sample.visibility,
+            visibility: cluster.visibility,
         };
         let corroborated = self
             .history
@@ -378,13 +419,13 @@ impl Region {
             .is_some_and(|first| at.saturating_sub(first.at) >= 300_000)
             && facts.continuity_samples >= 2;
         let controlled = contained
-            && sample.visibility == Visibility::Good
+            && cluster.visibility == Visibility::Good
             && !facts.smoke_visible
             && !facts.apparent_growth
             && corroborated;
         let decision = if controlled {
             FireDecision::ControlledContext
-        } else if sample.visibility != Visibility::Poor
+        } else if cluster.visibility != Visibility::Poor
             && (escaped
                 || facts.apparent_growth
                 || facts.smoke_growth
@@ -503,7 +544,9 @@ mod tests {
                 source_us: at,
                 dimensions: (200, 150),
                 regions: &[item],
+                weak_proposals: &[],
                 visibility: visible,
+                region_visibility: &|_| visible,
                 controlled_overlap: &|_| overlap,
             })
             .pop()
@@ -534,6 +577,53 @@ mod tests {
     }
 
     #[test]
+    fn supported_pause_and_observed_absence_have_distinct_fire_outcomes() {
+        let scope = scope();
+        let smoke = observation(ObservationLabel::Smoke, 0.32, 40.0);
+        let weak = observation(ObservationLabel::Smoke, 0.16, 40.0);
+        for retain in [false, true] {
+            let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
+            let mut update = |at, regions, weak_proposals| {
+                policy.update(FireSample {
+                    scope,
+                    source_us: at,
+                    dimensions: (200, 150),
+                    regions,
+                    weak_proposals,
+                    visibility: Visibility::Good,
+                    region_visibility: &|_| Visibility::Good,
+                    controlled_overlap: &|_| None,
+                })
+            };
+            assert!(update(0, &[], std::slice::from_ref(&weak)).is_empty());
+            let initial = update(100_000, std::slice::from_ref(&smoke), &[])
+                .pop()
+                .unwrap();
+            assert_eq!(initial.decision, FireDecision::Observing);
+            for at in [400_000, 800_000, 1_200_000] {
+                let support = if retain {
+                    std::slice::from_ref(&weak)
+                } else {
+                    &[]
+                };
+                assert!(update(at, &[], support).is_empty());
+            }
+            let next = update(1_400_000, std::slice::from_ref(&smoke), &[])
+                .pop()
+                .unwrap();
+            assert_eq!(next.facts.continuity_samples, if retain { 2 } else { 1 });
+            assert_eq!(
+                next.decision,
+                if retain {
+                    FireDecision::Review
+                } else {
+                    FireDecision::Observing
+                }
+            );
+        }
+    }
+
+    #[test]
     fn split_merge_and_dropout_keep_a_review_episode_with_fresh_segments() {
         let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
         let scope = scope();
@@ -548,7 +638,9 @@ mod tests {
                 source_us: at,
                 dimensions: (200, 150),
                 regions,
+                weak_proposals: &[],
                 visibility: Visibility::Good,
+                region_visibility: &|_| Visibility::Good,
                 controlled_overlap: &|_| None,
             })
         };
@@ -583,6 +675,29 @@ mod tests {
     }
 
     #[test]
+    fn locally_visible_flame_can_open_a_limited_review_in_a_dark_scene() {
+        let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
+        let scope = scope();
+        let flame = observation(ObservationLabel::Fire, 0.95, 40.0);
+        let sample = |at, roi| FireSample {
+            scope,
+            source_us: at,
+            dimensions: (200, 150),
+            regions: std::slice::from_ref(&flame),
+            weak_proposals: &[],
+            visibility: Visibility::Poor,
+            region_visibility: roi,
+            controlled_overlap: &|_| None,
+        };
+        assert!(policy.update(sample(0, &|_| Visibility::Poor)).is_empty());
+        let visible = policy.update(sample(500_000, &|_| Visibility::Limited));
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].decision, FireDecision::Review);
+        assert_eq!(visible[0].facts.visibility, Visibility::Limited);
+        assert_eq!(visible[0].facts.continuity_samples, 1);
+    }
+
+    #[test]
     fn nearby_merge_preserves_independent_fires_and_resolution_needs_a_new_onset() {
         let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
         let scope = scope();
@@ -598,7 +713,9 @@ mod tests {
                 source_us: at,
                 dimensions: (200, 150),
                 regions,
+                weak_proposals: &[],
                 visibility: Visibility::Good,
+                region_visibility: &|_| Visibility::Good,
                 controlled_overlap: &|_| None,
             })
         };
@@ -669,7 +786,9 @@ mod tests {
             source_us: 1_500_000,
             dimensions: (200, 150),
             regions: &[flame],
+            weak_proposals: &[],
             visibility: Visibility::Poor,
+            region_visibility: &|_| Visibility::Poor,
             controlled_overlap: &|_| Some(1.0),
         });
         assert!(obscured.is_empty());

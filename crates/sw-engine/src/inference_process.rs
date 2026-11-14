@@ -3,8 +3,8 @@ use std::time::Duration;
 use process_wrap::tokio::ChildWrapper;
 use sw_domain::{Observation, ObservationLabel};
 use sw_protocol::worker::{
-    CONFIG_MAX_BYTES, ExecutionTiming, INFERENCE_READY, InferenceConfig, InferenceResult,
-    RESULT_MAX_BYTES, TIMED_INFERENCE_READY, Tasks, inference_startup_failure,
+    CONFIG_MAX_BYTES, ExecutionTiming, FireProposalResult, INFERENCE_READY, InferenceConfig,
+    InferenceResult, RESULT_MAX_BYTES, TIMED_INFERENCE_READY, Tasks, inference_startup_failure,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -20,10 +20,12 @@ pub(crate) struct InferenceProcess {
     stdout: ChildStdout,
     result: Vec<u8>,
     timed: bool,
+    proposals: bool,
 }
 
 pub(crate) struct CompletedInference {
     pub result: InferenceResult,
+    pub fire_proposals: Vec<Observation>,
     pub worker_timing: Option<ExecutionTiming>,
 }
 
@@ -32,8 +34,12 @@ impl InferenceProcess {
         binary: &WorkerBinary,
         config: &InferenceConfig,
     ) -> Result<Self, WorkerError> {
-        let timed = binary.timed_inference().await?;
-        let mut child = binary.spawn(if timed { "infer-v2" } else { "infer" })?;
+        let (timed, proposals) = binary.inference_capabilities().await?;
+        let mut child = binary.spawn(match (timed, proposals) {
+            (true, true) => "infer-v2-proposals",
+            (true, false) => "infer-v2",
+            (false, _) => "infer",
+        })?;
         let stdin = child.stdin().take().ok_or(WorkerError::Unavailable)?;
         let stdout = child.stdout().take().ok_or(WorkerError::Unavailable)?;
         let mut process = Self {
@@ -42,6 +48,7 @@ impl InferenceProcess {
             stdout,
             result: Vec::new(),
             timed,
+            proposals: timed && proposals,
         };
         // A cold CUDA worker may compile kernels before it can accept live frames.
         let startup_budget = if config.cuda.is_some() {
@@ -127,11 +134,20 @@ impl InferenceProcess {
         } else {
             None
         };
-        let result: InferenceResult =
-            serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?;
+        let (result, fire_proposals) = if self.proposals {
+            let result: FireProposalResult =
+                serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?;
+            (result.inference, result.fire_proposals)
+        } else {
+            (
+                serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?,
+                Vec::new(),
+            )
+        };
         if result.request != request
             || result.pose.is_some() != tasks.pose()
             || result.fire.is_some() != tasks.fire()
+            || (!tasks.fire() && !fire_proposals.is_empty())
         {
             return Err(WorkerError::Config);
         }
@@ -143,11 +159,17 @@ impl InferenceProcess {
                 .fire
                 .as_deref()
                 .is_some_and(|items| !validate(items, frame, false))
+            || fire_proposals.len() > 8
+            || !validate(&fire_proposals, frame, false)
+            || fire_proposals
+                .iter()
+                .any(|item| !(f64::from(0.12_f32)..=f64::from(0.20_f32)).contains(&item.score))
         {
             return Err(WorkerError::Config);
         }
         Ok(CompletedInference {
             result,
+            fire_proposals,
             worker_timing,
         })
     }

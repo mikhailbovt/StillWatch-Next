@@ -1,12 +1,13 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::RandomState},
+    hash::BuildHasher,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use jpeg_encoder::{ColorType, Encoder};
 use sw_domain::{Box2d, SourceScope};
-use sw_protocol::{EvidenceCoverage, EvidenceImageKind};
+use sw_protocol::{EvidenceCoverage, EvidenceImageKind, EvidenceSampling};
 use sw_storage::EvidenceImage;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use uuid::Uuid;
@@ -19,11 +20,15 @@ const MAX_SIDE: usize = 720;
 const MAX_IMAGE_BYTES: usize = 384 * 1024;
 const PER_CAMERA_BYTES: usize = 512 * 1024;
 const TOTAL_BYTES: usize = 32 * 1024 * 1024;
+const CROPS_PER_CAMERA: usize = 8;
+const MAX_CROP_BYTES: usize = 96 * 1024;
 
 pub(crate) struct EvidenceSampler {
     cameras: Arc<CameraRegistry>,
     rings: Mutex<HashMap<Uuid, Ring>>,
+    crops: Mutex<HashMap<Uuid, CropHistory>>,
     budget: Arc<Semaphore>,
+    hashes: RandomState,
 }
 
 struct Ring {
@@ -34,6 +39,21 @@ struct Ring {
 
 struct Sample {
     at: i64,
+    digest: u64,
+    jpeg: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
+
+struct CropHistory {
+    scope: SourceScope,
+    samples: VecDeque<Crop>,
+}
+
+struct Crop {
+    episode_id: Uuid,
+    source_us: i64,
+    region: Box2d,
+    digest: u64,
     jpeg: Vec<u8>,
     _permit: OwnedSemaphorePermit,
 }
@@ -41,6 +61,7 @@ struct Sample {
 pub(crate) struct EvidenceSelection {
     pub images: Vec<EvidenceImage>,
     pub coverage: EvidenceCoverage,
+    pub sampling: EvidenceSampling,
     pub has_pre_event: bool,
 }
 
@@ -49,7 +70,9 @@ impl EvidenceSampler {
         Self {
             cameras,
             rings: Mutex::new(HashMap::new()),
+            crops: Mutex::new(HashMap::new()),
             budget: Arc::new(Semaphore::new(TOTAL_BYTES)),
+            hashes: RandomState::new(),
         }
     }
 
@@ -77,6 +100,15 @@ impl EvidenceSampler {
 
     fn sample(&self) {
         let frames = self.cameras.frames();
+        if let Ok(mut crops) = self.crops.lock() {
+            crops.retain(|camera, history| {
+                frames.iter().any(|frame| {
+                    frame.scope.camera_id == *camera
+                        && frame.scope == history.scope
+                        && frame.captured_at.elapsed() <= FRAME_MAX_AGE
+                })
+            });
+        }
         if let Ok(mut rings) = self.rings.lock() {
             rings.retain(|id, ring| {
                 frames.iter().any(|frame| {
@@ -125,6 +157,14 @@ impl EvidenceSampler {
                 continue;
             }
             let bytes = jpeg.len();
+            let digest = self.hashes.hash_one(&jpeg);
+            if ring
+                .samples
+                .back()
+                .is_some_and(|sample| sample.digest == digest && sample.jpeg == jpeg)
+            {
+                continue;
+            }
             while ring.samples.front().is_some_and(|old| {
                 at.saturating_sub(old.at) > HISTORY_US || ring.bytes + bytes > PER_CAMERA_BYTES
             }) {
@@ -139,6 +179,7 @@ impl EvidenceSampler {
                 ring.bytes += bytes;
                 ring.samples.push_back(Sample {
                     at,
+                    digest,
                     jpeg,
                     _permit: permit,
                 });
@@ -151,6 +192,7 @@ impl EvidenceSampler {
         frame: &CameraFrame,
         onset: i64,
         region: Box2d,
+        episode: Uuid,
         after_gap: bool,
     ) -> EvidenceSelection {
         let at = frame.frame.header.source_micros.expect("analyzed frame");
@@ -172,10 +214,6 @@ impl EvidenceSampler {
             sampled.extend(candidates.iter().map(|sample| sample.at));
             let picks = [
                 candidates.iter().copied().find(|p| p.at < onset),
-                candidates
-                    .iter()
-                    .copied()
-                    .min_by_key(|p| p.at.abs_diff(onset)),
                 candidates.last().copied(),
             ];
             for sample in picks.into_iter().flatten() {
@@ -192,19 +230,107 @@ impl EvidenceSampler {
             }
         }
         if let Some(jpeg) = encode(frame, None) {
-            sampled.push(at);
+            let duplicate = self
+                .rings
+                .lock()
+                .ok()
+                .and_then(|rings| {
+                    let ring = rings
+                        .get(&frame.scope.camera_id)
+                        .filter(|ring| ring.scope == frame.scope)?;
+                    ring.samples
+                        .back()
+                        .map(|last| last.at >= start && last.at < at && last.jpeg == jpeg)
+                })
+                .unwrap_or(false);
+            if !duplicate {
+                sampled.push(at);
+            }
             images.push(EvidenceImage {
                 source_us: at,
                 kind: EvidenceImageKind::Overview,
                 jpeg,
             });
+            let mut historical_crops = Vec::new();
+            if let Ok(crops) = self.crops.lock()
+                && let Some(history) = crops
+                    .get(&frame.scope.camera_id)
+                    .filter(|history| history.scope == frame.scope)
+            {
+                for crop in history
+                    .samples
+                    .iter()
+                    .rev()
+                    .filter(|crop| {
+                        crop.episode_id == episode
+                            && crop.source_us >= start
+                            && crop.source_us < at
+                            && crop.region.iou(region) >= 0.20
+                    })
+                    .take(2)
+                {
+                    historical_crops.push(EvidenceImage {
+                        source_us: crop.source_us,
+                        kind: EvidenceImageKind::Crop,
+                        jpeg: crop.jpeg.clone(),
+                    });
+                }
+            }
             if let Some(jpeg) = encode(frame, Some(region)) {
+                let digest = self.hashes.hash_one(&jpeg);
+                if jpeg.len() <= MAX_CROP_BYTES
+                    && let Ok(mut crops) = self.crops.lock()
+                {
+                    let history =
+                        crops
+                            .entry(frame.scope.camera_id)
+                            .or_insert_with(|| CropHistory {
+                                scope: frame.scope,
+                                samples: VecDeque::new(),
+                            });
+                    if history.scope != frame.scope {
+                        history.scope = frame.scope;
+                        history.samples.clear();
+                    }
+                    history.samples.retain(|crop| {
+                        at.saturating_sub(crop.source_us) <= HISTORY_US
+                            && (crop.episode_id != episode || crop.source_us != at)
+                    });
+                    if !history.samples.iter().any(|old| {
+                        old.episode_id == episode && old.digest == digest && old.jpeg == jpeg
+                    }) {
+                        if history.samples.len() == CROPS_PER_CAMERA {
+                            history.samples.pop_front();
+                        }
+                        if let Ok(permit) = self
+                            .budget
+                            .clone()
+                            .try_acquire_many_owned(jpeg.len() as u32)
+                        {
+                            history.samples.push_back(Crop {
+                                episode_id: episode,
+                                source_us: at,
+                                region,
+                                digest,
+                                jpeg: jpeg.clone(),
+                                _permit: permit,
+                            });
+                        }
+                    }
+                }
                 images.push(EvidenceImage {
                     source_us: at,
                     kind: EvidenceImageKind::Crop,
                     jpeg,
                 });
             }
+            if historical_crops.len() > 1 && images.len() >= 4 {
+                // Preserve the closest pre-event overview and the two most
+                // recent distinct ROI observations within the route's cap.
+                images.remove(1);
+            }
+            let remaining = 5usize.saturating_sub(images.len());
+            images.extend(historical_crops.into_iter().take(remaining));
         } else {
             // An evidence packet always includes a current full-frame observation.
             images.clear();
@@ -227,6 +353,20 @@ impl EvidenceSampler {
         let expected =
             (at.saturating_sub(start) / interval + 1).clamp(1, i64::from(u16::MAX)) as u16;
         EvidenceSelection {
+            sampling: EvidenceSampling {
+                configured_fps: frame.sampling.evidence_fps,
+                window_ms: (at.saturating_sub(start) / 1000).clamp(0, i64::from(u32::MAX)) as u32,
+                distinct_frames: received,
+                attached_overviews: images
+                    .iter()
+                    .filter(|image| image.kind == EvidenceImageKind::Overview)
+                    .count() as u8,
+                attached_crops: images
+                    .iter()
+                    .filter(|image| image.kind == EvidenceImageKind::Crop)
+                    .count() as u8,
+                motion_coverage: received >= 3 && max_gap <= 600_000,
+            },
             images,
             has_pre_event,
             coverage: EvidenceCoverage {

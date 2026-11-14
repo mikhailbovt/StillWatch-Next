@@ -40,6 +40,8 @@ Each request sends a 16-byte UUID in standard byte order, one task byte (`1` pos
 
 When `capture-doctor` reports `inference_timing_v2=true`, Core uses `infer-v2` with ready marker `SWI2`. Each response uses the base length and body followed by a 28-byte trailer. The trailer holds seven little-endian u32 durations in microseconds, in the order below. Unexecuted task stages carry zero. Core defaults to `infer` when the capability is absent. An advertised command with inconsistent framing is a worker failure.
 
+When the worker also reports `fire_proposals=true`, Core uses `infer-v2-proposals` with the same request and timing trailer. The [reply schema](../packages/contracts/workers/v2-proposals/FireProposalResult.json) wraps the legacy inference result and includes up to eight geometry-checked, low-score Fire proposals. Proposals can schedule extra observation or maintain short-term support for a matched region. Review decisions still require the existing detector threshold and policy evidence.
+
 | Offset | Stage |
 | ---: | --- |
 | 0 | `input_read_us`, after the worker reads the first request byte through completion of RGB read |

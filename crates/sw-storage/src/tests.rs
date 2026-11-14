@@ -496,6 +496,7 @@ async fn medical_recovery_retries_after_partial_evidence_and_checks_the_current_
                 received_samples: 6,
                 max_gap_ms: 500,
             },
+            sampling: None,
             local_facts: facts,
             lineage: None,
             recovery: Some(intent.observation()),
@@ -956,6 +957,7 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
                             received_samples: 1,
                             max_gap_ms: 0,
                         },
+                        sampling: None,
                         local_facts: LocalFacts::Medical {
                             track_id: sw_protocol::Counter(1),
                             episode_id: saved.id,

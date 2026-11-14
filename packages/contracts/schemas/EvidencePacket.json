@@ -156,6 +156,16 @@
               "type": "null"
             }
           ]
+        },
+        "sampling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceSampling"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -310,6 +320,52 @@
         "upright_activity",
         "prior_supported_posture",
         "controlled_activity"
+      ]
+    },
+    "EvidenceSampling": {
+      "type": "object",
+      "properties": {
+        "attached_crops": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "attached_overviews": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "configured_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "distinct_frames": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "motion_coverage": {
+          "type": "boolean"
+        },
+        "window_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "configured_fps",
+        "window_ms",
+        "distinct_frames",
+        "attached_overviews",
+        "attached_crops",
+        "motion_coverage"
       ]
     },
     "EvidenceVisibility": {

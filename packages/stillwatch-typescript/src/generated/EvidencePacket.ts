@@ -71,6 +71,7 @@ export interface EvidenceContext {
   policy_version: string;
   prompt_version: string;
   recovery?: EvidenceRecovery | null;
+  sampling?: EvidenceSampling | null;
 }
 export interface EvidenceCoverage {
   expected_samples: number;
@@ -85,6 +86,14 @@ export interface EvidenceLineage {
 export interface EvidenceInterval {
   end_source_s: number;
   start_source_s: number;
+}
+export interface EvidenceSampling {
+  attached_crops: number;
+  attached_overviews: number;
+  configured_fps: number;
+  distinct_frames: number;
+  motion_coverage: boolean;
+  window_ms: number;
 }
 export interface EvidenceImageMetadata {
   availability: EvidenceImageAvailability;

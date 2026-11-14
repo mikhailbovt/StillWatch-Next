@@ -99,7 +99,57 @@ pub fn decode(
     geometry: Letterbox,
     capture_ts: f64,
 ) -> Result<Vec<Observation>, InferenceError> {
-    postprocess(id, values, image, geometry, capture_ts, None)
+    postprocess(id, values, image, geometry, capture_ts, None, None)
+}
+
+pub fn decode_fire_with_proposals(
+    values: &[f32],
+    image: Image<'_>,
+    geometry: Letterbox,
+    capture_ts: f64,
+) -> Result<(Vec<Observation>, Vec<Observation>), InferenceError> {
+    let mut weak = Vec::with_capacity(8);
+    let detections = postprocess(
+        ModelId::Fire,
+        values,
+        image,
+        geometry,
+        capture_ts,
+        None,
+        Some(&mut weak),
+    )?;
+    let proposals = weak
+        .into_iter()
+        .filter_map(|candidate| {
+            let [x1, y1, x2, y2] = candidate.coordinates;
+            let region = Box2d {
+                x1: geometry.x(x1),
+                y1: geometry.y(y1),
+                x2: geometry.x(x2),
+                y2: geometry.y(y2),
+            };
+            if region.area() < 4.0
+                || detections
+                    .iter()
+                    .any(|item| item.label == candidate.label && item.region.iou(region) > 0.45)
+            {
+                return None;
+            }
+            Some(Observation {
+                capture_ts,
+                region,
+                score: f64::from(candidate.score),
+                label: candidate.label,
+                track_id: None,
+                keypoints: Vec::new(),
+                limited: false,
+                truncated: false,
+                association_uncertain: false,
+                torso_histogram: Vec::new(),
+            })
+        })
+        .collect();
+    Ok((detections, proposals))
 }
 
 pub fn trace_fire(
@@ -116,6 +166,7 @@ pub fn trace_fire(
         geometry,
         capture_ts,
         Some(&mut decisions),
+        None,
     )?;
     let anchors = decisions.len();
     let mut trace = FireTrace {
@@ -176,6 +227,7 @@ fn postprocess(
     geometry: Letterbox,
     capture_ts: f64,
     mut decisions: Option<&mut [FireDisposition]>,
+    mut weak: Option<&mut Vec<Detection>>,
 ) -> Result<Vec<Observation>, InferenceError> {
     let fire = id == ModelId::Fire;
     let anchors = geometry.tensor_size().anchors();
@@ -204,6 +256,35 @@ fn postprocess(
             return Err(InferenceError::Tensor);
         }
         if score <= id.legacy_confidence() {
+            if score >= 0.12
+                && let Some(weak) = &mut weak
+            {
+                let coordinates = corners(
+                    value(0, anchor),
+                    value(1, anchor),
+                    value(2, anchor),
+                    value(3, anchor),
+                );
+                if coordinates.iter().all(|value| value.is_finite())
+                    && coordinates[2] > coordinates[0]
+                    && coordinates[3] > coordinates[1]
+                    && let at = weak.partition_point(|candidate| candidate.score >= score)
+                    && at < 8
+                {
+                    if weak.len() == 8 {
+                        weak.pop();
+                    }
+                    weak.insert(
+                        at,
+                        Detection {
+                            score,
+                            label,
+                            anchor,
+                            coordinates,
+                        },
+                    );
+                }
+            }
             continue;
         }
         let width = value(2, anchor);
@@ -352,6 +433,33 @@ mod tests {
             vec![ObservationLabel::Smoke, ObservationLabel::Fire]
         );
         assert_eq!(observations[0].region.width(), 8.0);
+    }
+
+    #[test]
+    fn low_score_regions_travel_separately_from_the_legacy_detector_result() {
+        let pixels = vec![0; 64 * 64 * 3];
+        let image = Image::rgb(64, 64, &pixels).unwrap();
+        let (_, geometry) = Preprocessor::new(InputProfile::Square).prepare(image);
+        let anchors = geometry.tensor_size().anchors();
+        let mut tensor = vec![0.0; 6 * anchors];
+        for (index, row) in [
+            [100.0, 130.0, 50.0, 50.0, 0.9, 0.0],
+            [420.0, 380.0, 50.0, 50.0, 0.04, 0.19],
+            [575.0, 420.0, 50.0, 50.0, 0.0, 0.08],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (column, value) in row.into_iter().enumerate() {
+                tensor[column * anchors + index] = value;
+            }
+        }
+        let legacy = decode(ModelId::Fire, &tensor, image, geometry, 0.2).unwrap();
+        let (detected, weak) = decode_fire_with_proposals(&tensor, image, geometry, 0.2).unwrap();
+        assert_eq!(detected, legacy);
+        assert_eq!(weak.len(), 1);
+        assert_eq!(weak[0].label, ObservationLabel::Fire);
+        assert_eq!(weak[0].capture_ts, 0.2);
     }
 
     #[test]

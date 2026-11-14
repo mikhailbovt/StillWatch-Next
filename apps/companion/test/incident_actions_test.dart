@@ -261,7 +261,7 @@ void main() {
       expect(find.byType(Image), findsOneWidget);
       await tester.pump(const Duration(seconds: 2));
       expect(find.byType(Image), findsNothing);
-      expect(find.text('Repeated camera frame'), findsNothing);
+      expect(find.text('Visual changes unconfirmed'), findsNothing);
       console.cameras = [
         Camera.fromJson({
           ..._camera,
@@ -273,7 +273,7 @@ void main() {
           home: Scaffold(body: CameraGrid(console: console)),
         ),
       );
-      expect(find.text('Repeated camera frame'), findsOneWidget);
+      expect(find.text('Visual changes unconfirmed'), findsOneWidget);
       expect(find.byType(Image), findsNothing);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());

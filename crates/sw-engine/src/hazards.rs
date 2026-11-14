@@ -8,7 +8,7 @@ use sw_domain::{
     AnalysisOrigin, Assessment, Box2d, Category, DomainError, EvidenceStamp, EvidenceState,
     FireAssociation, FireDecision, FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy,
     MedicalCandidate, MedicalReason, MedicalRules, MedicalSample, MotionPhase, NewIncident,
-    RecoveryBasis, RecoveryCourse, SourceScope, TransitionKind, Visibility,
+    ObservationLabel, RecoveryBasis, RecoveryCourse, SourceScope, TransitionKind, Visibility,
 };
 use sw_protocol::{
     Counter, Dimensions, EpisodeAssociation, EvidenceContext, EvidenceInterval, EvidenceLimitation,
@@ -145,6 +145,7 @@ impl HazardPolicies {
         frame: &CameraFrame,
         at: i64,
         result: InferenceResult,
+        fire_proposals: &[sw_domain::Observation],
     ) -> HazardUpdates {
         if self.scope != frame.scope {
             let mut new = Self::new(frame.scope);
@@ -153,8 +154,9 @@ impl HazardPolicies {
         }
         let mut hazards = Vec::new();
         let mut fire_candidate = false;
+        let view = scene::VisibleFrame::from(frame);
         let pose_executed = result.pose.is_some();
-        if let Some(people) = result.pose {
+        if let Some(mut people) = result.pose {
             if self
                 .last_pose
                 .is_some_and(|last| at.saturating_sub(last) > 1_500_000)
@@ -163,18 +165,15 @@ impl HazardPolicies {
                 self.medical.reset();
             }
             self.last_pose = Some(at);
-            let people = if frame.visibility == Visibility::Poor {
-                Vec::new()
-            } else {
-                people
-            };
+            people.retain(|person| view.region(person.region, false) != Visibility::Poor);
             if let Ok(candidates) = self.medical.assess(MedicalSample {
                 observations: people,
                 source_seconds: at as f64 / 1_000_000.0,
                 source_epoch: frame.scope.epoch,
             }) {
                 for candidate in candidates {
-                    if let Some(hazard) = Hazard::medical(candidate, at) {
+                    if let Some(mut hazard) = Hazard::medical(candidate, at) {
+                        hazard.limited |= view.region(hazard.region, false) != Visibility::Good;
                         hazards.push(hazard);
                     }
                 }
@@ -197,13 +196,26 @@ impl HazardPolicies {
                 width: header.width,
                 height: header.height,
             };
+            let overlap = |region| scene::overlap(region, dimensions, &frame.controlled);
+            fire_candidate = fire_proposals.iter().any(|weak| {
+                view.region(weak.region, weak.label == ObservationLabel::Fire) != Visibility::Poor
+                    && (weak.label == ObservationLabel::Smoke
+                        || overlap(weak.region).is_none_or(|value| value < 0.98))
+            });
             let reports = self.fire.assess(FireSample {
                 scope: frame.scope,
                 source_us: at,
                 dimensions: (header.width, header.height),
                 regions: &regions,
+                weak_proposals: fire_proposals,
                 visibility: frame.visibility,
-                controlled_overlap: &|region| scene::overlap(region, dimensions, &frame.controlled),
+                region_visibility: &|observation| {
+                    view.region(
+                        observation.region,
+                        observation.label == ObservationLabel::Fire,
+                    )
+                },
+                controlled_overlap: &overlap,
             });
             for report in reports {
                 fire_candidate |= report.decision == FireDecision::Observing
@@ -262,6 +274,9 @@ impl HazardPolicies {
         {
             let ts = at as f64 / 1_000_000.0;
             for (motion, region) in self.medical.visible_motion(ts) {
+                if view.region(region, false) != Visibility::Good {
+                    continue;
+                }
                 let Some(course) = recovery_course(motion) else {
                     continue;
                 };
@@ -1053,12 +1068,14 @@ async fn persist(
     let evidence = evidence.clone();
     let onset = hazard.segment_start_us;
     let region = hazard.region;
+    let episode = hazard.lineage.episode_id;
     let after_gap = hazard.segment_start_us > hazard.first_source_us;
     let frame_copy = frame.clone();
-    let selected =
-        tokio::task::spawn_blocking(move || evidence.select(&frame_copy, onset, region, after_gap))
-            .await
-            .map_err(|_| StoreError::Unavailable)?;
+    let selected = tokio::task::spawn_blocking(move || {
+        evidence.select(&frame_copy, onset, region, episode, after_gap)
+    })
+    .await
+    .map_err(|_| StoreError::Unavailable)?;
     if selected.images.is_empty() {
         if incident.evidence_state == EvidenceState::Pending {
             store.evidence_unavailable(incident.id, utc_ms()).await?;
@@ -1087,7 +1104,8 @@ async fn persist(
     if !selected.has_pre_event {
         limitations.push(EvidenceLimitation::PreEventUnavailable);
     }
-    if coverage.max_gap_ms > 600
+    let gap_budget_ms = 1_500 / u32::from(frame.sampling.evidence_fps);
+    if coverage.max_gap_ms > gap_budget_ms
         || u32::from(coverage.received_samples) * 4 < u32::from(coverage.expected_samples) * 3
     {
         limitations.push(EvidenceLimitation::SparseCoverage);
@@ -1098,6 +1116,7 @@ async fn persist(
             end_source_s: hazard.source_us as f64 / 1_000_000.0,
         },
         coverage,
+        sampling: Some(selected.sampling),
         local_facts: hazard.facts,
         lineage: Some(hazard.lineage),
         recovery: hazard.recovery.map(RecoveryIntent::observation),

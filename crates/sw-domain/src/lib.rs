@@ -22,7 +22,7 @@ pub use motion::{
 };
 pub use observation::*;
 pub use scene::{SCENE_SIGNATURE_BYTES, SceneSignature};
-pub use tracking::{PoseTracker, TrackingError};
+pub use tracking::{AssociationDiagnostic, AssociationOutcome, PoseTracker, TrackingError};
 
 /// A deterministic temporal policy for one camera stream. Inputs own or borrow
 /// observations and scene context. State transitions stay within the policy.

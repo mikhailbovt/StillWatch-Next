@@ -54,6 +54,8 @@ struct CaptureCapabilities {
     capture_codec: bool,
     #[serde(default)]
     inference_timing_v2: bool,
+    #[serde(default)]
+    fire_proposals: bool,
 }
 
 #[derive(Clone)]
@@ -123,12 +125,12 @@ impl WorkerBinary {
         Ok(self.capture_capabilities().await?.rtsp_peer_confined)
     }
 
-    pub(crate) async fn timed_inference(&self) -> Result<bool, WorkerError> {
+    pub(crate) async fn inference_capabilities(&self) -> Result<(bool, bool), WorkerError> {
         match self.capture_capabilities().await {
-            Ok(caps) => Ok(caps.inference_timing_v2),
+            Ok(caps) => Ok((caps.inference_timing_v2, caps.fire_proposals)),
             Err(WorkerError::Unreaped) => Err(WorkerError::Unreaped),
             // A legacy local adapter may omit capability metadata.
-            Err(_) => Ok(false),
+            Err(_) => Ok((false, false)),
         }
     }
 
