@@ -59,7 +59,7 @@ def request(lan, token, method, path, data=None, content_type=None):
 
 
 async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_right=False,
-                  profile="preview", dimensions=(320, 240), offer_status=201):
+                  profile="preview", dimensions=(320, 240), offer_status=201, verify_mask=True):
     token = session["access_token"]
     def issue():
         status, grant = lan.request("POST", "/api/v2/stream-sessions", {"camera_id": camera, "profile": profile}, token)
@@ -113,14 +113,16 @@ async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_righ
                 f"No decoded frame (connection={peer.connectionState}, ICE={peer.iceConnectionState}, "
                 f"local candidates={local_candidates}, remote candidates={remote_candidates})"
             ) from error
-        rgb = frame.to_ndarray(format="rgb24")
         if turn_url:
             assert ice._nominated[1].local_candidate.type == "relay"
-        assert (frame.width, frame.height) == dimensions, (frame.width, frame.height)
-        left, right = rgb[:, :frame.width * 42 // 100], rgb[:, frame.width * 59 // 100:]
-        masked, visible = (right, left) if mask_right else (left, right)
-        assert masked.max() < 25, "Masked region contains source pixels"
-        assert visible.max() > 100, "Unmasked region is empty"
+        if dimensions is not None:
+            assert (frame.width, frame.height) == dimensions, (frame.width, frame.height)
+        if verify_mask:
+            rgb = frame.to_ndarray(format="rgb24")
+            left, right = rgb[:, :frame.width * 42 // 100], rgb[:, frame.width * 59 // 100:]
+            masked, visible = (right, left) if mask_right else (left, right)
+            assert masked.max() < 25, "Masked region contains source pixels"
+            assert visible.max() > 100, "Unmasked region is empty"
         return peer, track, grant
     except Exception:
         await peer.close()

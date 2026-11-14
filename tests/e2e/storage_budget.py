@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
+import time
 
 from replay_core import run_core, until
 from sdk_core import open_incident
@@ -135,6 +136,33 @@ def held_wal(args, root, inputs):
     return held_bytes
 
 
+def external_writer_lock(args, root, inputs):
+    data = root / "busy-data"
+    database = data / "stillwatch.sqlite3"
+    with run_core(args.core, args.worker, data, inputs, root / "busy-core.log") as (_, client):
+        code, camera_before = camera(client, "keep-during-foreign-writer")
+        assert code == 201
+        with closing(sqlite3.connect(database)) as foreign:
+            foreign.execute("BEGIN IMMEDIATE")
+            began = time.monotonic()
+            code, rejected = camera(client, "after-release")
+            duration = (time.monotonic() - began) * 1_000
+            assert code == 503 and rejected["code"] == "storage_unavailable", rejected
+            assert client.call("GET", "/health/live")[0] == 200
+            assert client.camera(camera_before["id"])["id"] == camera_before["id"]
+            assert foreign.execute("SELECT count(*) FROM cameras").fetchone() == (1,)
+            foreign.rollback()
+        recovered = time.monotonic()
+        code, created = camera(client, "after-release")
+        recovery = (time.monotonic() - recovered) * 1_000
+        assert code == 201 and camera(client, "after-release") == (201, created)
+        with closing(sqlite3.connect(database)) as db:
+            assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert db.execute("SELECT count(*) FROM cameras").fetchone() == (2,)
+    return {"sqlite_busy_response": 503, "busy_duration_ms": duration, "recovery_ms": recovery,
+            "same_operation_committed_once_after_unlock": True}
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("core", "worker", "cli"):
@@ -150,4 +178,5 @@ if __name__ == "__main__":
             "incidents_readable_in_storage_pressure": True,
             "idempotent_retry_after_wal_recovery": True,
             "redacted_doctor_during_pressure": options.cli is not None,
+            **external_writer_lock(options, root, inputs),
         }))

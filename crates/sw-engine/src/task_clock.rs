@@ -117,6 +117,67 @@ impl TaskClock {
 mod tests {
     use super::*;
 
+    #[test]
+    fn seeded_claims_reject_stale_replies_without_losing_new_work() {
+        const SEEDS: u64 = 256;
+        const STEPS: u64 = 400;
+        for seed in 1..=SEEDS {
+            let mut random = seed;
+            let mut clock = TaskClock::default();
+            let mut generation = 1u128;
+            let mut ordinal = 0u64;
+            let mut source_us = 0i64;
+            let mut previous = None;
+            for step in 0..STEPS {
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                let control = random >> 32;
+                if control.is_multiple_of(19) {
+                    generation += 1;
+                    ordinal = 0;
+                    source_us = -1_000;
+                } else {
+                    ordinal += 1;
+                    source_us += 30_000 + (control % 190_000) as i64;
+                }
+                let frame = FrameKey {
+                    generation: Uuid::from_u128((u128::from(seed) << 64) | generation),
+                    ordinal,
+                    source_us,
+                };
+                let base_slot = clock.due(frame, 5);
+                let claim = Claim { frame, base_slot };
+                assert!(clock.claim(claim).is_some(), "seed {seed} step {step}");
+                assert!(!clock.eligible(frame), "seed {seed} step {step}");
+                if let Some(stale) = previous {
+                    assert!(
+                        clock.finish(stale, true).is_none(),
+                        "seed {seed} step {step}"
+                    );
+                    assert!(clock.matches(claim), "seed {seed} step {step}");
+                }
+                let accepted = !control.is_multiple_of(4);
+                let misses = clock.finish(claim, accepted);
+                assert_eq!(
+                    misses,
+                    Some(u64::from(base_slot.is_some() && !accepted)),
+                    "seed {seed} step {step}"
+                );
+                assert!(
+                    clock.finish(claim, true).is_none(),
+                    "seed {seed} step {step}"
+                );
+                assert!(clock.due(frame, 5).is_none(), "seed {seed} step {step}");
+                previous = Some(claim);
+            }
+        }
+        println!(
+            "{{\"scenario\":\"task_claim_fencing\",\"first_seed\":1,\"last_seed\":{SEEDS},\"transitions\":{}}}",
+            SEEDS * STEPS
+        );
+    }
+
     fn frame(ordinal: u64, source_us: i64) -> FrameKey {
         FrameKey {
             generation: Uuid::nil(),

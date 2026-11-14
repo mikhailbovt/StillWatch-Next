@@ -80,25 +80,30 @@ def run(args):
             path = models / "fixtures" / f"{name}.rgb"
             assert digest(path) == case["image"]["rgb_sha256"]
             unique[shape] = (width, height, path)
-    frames = list(unique.values())
-    assert len(frames) >= 2
+    if args.warm_shape:
+        selected = [tuple(value) for value in args.warm_shape]
+        assert len(selected) == len(set(selected)) and set(selected) <= set(unique)
+    else:
+        selected = list(unique)
+        assert len(selected) >= 2
+    frames = [unique[shape] for shape in selected]
     config = {
         "library": str(Path(args.runtime).resolve()), "library_sha256": digest(args.runtime),
-        "models": str(models), "manifest_sha256": digest(manifest), "threads": 4,
+        "models": str(models), "manifest_sha256": digest(manifest), "threads": args.threads,
         "live_profile": {"pose_balanced_sha256": pack["models"]["pose_balanced"]["sha256"],
                          "fire_sha256": pack["models"]["fire"]["sha256"],
-                         "warm_shapes": list(unique)},
+                         "warm_shapes": selected},
     }
     if args.cuda:
         provider, shared = args.cuda
-        config["cuda"] = {"device": 0, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
+        config["cuda"] = {"device": args.cuda_device, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
     bad = config | {"live_profile": config["live_profile"] | {"pose_balanced_sha256": pack["models"]["pose"]["sha256"]}}
     execute(args, bad, frames, 1, b"SWIM")
     bad = config | {"live_profile": config["live_profile"] | {"warm_shapes": [[1, 1]]}}
     execute(args, bad, frames, 1, b"SWIM")
     result = {"worker_sha256": digest(args.worker), "model_manifest_sha256": digest(manifest),
               "runtime_sha256": digest(args.runtime), "device": "cuda" if args.cuda else "cpu",
-              "warm_shapes": list(unique), "unapproved_roles_and_shapes_rejected": True}
+              "warm_shapes": selected, "threads": args.threads, "unapproved_roles_and_shapes_rejected": True}
     original, startup = execute(args, config, frames, args.repeats, b"SWI2")
     result["host_input"] = metrics(original, startup)
     print(json.dumps(result))
@@ -117,5 +122,8 @@ if __name__ == "__main__":
     for arg in ("worker", "runtime", "models"):
         parser.add_argument(f"--{arg}", required=True)
     parser.add_argument("--cuda", nargs=2, metavar=("CUDA_PROVIDER", "SHARED_PROVIDER"))
+    parser.add_argument("--cuda-device", type=int, default=0)
+    parser.add_argument("--threads", type=int, choices=range(1, 65), default=4)
+    parser.add_argument("--warm-shape", type=int, nargs=2, action="append", metavar=("HEIGHT", "WIDTH"))
     parser.add_argument("--repeats", type=int, choices=range(1, 65), default=10)
     run(parser.parse_args())

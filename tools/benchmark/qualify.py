@@ -332,6 +332,24 @@ def run(args):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--native-load"]:
+        from qualify_steady import main
+
+        main(sys.argv[2:])
+        sys.exit(0)
+    if sys.argv[1:2] == ["--native-faults"]:
+        from qualify_faults import main
+
+        main(sys.argv[2:])
+        sys.exit(0)
+    if sys.argv[1:2] == ["--native-capacity"]:
+        from fast_rc_contract import checked_json
+        from qualify_faults import capacity
+
+        if len(sys.argv) != 3:
+            raise SystemExit("usage: qualify.py --native-capacity SETTINGS.json")
+        capacity(checked_json(Path(sys.argv[2])))
+        sys.exit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("core", "worker", "demo", "models", "runtime", "ffmpeg"):
         parser.add_argument("--" + name, type=lambda path: Path(path).resolve(strict=True), required=True)

@@ -4,7 +4,7 @@ info:
   version: 2.0.0
   description: |
     Operator commands use Idempotency-Key and a strong ETag in If-Match.
-    Retry the same body, key and ETag to recover the original committed response.
+    Retry the same body, key and ETag to recover the original committed result. Camera responses include current runtime status for the returned configuration.
     Changes are retained by generation and sequence. After cursor_expired,
     fetch a new snapshot and reconnect from its cursor.
 security:

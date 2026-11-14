@@ -6,7 +6,7 @@ The [completion plan](../StillWatch_Next_Completion_Plan_RU.md) sets the sequenc
 
 - [Native qualification](fast-rc-v2.json) fixes the 180-minute stage budget, the isolated 60-minute load interval, the nominal source and wall cadence tests, and the required completed fault counts. At 5/2 fps, a full 60-second wall window requires at least 285 pose and 114 fire results per camera. Source-clock floors remain 4 pose and 1.5 fire fps over ten source seconds.
 - [Profile schema](schemas/profile-v2.schema.json) binds a workload to a candidate, the three acceptance contracts, host, runtime roles and budgets. Freeze the allowed shapes, source manifest, fault schedule and recovery limits before each run. At qualification, the report must cover the exact binaries, models, operating system, driver and workload. A four-camera CPU profile and a 16-camera profile require separate evidence.
-- [Report schema](schemas/report-v2.schema.json) defines the validator's output. The validator will derive each criterion from the pinned inputs and evidence. An observed gate violation takes precedence over incomplete coverage. The JSON Schema checks result structure. It does not calculate a verdict from a benchmark export.
+- [Report schema](schemas/report-v2.schema.json) defines the validator's output. The validator derives each criterion from the pinned inputs and evidence. An observed gate violation takes precedence over incomplete coverage.
 - [Quality contract](quality-contract.json) freezes the first-cycle quality gates. The site budget is eight false Reviews per day across 16 cameras. The independent Urgent budget is at most 0.001 false Urgents per camera-hour. Timely fire and fall Review targets are 95% within eight seconds, with independent strata and separately measured urgent decisions. These are product acceptance targets chosen for this plan, not measured accuracy or industry standards.
 - [Release obligations](release-requirements.json) lists all 17 criteria from §23.1 and the owners and evidence for G1–G5. A release requires both the applicable native reports and the remaining release evidence.
 - [Observation parity v1](observation-parity-v1.json) requires exact CPU preprocessing and one-to-one same-class comparisons on frozen RGB fixtures. Displacement is limited to a quarter pixel and 0.1% of the image axis. The score and joint confidence caps are 0.001. Histogram L1 of 0.02 permits redistribution of at most 1% of normalized bin mass. All locked tensor thresholds remain in force.
@@ -21,4 +21,24 @@ Report nominal, verified and unknown exposure separately. A gap invalidates an o
 
 Report observed rates with numerators, denominators and independent sessions. Use a scene or recording-session block bootstrap for comparisons and label binomial or Poisson intervals that assume independent observations. A conservative confidence bound must meet the threshold for a population claim. Mark the claim incomplete when the cohort, follow-up or verified exposure is insufficient. [NIST proportion confidence intervals](https://www.itl.nist.gov/div898/software/dataplot/refman1/auxillar/propconf.htm)
 
-Run the scoring regressions with `python -B -m unittest discover -s tools/benchmark -p 'test_*.py'`. The evaluator accepts `--rescore` to check immutable openings against their exact frozen manifest. Native replay runs also record coverage. Full orchestration and release validation require the later T03–T08 and P13 work.
+Run the scoring regressions with `python -B -m unittest discover -s tools/benchmark -p 'test_*.py'`. The evaluator accepts `--rescore` to check immutable openings against their exact frozen manifest. Native replay runs also record coverage.
+
+## Run Fast RC v2
+
+Stage the native payload and freeze its `manifest.json`, allowed model profiles, workload, media sources and fault schedule before running. Freeze hashes with the `sha256:` prefix. Prepare the qualification Python environment in advance. It uses `jsonschema` for schema checks and `psutil`, `aiortc` and `av` for native load and media measurements. The Core payload runs independently of this environment. Run `python tools/benchmark/prepare_logic.py --output LOGICAL_TEST_BINARIES.json` from the staged candidate’s source revision before the qualification clock starts.
+
+~~~text
+python tools/benchmark/fast_rc.py --candidate PAYLOAD/manifest.json --profile PROFILE.json --execution-profile EXECUTION_PROFILE.json --logic-test-binaries LOGICAL_TEST_BINARIES.json --node NODE --demo CREDITED_DEMO.mp4 --fixture-ffmpeg FFmpeg --source-manifest SOURCES.json --fault-schedule FAULTS.json --address TEST_INTERFACE --isolated --output FRESH_RUN_DIRECTORY
+~~~
+
+An input source manifest contains `sources`, `viewers` and `canaries`. Each source declares `id`, a local `file` relative to the manifest, its `digest`, `codec`, `width`, `height`, `fps`, `phase` and `delay_s`. The collector confirms the media’s geometry and decodes the stream through Core. Viewer entries name their `camera` and `profile` (`preview` or `detail`). Canary entries bind a camera and category to a source timestamp range. The fault schedule uses an array of `faults` containing the `id`, `kind`, `camera` and a `canary` with the `source_epoch` and time range. Contiguous RTSP entries with the same `batch` run as a single group of camera interruptions. Every completed cycle needs usable native analysis, a matching live incident with persisted evidence and a receipt from the paired test receiver.
+
+Reserve the host for the entire performance run. Use a distinct evidence directory outside the staged payload. The collector files are inputs to the verdict. `validate_report.py` issues the verdict after verifying their digests, profile and report structure and the measured gates. A selected `--stage` or `--diagnostic-load-seconds` can produce evidence that helps debug a future run. The 60-minute criterion still requires a continuous interval with all declared cameras and decoded media workload. Openings, result counts, wall observation times, and source or virtual coverage have separate fields.
+
+The run returns `0` for `PASS`, `1` for `FAIL` and `2` for `INCOMPLETE`. To inspect a sealed run again, validate it into a new filename.
+
+~~~text
+python tools/benchmark/validate_report.py FRESH_RUN_DIRECTORY --output REVALIDATED_REPORT.json
+~~~
+
+Use the [physical device run sheet](device-run.md) for the observations that require phones, cameras, or external networks.
