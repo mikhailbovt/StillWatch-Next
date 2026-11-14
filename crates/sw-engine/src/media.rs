@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
+    fs::{self, File},
     io::{self, Read, Write},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -35,6 +35,9 @@ const SDP_LIMIT: usize = 48 * 1024;
 const MAX_SESSIONS: usize = 32;
 const MAX_ENCODERS: usize = 8;
 const MAX_SNAPSHOT_ENCODERS: usize = 4;
+const STAGE_PREFIX: &str = ".stillwatch-media-";
+const STAGE_SUFFIX_LEN: usize = 6;
+const ROUTER_CONFIG: &str = "mediamtx.json";
 const GRANT_TTL: Duration = Duration::from_secs(20);
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 const STALE: Duration = Duration::from_secs(3);
@@ -179,6 +182,46 @@ pub struct MediaService {
 }
 
 impl MediaService {
+    /// Call after acquiring the data directory's instance lock.
+    pub fn remove_abandoned_configs(root: &Path) -> io::Result<()> {
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let matches = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(STAGE_PREFIX))
+                .is_some_and(|suffix| {
+                    suffix.len() == STAGE_SUFFIX_LEN
+                        && suffix.bytes().all(|b| b.is_ascii_alphanumeric())
+                });
+            if !matches || !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let dir = entry.path();
+            let config = dir.join(ROUTER_CONFIG);
+            match fs::symlink_metadata(&config) {
+                Ok(meta) if meta.is_file() => match fs::remove_file(config) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                },
+                Ok(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            match fs::remove_dir(dir) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     pub fn status(&self) -> MediaStatus {
         MediaStatus {
             router_ready: self.state.lock().is_ok_and(|state| state.ready),
@@ -205,7 +248,8 @@ impl MediaService {
         config.encoder = verified(&config.encoder, &config.encoder_sha256)?;
         let encoder = H264Encoder::detect(&config.encoder).await?;
         let stage = tempfile::Builder::new()
-            .prefix(".stillwatch-media-")
+            .prefix(STAGE_PREFIX)
+            .rand_bytes(STAGE_SUFFIX_LEN)
             .tempdir_in(root)?;
         let rtc_reservation = TcpListener::bind(("127.0.0.1", 0)).await?;
         let ingest_reservation = TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -243,6 +287,7 @@ impl MediaService {
     }
 
     fn write_config(&self) -> Result<(), MediaError> {
+        let read_hash = STANDARD.encode(Sha256::digest(self.read_secret.as_bytes()));
         let config = json!({
             "logLevel": "error",
             "logDestinations": ["stdout"],
@@ -257,16 +302,16 @@ impl MediaService {
             "webrtcIPsFromInterfaces": false, "webrtcAdditionalHosts": [self.config.advertised_ip],
             "webrtcHandshakeTimeout": "6s",
             "webrtcICEServers2": self.config.turn.iter().map(|turn| {
-                json!({"url": turn.url, "username": "AUTH_SECRET", "password": turn.secret})
+                json!({"url": turn.url, "username": "AUTH_SECRET"})
             }).collect::<Vec<_>>(),
             "authInternalUsers": [
                 { "user": "any", "ips": ["127.0.0.1"], "permissions": [{"action": "publish"}] },
-                { "user": "stillwatch-reader", "pass": self.read_secret,
+                { "user": "stillwatch-reader", "pass": format!("sha256:{read_hash}"),
                   "ips": ["127.0.0.1"], "permissions": [{"action": "read"}] }
             ],
             "paths": { "all_others": { "overridePublisher": false } }
         });
-        let path = self.stage.path().join("mediamtx.json");
+        let path = self.stage.path().join(ROUTER_CONFIG);
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
@@ -284,8 +329,19 @@ impl MediaService {
         while !*stop.borrow() {
             let mut process = command(&self.config.mediamtx, |command| {
                 command
-                    .arg(self.stage.path().join("mediamtx.json"))
+                    .arg(self.stage.path().join(ROUTER_CONFIG))
                     .current_dir(self.stage.path());
+                // MediaMTX loads these two prefixes after reading the file. Protect
+                // the loopback listeners and auth settings from inherited overrides.
+                for (name, _) in std::env::vars_os() {
+                    let key = name.to_string_lossy().to_ascii_uppercase();
+                    if key.starts_with("MTX_") || key.starts_with("RTSP_") {
+                        command.env_remove(name);
+                    }
+                }
+                if let Some(turn) = &self.config.turn {
+                    command.env("MTX_WEBRTCICESERVERS2_0_PASSWORD", &turn.secret);
+                }
             })
             .spawn();
             if let Ok(child) = &mut process {

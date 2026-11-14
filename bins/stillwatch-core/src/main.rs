@@ -429,6 +429,9 @@ async fn serve(
                     ..StoreConfig::default()
                 },
             )?;
+            if MediaService::remove_abandoned_configs(&dir).is_err() {
+                eprintln!("StillWatch could not remove abandoned media configurations");
+            }
             let digest = token::load_or_create(&dir)?;
             let source_root = match source_root {
                 Some(path) => path,

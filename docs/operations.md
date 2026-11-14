@@ -106,6 +106,8 @@ Save and enable the camera before marking a controlled flame. Open **Camera sett
 
 Set mediamtx, mediamtx_sha256, media_encoder, media_encoder_sha256 and media_ice_udp in core.json to enable video. Use the installed MediaMTX and FFmpeg/OpenH264 binaries and their digests from manifest.json. On Linux you can set STILLWATCH_ICE_UDP to enable video with the installed binaries. Bind ICE to the Core's private address. Verify decoded video separately from control connectivity.
 
+Core passes the TURN signing secret to the MediaMTX child through its environment and writes a hash of the random loopback read credential to its private configuration. Startup also removes abandoned router configuration files from earlier runs under the Core data directory. Check that directory's permissions if startup logs report a cleanup failure. [MediaMTX environment configuration](https://mediamtx.org/docs/features/configuration)
+
 When playback stalls, the Companion can show a masked snapshot with the age of the frame. It continues fetching snapshots while the camera and control route are reachable. Use **Reconnect video** after the media route recovers.
 
 ## Migration, backup and restore

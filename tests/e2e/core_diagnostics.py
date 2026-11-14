@@ -14,7 +14,21 @@ from replay_core import run_core, until
 def check(args, root, name, options, expected):
     data = root / name
     source = root / "inputs"
+    abandoned = data / ".stillwatch-media-Abc123"
+    abandoned.mkdir(parents=True)
+    (abandoned / "mediamtx.json").write_text("{}")
+    with_extra = data / ".stillwatch-media-Efg456"
+    with_extra.mkdir()
+    (with_extra / "mediamtx.json").write_text("{}")
+    retained = with_extra / "unrelated.txt"
+    retained.write_text("keep")
+    unrelated = data / ".stillwatch-media-operator"
+    unrelated.mkdir()
+    (unrelated / "mediamtx.json").write_text("{}")
     with run_core(args.core, args.worker, data, source, root / f"{name}.log", *options) as (_, client):
+        assert not abandoned.exists()
+        assert not (with_extra / "mediamtx.json").exists() and retained.read_text() == "keep"
+        assert (unrelated / "mediamtx.json").is_file()
         code, _ = client.call("GET", "/api/v2/status", authorized=False)
         assert code == 401, code
 
@@ -58,6 +72,7 @@ def run(args):
             missing[5] = str(root / "missing-ort-library")
             check(args, root, "runtime", missing, expectation("degraded", "cpu", 0, "runtime_unavailable"))
     print(json.dumps({"redacted": True, "authorization_required": True, "disabled_profile": True,
+                      "abandoned_media_config_removed": True,
                       "model_and_runtime_profiles": args.models is not None}))
 
 

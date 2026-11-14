@@ -10,6 +10,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import os
 import secrets
 import socket
 import ssl
@@ -19,6 +20,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import av
 from aioice import TransportPolicy
@@ -241,6 +243,7 @@ def run(args):
 
                 proxy = stack.enter_context(proxy_profile(args.nginx, args.openssl, root))
                 flags.extend(proxy.flags)
+            stack.enter_context(patch.dict(os.environ, {"MTX_WEBRTC": "false", "RTSP_CONFKEY": "fixture"}))
             _, local = stack.enter_context(run_core(
                 args.core, args.worker, data, sources, root / "core.log",
                 *flags, "--mediamtx", str(args.mediamtx),
@@ -248,6 +251,11 @@ def run(args):
                 "--media-encoder-sha256", sha(encoder), "--media-ice-udp", f"{args.address}:{ice_port}",
                 *turn_flags,
             ))
+            config_file, = data.glob(".stillwatch-media-*/mediamtx.json")
+            config = json.loads(config_file.read_text(encoding="utf-8"))
+            assert config["authInternalUsers"][1]["pass"].startswith("sha256:")
+            if turn_url:
+                assert "password" not in config["webrtcICEServers2"][0]
             status, camera = local.call("POST", "/api/v2/cameras", {
                 "name": "Mask regression", "enabled": True, "source": {"type": "replay", "file": "fixture.mp4", "pace": True},
                 "privacy_masks": [{"left": 0, "top": 0, "right": 5000, "bottom": 10000}],
@@ -272,6 +280,7 @@ def run(args):
             asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
         print(json.dumps({"native_mediamtx": True, "input_codec": args.input_codec, "whep_h264": True, "viewers": 2,
                           "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": True,
+                          "router_config_has_no_cleartext_credentials": True, "ignores_inherited_router_settings": True,
                           "viewer_turn_over_tcp": bool(turn_url), "turn_tls": bool(turn_certificate),
                           "https_proxy": bool(args.nginx)}))
 

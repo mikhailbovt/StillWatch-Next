@@ -38,6 +38,8 @@ The Android 16 emulator preserved the observed notification denial time after fo
 
 `tests/e2e/rtsp_core.py --dpapi` verified TCP and UDP camera access with a machine-protected Windows secret, recovery after publisher restart, and rejection of a corrupt protected blob even when a valid JSON copy existed. Windows and Ubuntu also passed the established JSON reference path.
 
+`core_diagnostics.py` verified removal of abandoned MediaMTX configurations even with media disabled. `whep_core.py` verified hashed loopback credentials, isolation from inherited MediaMTX overrides, and two masked H.264 streams on Windows and Ubuntu. The Ubuntu run used an HEVC source and Coturn with relay-only ICE over TLS. The router file contained no TURN signing secret. [MediaMTX configuration](https://mediamtx.org/docs/features/configuration)
+
 `tests/e2e/storage_budget.py` verified SQLite metadata exhaustion and backpressure on the WAL with an external reader on Windows and Ubuntu. The API kept committed state readable, returned 507 for blocked writes, and accepted a retry after headroom returned. The maintenance CLI produced a redacted report while readiness returned 503. A storage test restarted with pending evidence in a full database and completed reconciliation after freeing pages.
 
 The backup and restore CLI rejected a small byte budget on both systems and insufficient destination headroom on a 48 MiB Ubuntu tmpfs. Failed operations left no published directory. A subsequent restore preserved the incident and camera and changed the stream generation. The CPU Compose profile verified its mounted temporary filesystem size and the driver settings for log rotation.
