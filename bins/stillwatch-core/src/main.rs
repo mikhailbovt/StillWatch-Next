@@ -620,13 +620,13 @@ async fn serve(
         ))
     });
     let mut registry_task = tokio::spawn(registry.supervise(registry_shutdown.clone()));
-    let semantic_task =
+    let mut semantic_task =
         semantic.map(|semantic| tokio::spawn(semantic.run(registry_shutdown.clone())));
-    let vision_task = vision.map(|vision| tokio::spawn(vision.supervise(registry_shutdown)));
+    let mut vision_task = vision.map(|vision| tokio::spawn(vision.supervise(registry_shutdown)));
     let signal_registry = stop_registry.clone();
 
     #[cfg(target_os = "linux")]
-    let watchdog = start_watchdog(store);
+    let watchdog = start_watchdog(store.clone());
     let (drained, mut draining) = watch::channel(false);
     let server = axum::serve(listener, router).with_graceful_shutdown(async move {
         let _ = shutdown.wait_for(|stopping| *stopping).await;
@@ -634,27 +634,50 @@ async fn serve(
         signal_registry.send_replace(true);
         drained.send_replace(true);
     });
-    let result = tokio::select! {
-        result = async { server.await } => result.context("HTTP server failed"),
+    let (result, ended) = tokio::select! {
+        result = async { server.await } => (result.context("HTTP server failed"), None),
         _ = async {
             let _ = draining.wait_for(|draining| *draining).await;
             tokio::time::sleep(Duration::from_secs(10)).await;
-        } => Ok(()),
+        } => (Ok(()), None),
+        _ = watch_writer(&store) => {
+            eprintln!("StillWatch SQLite writer stopped or exceeded the host restart deadline");
+            // The OS may still be inside a synchronous I/O call. Joining the
+            // thread would stall service recovery on both supported platforms.
+            std::process::exit(1);
+        },
+        result = &mut registry_task => {
+            (subsystem_exit("capture registry", *draining.borrow(), result, |result| result.map_err(Into::into)), Some(Subsystem::Capture))
+        },
+        result = wait_task(&mut vision_task) => {
+            (subsystem_exit("vision", *draining.borrow(), result, |result| result.map_err(Into::into)), Some(Subsystem::Vision))
+        },
+        result = &mut maintenance => {
+            (subsystem_exit("storage maintenance", *draining.borrow(), result, |result| result), Some(Subsystem::Maintenance))
+        },
+        result = &mut health_task => {
+            (subsystem_exit("health monitor", *draining.borrow(), result, |_| Ok(())), Some(Subsystem::Health))
+        },
+        result = wait_task(&mut semantic_task) => {
+            (subsystem_exit("semantic supervisor", *draining.borrow(), result, |_| Ok(())), Some(Subsystem::Semantic))
+        },
     };
     #[cfg(target_os = "linux")]
     if let Some(watchdog) = watchdog {
         watchdog.abort();
     }
     stop_registry.send_replace(true);
-    if tokio::time::timeout(Duration::from_secs(3), &mut health_task)
-        .await
-        .is_err()
+    if ended != Some(Subsystem::Health)
+        && tokio::time::timeout(Duration::from_secs(3), &mut health_task)
+            .await
+            .is_err()
     {
         health_task.abort();
     }
-    if tokio::time::timeout(Duration::from_secs(3), &mut maintenance)
-        .await
-        .is_err()
+    if ended != Some(Subsystem::Maintenance)
+        && tokio::time::timeout(Duration::from_secs(3), &mut maintenance)
+            .await
+            .is_err()
     {
         maintenance.abort();
     }
@@ -673,27 +696,79 @@ async fn serve(
             task.abort();
         }
     }
-    if tokio::time::timeout(Duration::from_secs(7), &mut registry_task)
-        .await
-        .is_err()
+    if ended != Some(Subsystem::Capture)
+        && tokio::time::timeout(Duration::from_secs(7), &mut registry_task)
+            .await
+            .is_err()
     {
         registry_task.abort();
     }
-    if let Some(mut vision_task) = vision_task
+    if ended != Some(Subsystem::Vision)
+        && let Some(mut vision_task) = vision_task
         && tokio::time::timeout(Duration::from_secs(5), &mut vision_task)
             .await
             .is_err()
     {
         vision_task.abort();
     }
-    if let Some(mut semantic_task) = semantic_task
+    if ended != Some(Subsystem::Semantic)
+        && let Some(mut semantic_task) = semantic_task
         && tokio::time::timeout(Duration::from_secs(3), &mut semantic_task)
             .await
             .is_err()
     {
         semantic_task.abort();
     }
+    if matches!(ended, Some(Subsystem::Vision | Subsystem::Maintenance)) && result.is_err() {
+        // A timed-out blocking sampler or filesystem call may not return to the runtime.
+        // The OS supervisor owns restart and child cleanup for this failure.
+        if let Err(error) = &result {
+            eprintln!("{error:#}");
+        }
+        std::process::exit(1);
+    }
     result
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Subsystem {
+    Capture,
+    Vision,
+    Maintenance,
+    Health,
+    Semantic,
+}
+
+async fn wait_task<T>(
+    task: &mut Option<tokio::task::JoinHandle<T>>,
+) -> Result<T, tokio::task::JoinError> {
+    match task {
+        Some(task) => task.await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn watch_writer(store: &Store) {
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if store.writer_requires_restart() {
+            return;
+        }
+    }
+}
+
+fn subsystem_exit<T>(
+    name: &str,
+    draining: bool,
+    result: Result<T, tokio::task::JoinError>,
+    outcome: impl FnOnce(T) -> Result<()>,
+) -> Result<()> {
+    outcome(result.with_context(|| format!("StillWatch {name} task failed"))?)
+        .with_context(|| format!("StillWatch {name} failed"))?;
+    ensure!(draining, "StillWatch {name} exited during service");
+    Ok(())
 }
 
 async fn maintain_storage(
@@ -702,27 +777,34 @@ async fn maintain_storage(
     mut stop: watch::Receiver<bool>,
     evidence_retention_ms: i64,
     history_retention_ms: i64,
-) {
-    let mut tick = tokio::time::interval(Duration::from_secs(60));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+) -> Result<()> {
+    let mut delay = Duration::ZERO;
+    let mut next_disk_check = std::time::Instant::now();
     while !*stop.borrow() {
         tokio::select! {
-            _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => return,
-            _ = tick.tick() => {
-                health::check_disk(&store, &storage_root).await;
-                let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
-                if store.expire_alerts(now).await.is_err() {
-                    eprintln!("StillWatch could not expire notification intents");
+            _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => return Ok(()),
+            _ = tokio::time::sleep(delay) => {
+                if std::time::Instant::now() >= next_disk_check {
+                    health::check_disk(&store, &storage_root).await.context("storage health probe failed")?;
+                    next_disk_check = std::time::Instant::now() + Duration::from_secs(60);
                 }
-                if store.retire_evidence(now.saturating_sub(evidence_retention_ms), now).await.is_err() {
-                    eprintln!("StillWatch could not apply evidence retention");
-                }
-                if store.retain_history(now.saturating_sub(history_retention_ms), now).await.is_err() {
-                    eprintln!("StillWatch could not apply history retention");
-                }
+                let now = sw_storage::utc_ms();
+                delay = match store.maintenance_step(
+                    now.saturating_sub(evidence_retention_ms),
+                    now.saturating_sub(history_retention_ms),
+                    now,
+                ).await {
+                    Ok(true) => Duration::from_secs(2),
+                    Ok(false) => Duration::from_secs(60),
+                    Err(_) => {
+                        eprintln!("StillWatch storage maintenance could not complete");
+                        Duration::from_secs(15)
+                    }
+                };
             }
         }
     }
+    Ok(())
 }
 
 fn worker_path(config: &Config) -> Result<PathBuf> {

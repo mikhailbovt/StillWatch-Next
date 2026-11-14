@@ -3,6 +3,16 @@
   "title": "CoreStatus",
   "type": "object",
   "properties": {
+    "camera_coverage": {
+      "description": "Bounded local snapshot sized by the camera registry.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/CameraCoverage"
+      }
+    },
     "inference": {
       "$ref": "#/$defs/InferenceStatus"
     },
@@ -18,6 +28,16 @@
     },
     "version": {
       "type": "string"
+    },
+    "writer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WriterStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -25,6 +45,45 @@
     "inference"
   ],
   "$defs": {
+    "AnalysisCoverage": {
+      "type": "object",
+      "properties": {
+        "fire_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "last_analysis_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pose_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "wall_cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "pose_frames",
+        "fire_frames"
+      ]
+    },
     "AnalysisState": {
       "type": "string",
       "enum": [
@@ -32,6 +91,64 @@
         "starting",
         "ready",
         "degraded"
+      ]
+    },
+    "CameraCoverage": {
+      "type": "object",
+      "properties": {
+        "analysis": {
+          "$ref": "#/$defs/AnalysisCoverage"
+        },
+        "camera_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "capture_state": {
+          "$ref": "#/$defs/CaptureState"
+        },
+        "current_source_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_frame_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "camera_id",
+        "revision",
+        "capture_state",
+        "analysis"
+      ]
+    },
+    "CaptureState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "replaying",
+        "streaming",
+        "clock_hold",
+        "completed",
+        "retrying",
+        "unavailable",
+        "capacity_exceeded"
       ]
     },
     "Counter": {
@@ -195,6 +312,97 @@
         "rejected_generation",
         "missed_source_slots",
         "intentional_burst"
+      ]
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
+      ]
+    },
+    "WriterStatus": {
+      "type": "object",
+      "properties": {
+        "cancelled_queued": {
+          "$ref": "#/$defs/Counter"
+        },
+        "completed": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maximum_operation_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maximum_queue_wait_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "oldest_queued_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queue_capacity": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "queue_high_water": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "queued": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rejected_queue_full": {
+          "$ref": "#/$defs/Counter"
+        },
+        "running_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "queue_capacity",
+        "queued",
+        "queue_high_water",
+        "completed",
+        "rejected_queue_full",
+        "cancelled_queued",
+        "maximum_queue_wait_ms",
+        "maximum_operation_ms"
       ]
     }
   }

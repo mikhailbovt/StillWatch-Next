@@ -157,6 +157,12 @@ impl From<StoreError> for ApiError {
                 "Core database storage capacity reached",
                 None,
             ),
+            StoreError::OutcomeUnknown => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ProblemCode::StorageUnavailable,
+                "The storage operation may still complete",
+                Some("Retry an idempotent request with the original key".into()),
+            ),
             StoreError::Domain(error) => Self::new(
                 StatusCode::CONFLICT,
                 ProblemCode::InvalidTransition,
@@ -234,7 +240,9 @@ impl From<sw_engine::RegistryError> for ApiError {
                 "RTSP capture requires a peer-confined decoder",
                 None,
             ),
-            RegistryError::Worker(_) | RegistryError::WorkerUnavailable => Self::new(
+            RegistryError::Worker(_)
+            | RegistryError::WorkerUnavailable
+            | RegistryError::CaptureTask => Self::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 ProblemCode::ProviderUnavailable,
                 "Capture worker unavailable",

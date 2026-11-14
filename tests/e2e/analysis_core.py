@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -132,6 +133,10 @@ def run(args):
             verify_timing(args, root, model_options)
         if args.slow_source:
             verify_slow_source(args, root, model_options)
+        if args.capture_recovery:
+            verify_capture_recovery(args, root, model_options)
+        if args.retention:
+            verify_preaged_retention(args, root, model_options)
 
 
 def verify_timing(args, root, model_options):
@@ -488,6 +493,191 @@ def verify_slow_source(args, root, model_options):
                                   "wall_cadence": wall, "relative_source_lag_ms": lag}))
 
 
+def verify_capture_recovery(args, root, model_options):
+    port, peer, config = rtsp_router(root, "capture-retry")
+    publish = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
+               "-i", str(root / "fire.mp4"), "-an", "-c:v", "copy", "-f", "rtsp",
+               "-rtsp_transport", "tcp", f"rtsp://{peer}/fixture"]
+    data = root / "capture-retry-data"
+    with launch([str(args.mediamtx), str(config)], root / "capture-retry-media.log"):
+        until(lambda: check_port(port))
+        with run_core(args.core, args.worker, data, root, root / "capture-retry.log",
+                      "--rtsp-peer", peer, "--inference-workers", "2", *model_options) as (process, client):
+            source = {"type": "rtsp", "peer": peer, "stream_path": "/fixture", "secure": False,
+                      "transport": "tcp", "credential_ref": None}
+
+            def progress(camera_id, epoch_after=None):
+                camera = client.camera(camera_id)
+                analysis = camera["runtime"]["analysis"]
+                epoch = int(camera["source_epoch"])
+                if ((epoch_after is None or epoch > epoch_after)
+                        and analysis["state"] == "ready"
+                        and int(analysis["pose_frames"]) >= 2 and int(analysis["fire_frames"]) >= 2
+                        and int(analysis["source_epoch"]) == epoch):
+                    return camera
+                return None
+
+            with launch(publish, root / "capture-retry-publisher.log"):
+                def create():
+                    status, camera = client.call("POST", "/api/v2/cameras", {
+                        "name": "Primary RTSP", "source": source, "enabled": True,
+                    }, key="primary")
+                    return camera if status == 201 else None
+
+                primary = until(create, 15)["id"]
+                def add_replay(name, repeat):
+                    status, camera = client.call("POST", "/api/v2/cameras", {
+                        "name": name, "enabled": True, "source": {
+                            "type": "replay", "file": "pose.mp4", "pace": True, "repeat": repeat,
+                        },
+                    }, key="witness-replay" if repeat else "finite-replay")
+                    assert status == 201, (status, camera)
+                    return camera["id"]
+
+                witness = add_replay("Parallel camera", True)
+                final = add_replay("Finite replay", False)
+                initial = until(lambda: progress(primary), 15)
+                until(lambda: progress(witness), 12)
+                initial_epoch = int(initial["source_epoch"])
+                with closing(sqlite3.connect(data / "stillwatch.sqlite3", timeout=5)) as db, db:
+                    # Reject only epoch updates for the disposable RTSP camera.
+                    # The literal is a UUID returned by the test's own Core.
+                    target = uuid.UUID(primary).hex
+                    db.execute(f"""CREATE TRIGGER fail_epoch BEFORE UPDATE OF source_epoch ON cameras
+                        WHEN old.id = X'{target}' BEGIN SELECT RAISE(ABORT, 'injected epoch write'); END""")
+                baseline = int(client.camera(witness)["runtime"]["analysis"]["pose_frames"])
+            until(lambda: health_events(client, "camera_offline", primary, active_only=True), 17)
+            lost_at = time.monotonic()
+            terminal = until(lambda: value if (value := client.camera(final))["runtime"]["state"] == "completed"
+                             else None, 15)
+            with launch(publish, root / "capture-retry-publisher-recovered.log"):
+                time.sleep(2)
+                failed = client.camera(primary)
+                assert int(failed["source_epoch"]) == initial_epoch, failed
+                assert failed["runtime"]["state"] in ("starting", "retrying")
+                code, witness_metrics = client.call("GET", f"/api/v2/cameras/{witness}/analysis-metrics")
+                assert code == 200 and int(witness_metrics["counts"]["pose"]["accepted"]) > baseline
+                with closing(sqlite3.connect(data / "stillwatch.sqlite3", timeout=5)) as db, db:
+                    db.execute("DROP TRIGGER fail_epoch")
+                restored = until(lambda: progress(primary, initial_epoch), 35)
+                assert restored["revision"] == initial["revision"]
+                assert process.poll() is None
+                def recovered_evidence():
+                    status, page = client.call("GET", "/api/v2/incidents")
+                    assert status == 200
+                    return next((event for event in page["incidents"] if event["camera_id"] == primary
+                                 and event["source_epoch"] == restored["source_epoch"]
+                                 and event["category"] == "fire" and event["evidence_state"] == "persisted"), None)
+
+                event = until(recovered_evidence, 20)
+                with closing(sqlite3.connect(data / "stillwatch.sqlite3")) as db:
+                    assert db.execute("SELECT count(*) FROM notification_outbox WHERE incident_id = ?",
+                                      (uuid.UUID(event["id"]).bytes,)).fetchone() == (1,)
+                until(lambda: not health_events(client, "camera_offline", primary, active_only=True), 8)
+                offline, = health_events(client, "camera_offline", primary)
+                assert offline["ended_at"] is not None
+                completed = client.camera(final)
+                assert completed["source_epoch"] == terminal["source_epoch"]
+                assert completed["runtime"]["state"] == "completed"
+                print(json.dumps({"capture_epoch_write_recovered": True, "parallel_camera_progressed": True,
+                                  "finite_replay_kept_completed": True, "outage_after_health_event_seconds":
+                                  round(time.monotonic() - lost_at, 3)}))
+
+
+def verify_preaged_retention(args, root, model_options):
+    from sdk_core import open_incident
+
+    data = root / "retention-data"
+    database = data / "stillwatch.sqlite3"
+    quota = 5 * 1024 * 1024
+    now = time.time_ns() // 1_000_000
+    old = now - 31 * 86_400_000
+    count = 4097
+    with run_core(args.core, args.worker, data, root, root / "retention-seed.log") as (_, client):
+        code, camera = client.call("POST", "/api/v2/cameras", {
+            "name": "Retention canary", "source": {
+                "type": "replay", "file": "pose.mp4", "pace": True, "repeat": True,
+            }, "enabled": True,
+        }, key="retention-camera")
+        assert code == 201, camera
+        camera_id = camera["id"]
+        open_incident(database, camera_id, 1)
+        open_incident(database, camera_id, 2)
+        opened = client.call("GET", "/api/v2/snapshot")[1]
+        live, expired = sorted(opened["incidents"], key=lambda item: item["detection_reason"])
+        origin = bytes.fromhex(expired["id"].replace("-", ""))
+        code, result = client.call("POST", f"/api/v2/incidents/{expired['id']}/resolution",
+                                   {"reason": "Reviewed"}, revision=expired["revision"], key="retention-resolution")
+        assert code == 200, result
+        code, acknowledged = client.call("POST", f"/api/v2/incidents/{live['id']}/acknowledgements",
+                                         {}, revision=live["revision"], key="retention-acknowledge")
+        assert code == 200, acknowledged
+    # Pre-age resolved metadata and administrative rows. Hold the fixture's
+    # SQLite transaction separate from serving writes and the fault run.
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("UPDATE incidents SET updated_at = ? WHERE id = ?", (old, origin))
+        db.execute("UPDATE change_events SET occurred_at = ? WHERE incident_id = ?", (old, origin))
+        db.execute("""WITH RECURSIVE rows(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM rows WHERE i < ?)
+            INSERT INTO idempotency_records
+            SELECT zeroblob(16), 'retention-test', CAST(i AS TEXT), zeroblob(32),
+                   json_object('sample',hex(zeroblob(224))), ? FROM rows""", (count, old))
+        db.execute("""WITH RECURSIVE rows(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM rows WHERE i < ?)
+            INSERT INTO trusted_devices
+            SELECT CAST(printf('%016d',i) AS BLOB), zeroblob(32), 'expired', '{}', ?, ? FROM rows""",
+                   (count, old, old))
+        db.execute("""INSERT INTO device_sessions
+            SELECT id, CAST(id||zeroblob(16) AS BLOB), ?, CAST(zeroblob(16)||id AS BLOB), ?
+            FROM trusted_devices""", (old, old))
+        db.execute("""INSERT INTO notification_outbox(incident_id, attention_cycle, attention, state,
+                      created_at, expires_at, next_attempt_at)
+                      VALUES (?,1,1,'expired',?,?,?)""", (origin, old, old, old))
+        outbox_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.execute("""INSERT INTO notification_receipts
+            SELECT ?, id, ? FROM trusted_devices""", (outbox_id, old))
+    before = database.stat().st_size
+    assert quota * 0.90 <= before < quota, before
+    with run_core(args.core, args.worker, data, root, root / "retention-core.log",
+                  "--database-quota-bytes", str(quota), *model_options) as (_, client):
+        def analysis():
+            status, payload = client.call("GET", f"/api/v2/cameras/{camera_id}/analysis-metrics")
+            if status == 200 and payload is not None:
+                return tuple(int(payload["counts"][name]["accepted"]) for name in ("pose", "fire"))
+            return 0, 0
+
+        started = time.monotonic()
+        before_analysis = until(lambda: rates if min(rates := analysis()) > 0 else None, 10)
+
+        def retained():
+            with closing(sqlite3.connect(database)) as db:
+                debt = tuple(db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in (
+                    "notification_receipts", "device_sessions", "trusted_devices",
+                ))
+            return not any(debt)
+
+        until(retained, 85)
+        after_analysis = analysis()
+        assert all(b > a for a, b in zip(before_analysis, after_analysis)), (before_analysis, after_analysis)
+        assert client.call("GET", f"/api/v2/incidents/{expired['id']}")[0] == 404
+        assert client.call("GET", f"/api/v2/incidents/{live['id']}")[0] == 200
+        code, problem = client.call("GET", f"/api/v2/changes?cursor={opened['cursor']}")
+        assert code == 409 and problem["code"] == "cursor_expired", (code, problem)
+        assert client.call("POST", f"/api/v2/incidents/{live['id']}/acknowledgements",
+                           {}, revision=live["revision"], key="retention-acknowledge") == (200, acknowledged)
+        with closing(sqlite3.connect(database)) as db:
+            assert db.execute("PRAGMA foreign_key_check").fetchall() == []
+            assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert db.execute("SELECT count(*) FROM idempotency_records WHERE operation = 'retention-test'").fetchone() == (0,)
+        status, control = client.call("GET", "/api/v2/status")
+        assert status == 200
+        print(json.dumps({
+            "preaged_rows_per_queue": count, "database_bytes": before, "quota_bytes": quota,
+            "retention_drain_seconds": round(time.monotonic() - started, 3),
+            "canary_accepted_pose_fire": (before_analysis, after_analysis),
+            "writer_maximum_operation_ms": control["writer"]["maximum_operation_ms"],
+            "open_incident_and_command_replay_preserved": True, "foreign_key_check": "ok",
+        }))
+
+
 def verify_live_outbox(args, root, model_options):
     port, peer, config = rtsp_router(root, "live")
     publish = [str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",
@@ -660,13 +850,15 @@ if __name__ == "__main__":
     parser.add_argument("--timing", action="store_true", help="Verify histograms, task counts and lag across replay epochs")
     parser.add_argument("--legacy-worker", action="store_true", help="Expect v1 worker timing compatibility")
     parser.add_argument("--slow-source", action="store_true", help="Measure a 15 fps RTSP fixture delivered at half speed")
+    parser.add_argument("--capture-recovery", action="store_true", help="Exercise a targeted failure of SQLite epoch writes")
+    parser.add_argument("--retention", action="store_true", help="Drain pre-aged history near the SQLite quota during inference")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():
         parser.error("--worker-faults requires Linux procfs")
     if options.source_freeze and not options.mediamtx:
         parser.error("--source-freeze requires --mediamtx")
-    if options.slow_source and not options.mediamtx:
-        parser.error("--slow-source requires --mediamtx")
+    if (options.slow_source or options.capture_recovery) and not options.mediamtx:
+        parser.error("--slow-source and --capture-recovery require --mediamtx")
     if options.media_encoder and not options.source_freeze:
         parser.error("--media-encoder requires --source-freeze")
     run(options)

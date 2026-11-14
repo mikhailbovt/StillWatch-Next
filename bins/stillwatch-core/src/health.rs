@@ -96,7 +96,6 @@ pub(crate) async fn monitor(
             stale_analysis.retain(|id, _| cameras.iter().any(|camera| camera.id == *id));
             cadence.retain(|id, _| cameras.iter().any(|camera| camera.id == *id));
             for camera in cameras {
-                observe_camera(&camera, &mut observations);
                 let analysis = camera
                     .usable_epoch
                     .zip(vision.as_ref())
@@ -104,6 +103,10 @@ pub(crate) async fn monitor(
                 let analysis_state = analysis
                     .as_ref()
                     .map(|(epoch, status)| (*epoch, status.state));
+                let covered = camera.usable_epoch.is_some()
+                    && (vision.is_none()
+                        || analysis_state.is_some_and(|(_, state)| state == AnalysisState::Ready));
+                observe_camera(&camera, covered, &mut observations);
                 if let Some((epoch, state)) =
                     analysis_state.filter(|(_, state)| *state != AnalysisState::Ready)
                 {
@@ -167,7 +170,11 @@ fn for_camera(camera: &CameraHealth, issue: HealthIssue, active: bool) -> Health
     }
 }
 
-fn observe_camera(camera: &CameraHealth, observations: &mut BTreeSet<HealthObservation>) {
+fn observe_camera(
+    camera: &CameraHealth,
+    covered: bool,
+    observations: &mut BTreeSet<HealthObservation>,
+) {
     use HealthIssue::*;
     let phase = camera.phase;
     let can_receive = matches!(
@@ -179,8 +186,8 @@ fn observe_camera(camera: &CameraHealth, observations: &mut BTreeSet<HealthObser
         CaptureState::CapacityExceeded | CaptureState::Completed
     );
     let offline = !can_receive && (camera.retrying || phase == CaptureState::Unavailable);
-    if can_receive || capture_ended || offline {
-        observations.insert(for_camera(camera, CameraOffline, offline && !capture_ended));
+    if covered || capture_ended || offline {
+        observations.insert(for_camera(camera, CameraOffline, !capture_ended && offline));
     }
     if phase != CaptureState::Starting {
         observations.insert(for_camera(
@@ -198,12 +205,14 @@ fn observe_camera(camera: &CameraHealth, observations: &mut BTreeSet<HealthObser
     }
 }
 
-pub(crate) async fn check_disk(store: &Store, root: &Path) {
+pub(crate) async fn check_disk(store: &Store, root: &Path) -> anyhow::Result<()> {
     let root = root.to_path_buf();
-    let available = tokio::task::spawn_blocking(move || fs4::available_space(root))
-        .await
-        .ok()
-        .and_then(Result::ok);
+    let available = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || fs4::available_space(root)),
+    )
+    .await??
+    .ok();
     let mut observations = vec![HealthObservation::global(
         HealthIssue::DiskSpaceUnknown,
         available.is_none(),
@@ -224,6 +233,7 @@ pub(crate) async fn check_disk(store: &Store, root: &Path) {
     if store.record_health(observations, now_ms()).await.is_err() {
         eprintln!("StillWatch could not record storage health");
     }
+    Ok(())
 }
 
 struct WallClock {

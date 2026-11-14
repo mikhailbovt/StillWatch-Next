@@ -45,6 +45,8 @@ pub enum RegistryError {
     Source,
     #[error("capture worker is unavailable")]
     WorkerUnavailable,
+    #[error("capture task could not be supervised")]
+    CaptureTask,
     #[error("capture resources are temporarily exhausted")]
     Busy,
     #[error("RTSP streams must share the same aspect ratio when using privacy masks")]
@@ -125,6 +127,7 @@ pub struct CameraHealth {
     pub repeated_frame: bool,
     pub clock_held: bool,
     pub usable_epoch: Option<u64>,
+    pub last_frame_age_ms: Option<Counter>,
 }
 
 impl CameraRegistry {
@@ -254,6 +257,9 @@ impl CameraRegistry {
                         retrying: current.retrying,
                         repeated_frame: current.repeated_frame,
                         clock_held: current.clock_held,
+                        last_frame_age_ms: current
+                            .last
+                            .map(|(_, at)| Counter(at.elapsed().as_millis() as u64)),
                         usable_epoch: slot.latest.borrow().as_ref().and_then(|frame| {
                             (matches!(
                                 current.phase,
@@ -620,36 +626,70 @@ impl CameraRegistry {
         crate::camera_credentials::read(root, id).await.map(Some)
     }
 
-    pub async fn supervise(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
+    pub async fn supervise(
+        self: Arc<Self>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RegistryError> {
         let mut changes = self.store.subscribe();
         let mut tasks = BTreeMap::<Uuid, Task>::new();
+        let mut fatal = None;
         while !*shutdown.borrow() {
             changes.borrow_and_update();
-            if let Ok(records) = self.store.enabled_cameras().await {
-                self.reconcile(&mut tasks, records).await;
+            if let Ok(records) = self.store.enabled_cameras().await
+                && let Err(error) = self.reconcile(&mut tasks, records).await
+            {
+                fatal = Some(error);
+                break;
             }
+            let next_retry = tasks
+                .values()
+                .filter_map(|task| match task.capture {
+                    CaptureTask::RetryAt(at) if at > Instant::now() => Some(at),
+                    _ => None,
+                })
+                .min();
+            let sleep = next_retry.map_or(Duration::from_secs(2), |at| {
+                at.saturating_duration_since(Instant::now())
+                    .min(Duration::from_secs(2))
+            });
             tokio::select! {
                 result = changes.changed() => if result.is_err() { break; },
                 _ = shutdown.changed() => break,
-                _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                _ = tokio::time::sleep(sleep) => {},
             }
         }
         for task in tasks.values() {
-            task.stop.send_replace(true);
+            if let CaptureTask::Running { stop, .. } = &task.capture {
+                stop.send_replace(true);
+            }
         }
         for (_, task) in tasks {
-            let _ = task.join.await;
+            if let CaptureTask::Running { join, .. } = task.capture {
+                match join.await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        fatal.get_or_insert(error);
+                    }
+                    Err(_) => {
+                        fatal.get_or_insert(RegistryError::CaptureTask);
+                    }
+                }
+            }
         }
         if let Ok(mut slots) = self.slots.write() {
             slots.clear();
         }
+        if let Some(error) = fatal {
+            return Err(error);
+        }
+        Ok(())
     }
 
     async fn reconcile(
         self: &Arc<Self>,
         tasks: &mut BTreeMap<Uuid, Task>,
         records: Vec<CameraRecord>,
-    ) {
+    ) -> Result<(), RegistryError> {
         let (mut active, mut reserved) = (0, 0u64);
         let desired: BTreeMap<_, _> = records
             .into_iter()
@@ -677,9 +717,32 @@ impl CameraRegistry {
             .map(|(id, _)| *id)
             .collect();
         for id in obsolete {
-            if let Some(task) = tasks.remove(&id) {
-                task.stop.send_replace(true);
-                let _ = task.join.await;
+            if let Some(task) = tasks.remove(&id)
+                && let CaptureTask::Running { stop, join } = task.capture
+            {
+                stop.send_replace(true);
+                let _ = join.await.map_err(|_| RegistryError::CaptureTask)??;
+            }
+        }
+        for task in tasks.values_mut() {
+            if matches!(&task.capture, CaptureTask::Running { join, .. } if join.is_finished())
+                && let CaptureTask::Running { join, .. } =
+                    std::mem::replace(&mut task.capture, CaptureTask::Dormant)
+            {
+                match join.await.map_err(|_| RegistryError::CaptureTask)?? {
+                    CameraOutcome::Completed | CameraOutcome::ConfigurationFailure => {}
+                    CameraOutcome::Stopped => {
+                        task.capture = CaptureTask::RetryAt(Instant::now());
+                    }
+                    CameraOutcome::RetryableFailure { stable } => {
+                        if stable {
+                            task.attempts = 0;
+                        }
+                        task.capture =
+                            CaptureTask::RetryAt(Instant::now() + capture_backoff(task.attempts));
+                        task.attempts = task.attempts.saturating_add(1);
+                    }
+                }
             }
         }
         if let Ok(mut slots) = self.slots.write() {
@@ -690,7 +753,11 @@ impl CameraRegistry {
             assigned[task.inference_lane] += 1;
         }
         for (id, (camera, admit)) in desired {
-            if tasks.contains_key(&id) {
+            if let Some(task) = tasks.get_mut(&id) {
+                if matches!(task.capture, CaptureTask::RetryAt(at) if Instant::now() >= at) {
+                    task.capture =
+                        self.spawn_camera(camera, task.inference_lane, Arc::clone(&task.feed));
+                }
                 continue;
             }
             let revision = camera.revision;
@@ -732,110 +799,154 @@ impl CameraRegistry {
             let Some(inference_lane) = inference_lane else {
                 continue;
             };
-            let (stop, cancellation) = watch::channel(false);
-            let registry = self.clone();
-            let join = tokio::spawn(async move {
-                registry
-                    .run_camera(camera, inference_lane, state, frame, cancellation)
-                    .await;
+            let feed = Arc::new(CameraFeed {
+                state,
+                latest: frame,
             });
+            let capture = self.spawn_camera(camera, inference_lane, Arc::clone(&feed));
             tasks.insert(
                 id,
                 Task {
                     revision,
                     inference_lane,
-                    stop,
-                    join,
+                    capture,
+                    attempts: 0,
+                    feed,
                 },
             );
         }
+        Ok(())
+    }
+
+    fn spawn_camera(
+        self: &Arc<Self>,
+        camera: CameraRecord,
+        inference_lane: usize,
+        feed: Arc<CameraFeed>,
+    ) -> CaptureTask {
+        let (stop, cancellation) = watch::channel(false);
+        let registry = self.clone();
+        let join = tokio::spawn(async move {
+            registry
+                .run_camera(camera, inference_lane, feed, cancellation)
+                .await
+        });
+        CaptureTask::Running { stop, join }
     }
 
     async fn run_camera(
         &self,
-        mut camera: CameraRecord,
+        camera: CameraRecord,
         inference_lane: usize,
-        state: watch::Sender<State>,
-        latest: watch::Sender<Option<Arc<CameraFrame>>>,
+        feed: Arc<CameraFeed>,
         mut stop: watch::Receiver<bool>,
-    ) {
+    ) -> Result<CameraOutcome, RegistryError> {
+        let state = &feed.state;
+        let latest = &feed.latest;
         let Some(worker) = &self.worker else {
-            set_phase(&state, CaptureState::Unavailable);
-            return;
+            set_phase(state, CaptureState::Unavailable);
+            return Ok(CameraOutcome::ConfigurationFailure);
         };
         let live = camera.config.source.is_live();
         let repeat = matches!(
             camera.config.source,
             CameraSource::Replay { repeat: true, .. }
         );
-        let mut attempt = 0u32;
-        while live || attempt < 5 {
+        loop {
             if *stop.borrow() {
-                return;
+                return Ok(CameraOutcome::Stopped);
             }
-            set_phase(&state, CaptureState::Starting);
-            let Ok(updated) = self
+            set_phase(state, CaptureState::Starting);
+            let mut active_camera = match self
                 .store
                 .bump_camera_epoch(camera.id, camera.revision)
                 .await
-            else {
-                set_phase(&state, CaptureState::Unavailable);
-                return;
-            };
-            camera = updated;
-            let connected_at = Instant::now();
-            if let Ok(request) = self
-                .request(&camera.config.source, camera.config.privacy_masks.clone())
-                .await
-                && let Ok(mut process) = worker.capture(&request).await
             {
-                let outcome = self
-                    .read_camera(
-                        &mut camera,
-                        inference_lane,
-                        &mut process,
-                        &state,
-                        &latest,
-                        &mut stop,
-                    )
-                    .await;
-                if process.stop().await.is_err() {
-                    set_phase(&state, CaptureState::Unavailable);
-                    return;
+                Ok(updated) => updated,
+                Err(StoreError::NotFound | StoreError::Revision { .. } | StoreError::Invalid) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
                 }
-                if let Ok(phase) = outcome {
-                    match phase {
-                        CaptureState::Completed if repeat => {
-                            latest.send_replace(None);
-                            set_phase(&state, CaptureState::Starting);
-                            tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_millis(250)) => {},
-                                _ = stop.changed() => return,
-                            }
-                            attempt = 0;
-                            continue;
-                        }
-                        CaptureState::Completed if live => {}
-                        _ => {
-                            set_phase(&state, phase);
-                            return;
-                        }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let request = match self
+                .request(
+                    &active_camera.config.source,
+                    active_camera.config.privacy_masks.clone(),
+                )
+                .await
+            {
+                Ok(request) => request,
+                Err(RegistryError::Worker(WorkerError::Unreaped)) => {
+                    return Err(WorkerError::Unreaped.into());
+                }
+                Err(
+                    RegistryError::Invalid
+                    | RegistryError::WorkerUnavailable
+                    | RegistryError::Worker(WorkerError::NetworkPolicyUnavailable),
+                ) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let mut process = match worker.capture(&request).await {
+                Ok(process) => process,
+                Err(WorkerError::Unreaped) => return Err(WorkerError::Unreaped.into()),
+                Err(WorkerError::Unavailable | WorkerError::Config) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let connected_at = Instant::now();
+            let outcome = self
+                .read_camera(
+                    &mut active_camera,
+                    inference_lane,
+                    &mut process,
+                    &feed,
+                    &mut stop,
+                )
+                .await;
+            process.stop().await?;
+            match outcome {
+                Ok(CaptureState::Disabled) => return Ok(CameraOutcome::Stopped),
+                Ok(CaptureState::Completed) if repeat => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Starting);
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                        _ = stop.changed() => return Ok(CameraOutcome::Stopped),
                     }
                 }
+                Ok(CaptureState::Completed) if !live => {
+                    set_phase(state, CaptureState::Completed);
+                    return Ok(CameraOutcome::Completed);
+                }
+                Err(
+                    RegistryError::Store(
+                        StoreError::NotFound | StoreError::Revision { .. } | StoreError::Invalid,
+                    )
+                    | RegistryError::Worker(WorkerError::Config),
+                ) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                _ => {
+                    let stable = connected_at.elapsed() >= Duration::from_secs(30)
+                        && state
+                            .borrow()
+                            .last
+                            .is_some_and(|(_, at)| at >= connected_at);
+                    return Ok(capture_retry(&feed, stable));
+                }
             }
-            latest.send_replace(None);
-            set_phase(&state, CaptureState::Retrying);
-            if connected_at.elapsed() > Duration::from_secs(30) {
-                attempt = 0;
-            }
-            let jitter = u64::from(Uuid::new_v4().as_bytes()[0]);
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis((250u64 << attempt.min(7)).min(30_000) + jitter)) => {},
-                _ = stop.changed() => return,
-            }
-            attempt = attempt.saturating_add(1);
         }
-        set_phase(&state, CaptureState::Unavailable);
     }
 
     async fn read_camera(
@@ -843,10 +954,11 @@ impl CameraRegistry {
         camera: &mut CameraRecord,
         inference_lane: usize,
         process: &mut CaptureProcess,
-        state: &watch::Sender<State>,
-        latest: &watch::Sender<Option<Arc<CameraFrame>>>,
+        feed: &CameraFeed,
         stop: &mut watch::Receiver<bool>,
     ) -> Result<CaptureState, RegistryError> {
+        let state = &feed.state;
+        let latest = &feed.latest;
         let mut clock = FrameClock::default();
         let mut source_progress = SourceProgress::default();
         let mut content = RepeatedFrames::default();
@@ -989,8 +1101,41 @@ pub(crate) fn same_aspect_ratio(a: Dimensions, b: Dimensions) -> bool {
 struct Task {
     revision: u64,
     inference_lane: usize,
-    stop: watch::Sender<bool>,
-    join: JoinHandle<()>,
+    capture: CaptureTask,
+    attempts: u32,
+    feed: Arc<CameraFeed>,
+}
+
+struct CameraFeed {
+    state: watch::Sender<State>,
+    latest: watch::Sender<Option<Arc<CameraFrame>>>,
+}
+
+enum CaptureTask {
+    Running {
+        stop: watch::Sender<bool>,
+        join: JoinHandle<Result<CameraOutcome, RegistryError>>,
+    },
+    RetryAt(Instant),
+    Dormant,
+}
+
+enum CameraOutcome {
+    Completed,
+    Stopped,
+    RetryableFailure { stable: bool },
+    ConfigurationFailure,
+}
+
+fn capture_retry(feed: &CameraFeed, stable: bool) -> CameraOutcome {
+    feed.latest.send_replace(None);
+    set_phase(&feed.state, CaptureState::Retrying);
+    CameraOutcome::RetryableFailure { stable }
+}
+
+fn capture_backoff(attempt: u32) -> Duration {
+    let jitter = u64::from(Uuid::new_v4().as_bytes()[0]);
+    Duration::from_millis(((250u64 << attempt.min(7)) + jitter).min(30_000))
 }
 
 fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
@@ -1001,6 +1146,7 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
         state.relative_lag = None;
         if phase != CaptureState::Completed {
             state.codec = None;
+            state.first_source = None;
         }
         if phase == CaptureState::Retrying {
             state.retrying = true;

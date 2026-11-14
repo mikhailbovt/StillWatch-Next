@@ -51,7 +51,13 @@ def check(args, root, name, options, expected):
         subprocess.run([str(args.cli), "doctor", "--local", local, "--data-dir", str(data),
                         "--output", str(report_path)], check=True, timeout=15)
         report = report_path.read_text(encoding="utf-8")
-        assert json.loads(report)["status"] == status
+        recorded = json.loads(report)["status"]
+        writer = recorded.pop("writer")
+        earlier = status.pop("writer")
+        assert "camera_coverage" not in recorded and status.pop("camera_coverage") == []
+        assert writer["queue_capacity"] == earlier["queue_capacity"] and writer["queue_high_water"] >= earlier["queue_high_water"]
+        assert int(writer["completed"]) >= int(earlier["completed"])
+        assert recorded == status
         assert str(root) not in report and client.token not in report and local not in report
         code, bootstrap = client.call("GET", "/bootstrap/info", authorized=False)
         assert code == 200 and bootstrap["instance_id"] not in report

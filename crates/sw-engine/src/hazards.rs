@@ -636,6 +636,35 @@ async fn persist(
             result,
         })
     };
+    if !opening
+        && let Some(stamp) = incident.evidence
+        && stamp.expires_at == frame.observation_time.expires_at()
+    {
+        // A timed-out write may have committed before its caller retried.
+        // The packet's immutable clock matches this exact source observation.
+        let existing = store.evidence_packet(incident.id, stamp.packet_id).await?;
+        if existing.images.iter().any(|image| {
+            image.kind == sw_protocol::EvidenceImageKind::Overview
+                && (image.source_s * 1_000_000.0).round() as i64 == hazard.source_us
+        }) {
+            let result = if incident.evidence_state == EvidenceState::Persisted
+                && frame
+                    .observation_time
+                    .evidence_fresh(utc_ms(), Instant::now())
+            {
+                PacketResult::Written {
+                    at: frame.captured_at,
+                    facts: hazard.facts,
+                    region: hazard.region,
+                }
+            } else {
+                PacketResult::Unavailable {
+                    at: frame.captured_at,
+                }
+            };
+            return Ok(completed(result));
+        }
+    }
     let evidence = evidence.clone();
     let onset = hazard.first_source_us;
     let region = hazard.region;

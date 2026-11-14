@@ -245,34 +245,52 @@ impl VisionScheduler {
         response
     }
 
-    pub async fn supervise(self: Arc<Self>, shutdown: watch::Receiver<bool>) {
-        let (stop_evidence, evidence_shutdown) = watch::channel(false);
+    pub async fn supervise(
+        self: Arc<Self>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), WorkerError> {
+        let (stop, local_shutdown) = watch::channel(false);
         let evidence = Arc::new(EvidenceSampler::new(self.cameras.clone()));
-        let sampler = tokio::spawn(evidence.clone().run(evidence_shutdown));
+        let mut sampler = tokio::spawn(evidence.clone().run(local_shutdown.clone()));
         let mut lanes = tokio::task::JoinSet::new();
-        let mut indices = HashMap::with_capacity(self.lanes);
         for lane in 0..self.lanes {
             let scheduler = self.clone();
             let evidence = evidence.clone();
-            let mut shutdown = shutdown.clone();
-            let task =
-                lanes.spawn(async move { scheduler.run(lane, evidence, &mut shutdown).await });
-            indices.insert(task.id(), lane);
+            let mut shutdown = local_shutdown.clone();
+            lanes.spawn(async move { scheduler.run(lane, evidence, &mut shutdown).await });
         }
-        while let Some(result) = lanes.join_next_with_id().await {
-            if let Err(error) = result {
-                if let Some(&lane) = indices.get(&error.id()) {
-                    self.phase(
-                        lane,
-                        AnalysisState::Degraded,
-                        Some(InferenceFailure::WorkerFailed),
-                    );
+        let mut sampler_joined = false;
+        let mut result = loop {
+            tokio::select! {
+                _ = async { let _ = shutdown.wait_for(|stop| *stop).await; } => break Ok(()),
+                result = lanes.join_next(), if !lanes.is_empty() => {
+                    match result {
+                        Some(Ok(Ok(()))) | None => {}
+                        Some(Ok(Err(error))) => break Err(error),
+                        Some(Err(_)) => break Err(WorkerError::Exit),
+                    }
                 }
-                eprintln!("StillWatch inference lane terminated unexpectedly");
+                sample = &mut sampler => {
+                    sampler_joined = true;
+                    break Err(match sample {
+                        Ok(Err(error)) => error,
+                        _ => WorkerError::Exit,
+                    });
+                }
+            }
+        };
+        stop.send_replace(true);
+        while let Some(lane) = lanes.join_next().await {
+            if result.is_ok() {
+                result = lane
+                    .map_err(|_| WorkerError::Exit)
+                    .and_then(|result| result);
             }
         }
-        stop_evidence.send_replace(true);
-        let _ = sampler.await;
+        if !sampler_joined && !matches!(sampler.await, Ok(Ok(()))) && result.is_ok() {
+            result = Err(WorkerError::Exit);
+        }
+        result
     }
 
     async fn run(
@@ -280,9 +298,9 @@ impl VisionScheduler {
         lane: usize,
         evidence: Arc<EvidenceSampler>,
         shutdown: &mut watch::Receiver<bool>,
-    ) {
+    ) -> Result<(), WorkerError> {
         let Some(worker) = &self.worker else {
-            return;
+            return Ok(());
         };
         let mut attempt = 0u32;
         let mut last_camera = None;
@@ -292,7 +310,7 @@ impl VisionScheduler {
         while !*shutdown.borrow() {
             self.phase(lane, AnalysisState::Starting, None);
             let process = tokio::select! {
-                _ = shutdown.wait_for(|stop| *stop) => return,
+                _ = shutdown.wait_for(|stop| *stop) => return Ok(()),
                 process = InferenceProcess::start(worker, &self.config) => process,
             };
             let failure = match process {
@@ -372,26 +390,22 @@ impl VisionScheduler {
                             }
                         }
                     };
-                    if process.stop().await.is_err() {
-                        self.phase(
-                            lane,
-                            AnalysisState::Degraded,
-                            Some(InferenceFailure::WorkerFailed),
-                        );
-                        return;
-                    }
+                    process.stop().await?;
                     if started.elapsed() > Duration::from_secs(30) {
                         attempt = 0;
                     }
-                    let Some(failure) = failure else { return };
+                    let Some(failure) = failure else {
+                        return Ok(());
+                    };
                     failure
                 }
                 Err(WorkerError::InferenceStartup(failure)) => {
                     // The model and runtime files are operator-managed. Leave the error
                     // visible until a restart with corrected configuration or artifacts.
                     self.phase(lane, AnalysisState::Degraded, Some(failure));
-                    return;
+                    return Ok(());
                 }
+                Err(WorkerError::Unreaped) => return Err(WorkerError::Unreaped),
                 Err(error) => inference_failure(&error),
             };
             self.phase(lane, AnalysisState::Degraded, Some(failure));
@@ -399,10 +413,11 @@ impl VisionScheduler {
             let wait = Duration::from_millis(((1_000u64 << attempt.min(6)) + jitter).min(60_000));
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {},
-                _ = shutdown.wait_for(|stop| *stop) => return,
+                _ = shutdown.wait_for(|stop| *stop) => return Ok(()),
             }
             attempt = attempt.saturating_add(1);
         }
+        Ok(())
     }
 
     fn next(&self, lane: usize, last_camera: Option<Uuid>) -> Option<Dispatch> {

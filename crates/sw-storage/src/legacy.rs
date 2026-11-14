@@ -552,6 +552,12 @@ fn import_packets(
                 digest_part(fingerprint, b"jpeg", value.as_bytes());
             }
         }
+        if available > 0 {
+            tx.execute(
+                "UPDATE evidence_packets SET has_retirable_images = 1 WHERE id = ?",
+                [id(&packet)],
+            )?;
+        }
         manifest.historical_images_available += available as u64;
         if version > incident_state.evidence_version() {
             incident_state.evidence = Some(EvidenceStamp {

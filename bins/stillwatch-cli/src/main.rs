@@ -162,8 +162,12 @@ async fn main() -> Result<()> {
                 Err(error) => return Err(error.into()),
             };
             let semantic = client.semantic_status().await?;
+            let mut coverage = None;
             let status = match client.status().await {
-                Ok(status) => Some(status),
+                Ok(mut status) => {
+                    coverage = status.camera_coverage.take();
+                    Some(status)
+                }
                 Err(SdkError::Http { status: 404, .. }) => None,
                 Err(error) => return Err(error.into()),
             };
@@ -181,22 +185,27 @@ async fn main() -> Result<()> {
                 }) => None,
                 Err(error) => return Err(error.into()),
             };
-            let mut cursor = None;
             let mut cameras = Vec::new();
-            loop {
-                let page = client.cameras(cursor, 100).await?;
-                for camera in page
-                    .cameras
-                    .into_iter()
-                    .filter(|camera| camera.config.enabled)
-                {
+            if let Some(coverage) = coverage {
+                for (index, camera) in coverage.into_iter().enumerate() {
                     cameras.push(serde_json::json!({
-                        "camera": cameras.len() + 1, "live": camera.live, "runtime": camera.runtime,
-                        "analysis": client.analysis(camera.id).await?,
+                        "camera": index + 1, "capture_state": camera.capture_state,
+                        "last_frame_age_ms": camera.last_frame_age_ms, "analysis": camera.analysis,
                     }));
                 }
-                let Some(next) = page.next else { break };
-                cursor = Some(next);
+            } else {
+                let mut cursor = None;
+                loop {
+                    let page = client.cameras(cursor, 100).await?;
+                    for camera in page.cameras.into_iter().filter(|item| item.config.enabled) {
+                        cameras.push(serde_json::json!({
+                            "camera": cameras.len() + 1, "live": camera.live, "runtime": camera.runtime,
+                            "analysis": client.analysis(camera.id).await?,
+                        }));
+                    }
+                    let Some(next) = page.next else { break };
+                    cursor = Some(next);
+                }
             }
             let report = serde_json::to_string_pretty(&serde_json::json!({
                 "core_version": core.version, "cli_version": env!("CARGO_PKG_VERSION"),

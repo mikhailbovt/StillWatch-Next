@@ -19,7 +19,7 @@ sw-domain.workspace = true
 sw-protocol.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 uuid.workspace = true
 
 [dev-dependencies]

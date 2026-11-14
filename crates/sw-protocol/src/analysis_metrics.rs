@@ -73,3 +73,24 @@ pub struct WallCadence {
     pub pose_accepted: u32,
     pub fire_accepted: u32,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CameraCoverage {
+    pub camera_id: uuid::Uuid,
+    pub revision: Counter,
+    pub capture_state: crate::CaptureState,
+    pub current_source_epoch: Option<Counter>,
+    pub last_frame_age_ms: Option<Counter>,
+    pub analysis: AnalysisCoverage,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AnalysisCoverage {
+    pub state: crate::AnalysisState,
+    pub pose_frames: Counter,
+    pub fire_frames: Counter,
+    pub last_analysis_age_ms: Option<Counter>,
+    pub wall_cadence: Option<WallCadence>,
+}

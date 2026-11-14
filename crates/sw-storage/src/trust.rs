@@ -183,7 +183,6 @@ impl Store {
                 return Err(StoreError::Credential);
             }
             if expires <= now { return Err(StoreError::Credential); }
-            tx.execute("DELETE FROM retired_refresh_credentials WHERE expires_at <= ?", [now])?;
             tx.execute("INSERT INTO retired_refresh_credentials VALUES (?, ?, ?)",
                 params![&old[..], id(&record.id), expires])?;
             next.store(&tx, record.id)?;

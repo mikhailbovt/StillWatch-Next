@@ -288,6 +288,7 @@ async fn core_status(
     State(state): State<Api>,
     Extension(principal): Extension<auth::Principal>,
 ) -> Json<CoreStatus> {
+    let local = matches!(principal, auth::Principal::Local(_));
     Json(CoreStatus {
         version: env!("CARGO_PKG_VERSION").into(),
         inference: state.vision.as_ref().map_or_else(
@@ -302,6 +303,62 @@ async fn core_status(
             |vision| vision.inference_status(principal.owner().is_ok()),
         ),
         media: state.media.as_ref().map(|media| media.status()),
+        writer: if local {
+            state.store.writer_status()
+        } else {
+            None
+        },
+        camera_coverage: if local {
+            state
+                .cameras
+                .as_ref()
+                .and_then(|registry| registry.capture_health())
+                .map(|mut cameras| {
+                    cameras.sort_unstable_by_key(|camera| camera.id);
+                    cameras
+                        .into_iter()
+                        .map(|camera| {
+                            let analysis = state.vision.as_ref().map_or_else(
+                                || sw_protocol::AnalysisStatus::with_state(AnalysisState::Disabled),
+                                |vision| {
+                                    let mut status =
+                                        vision.status(camera.id, camera.usable_epoch.unwrap_or(0));
+                                    status.state = match camera.phase {
+                                        sw_protocol::CaptureState::Completed
+                                        | sw_protocol::CaptureState::Disabled => {
+                                            AnalysisState::Disabled
+                                        }
+                                        sw_protocol::CaptureState::Retrying
+                                        | sw_protocol::CaptureState::Unavailable
+                                        | sw_protocol::CaptureState::CapacityExceeded
+                                        | sw_protocol::CaptureState::ClockHold => {
+                                            AnalysisState::Degraded
+                                        }
+                                        _ => status.state,
+                                    };
+                                    status
+                                },
+                            );
+                            sw_protocol::CameraCoverage {
+                                camera_id: camera.id,
+                                revision: sw_protocol::Counter(camera.revision),
+                                capture_state: camera.phase,
+                                current_source_epoch: camera.usable_epoch.map(sw_protocol::Counter),
+                                last_frame_age_ms: camera.last_frame_age_ms,
+                                analysis: sw_protocol::AnalysisCoverage {
+                                    state: analysis.state,
+                                    pose_frames: analysis.pose_frames,
+                                    fire_frames: analysis.fire_frames,
+                                    last_analysis_age_ms: analysis.last_analysis_age_ms,
+                                    wall_cadence: analysis.wall_cadence,
+                                },
+                            }
+                        })
+                        .collect()
+                })
+        } else {
+            None
+        },
     })
 }
 

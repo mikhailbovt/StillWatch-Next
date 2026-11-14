@@ -25,7 +25,7 @@ use crate::{
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
 pub const APPLICATION_ID: i64 = 0x53574e32;
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
@@ -37,6 +37,7 @@ pub(crate) struct Database {
     pub(crate) quota: u64,
     pub(crate) evidence_monotonic: HashMap<Uuid, crate::ObservationTime>,
     pub(crate) blob_bytes: Option<u64>,
+    pub(crate) blob_recount: Option<crate::evidence::BlobRecount>,
     evidence_recovery_pending: bool,
     pub(crate) notify: watch::Sender<()>,
     _lock: File,
@@ -88,6 +89,7 @@ impl Database {
             quota: config.evidence_quota_bytes,
             evidence_monotonic: HashMap::new(),
             blob_bytes: None,
+            blob_recount: None,
             evidence_recovery_pending: false,
             notify,
             _lock: lock,
@@ -375,8 +377,8 @@ impl Database {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
-            "DELETE FROM idempotency_records WHERE expires_at <= ?",
-            [now],
+            "DELETE FROM idempotency_records WHERE actor_id = ? AND operation = ? AND key = ? AND expires_at <= ?",
+            params![actor, operation, key, now],
         )?;
         let cached = tx.query_row(
             "SELECT request_hash, result FROM idempotency_records WHERE actor_id = ? AND operation = ? AND key = ?",
@@ -633,7 +635,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match (application_id, version) {
         (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
-        (APPLICATION_ID, 1..=10) => {
+        (APPLICATION_ID, 1..=11) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 1 {
                 tx.execute_batch(include_str!("migrations/002.sql"))?;
@@ -662,7 +664,10 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             if version <= 9 {
                 tx.execute_batch(include_str!("migrations/010.sql"))?;
             }
-            tx.execute_batch(include_str!("migrations/011.sql"))?;
+            if version <= 10 {
+                tx.execute_batch(include_str!("migrations/011.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/012.sql"))?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -688,6 +693,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             tx.execute_batch(include_str!("migrations/009.sql"))?;
             tx.execute_batch(include_str!("migrations/010.sql"))?;
             tx.execute_batch(include_str!("migrations/011.sql"))?;
+            tx.execute_batch(include_str!("migrations/012.sql"))?;
             tx.execute(
                 "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
                 params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],

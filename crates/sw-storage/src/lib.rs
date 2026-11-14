@@ -18,7 +18,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -52,6 +52,8 @@ const MAX_PAGE: usize = 200;
 const MAX_CHANGES: usize = 100_000;
 const MAX_SNAPSHOT: usize = 2_000;
 const WRITE_WINDOW: Duration = Duration::from_secs(10);
+const COMPLETION_BUDGET: Duration = Duration::from_secs(15);
+const WRITER_RESTART_BUDGET: Duration = Duration::from_secs(60);
 
 pub fn utc_ms() -> UnixMillis {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -70,6 +72,8 @@ pub enum StoreError {
     Busy,
     #[error("database request expired while queued")]
     Deadline,
+    #[error("database request exceeded its completion deadline and may still commit")]
+    OutcomeUnknown,
     #[error("database writer is unavailable. Retry writes with the original idempotency key")]
     Unavailable,
     #[error("database storage capacity reached")]
@@ -190,12 +194,26 @@ impl Drop for Worker {
     }
 }
 
+#[derive(Default)]
+struct WriterProgress {
+    running_since: Option<Instant>,
+    oldest_queued_at: std::collections::VecDeque<Instant>,
+    queue_high_water: usize,
+    maximum_queue_wait_ms: u64,
+    maximum_operation_ms: u64,
+    completed: u64,
+    cancelled_queued: u64,
+    rejected_queue_full: u64,
+}
+
 #[derive(Clone)]
 pub struct Store {
     worker: Arc<Worker>,
     identity: Identity,
     wake: watch::Receiver<()>,
     evidence_inflight: Arc<Semaphore>,
+    progress: Arc<Mutex<WriterProgress>>,
+    queue_capacity: usize,
 }
 
 impl Store {
@@ -207,6 +225,7 @@ impl Store {
             return Err(StoreError::Invalid);
         }
         let root = root.to_owned();
+        let queue_capacity = config.queue_capacity;
         let (requests, incoming) = mpsc::sync_channel::<Job>(config.queue_capacity);
         let (boot, startup) = mpsc::sync_channel(1);
         let (notify, wake) = watch::channel(());
@@ -234,6 +253,8 @@ impl Store {
             identity,
             wake,
             evidence_inflight: Arc::new(Semaphore::new(64 * 1024 * 1024)),
+            progress: Arc::default(),
+            queue_capacity,
         })
     }
 
@@ -243,6 +264,37 @@ impl Store {
 
     pub fn subscribe(&self) -> watch::Receiver<()> {
         self.wake.clone()
+    }
+
+    pub fn writer_status(&self) -> Option<sw_protocol::WriterStatus> {
+        let progress = self.progress.lock().ok()?;
+        Some(sw_protocol::WriterStatus {
+            queue_capacity: self.queue_capacity,
+            queued: progress.oldest_queued_at.len().min(self.queue_capacity),
+            queue_high_water: progress.queue_high_water,
+            running_ms: progress.running_since.map(|at| counter_ms(at.elapsed())),
+            oldest_queued_ms: progress
+                .oldest_queued_at
+                .front()
+                .map(|at| counter_ms(at.elapsed())),
+            completed: sw_protocol::Counter(progress.completed),
+            rejected_queue_full: sw_protocol::Counter(progress.rejected_queue_full),
+            cancelled_queued: sw_protocol::Counter(progress.cancelled_queued),
+            maximum_queue_wait_ms: sw_protocol::Counter(progress.maximum_queue_wait_ms),
+            maximum_operation_ms: sw_protocol::Counter(progress.maximum_operation_ms),
+        })
+    }
+
+    pub fn writer_requires_restart(&self) -> bool {
+        self.worker
+            .handle
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+            || self.progress.lock().map_or(true, |state| {
+                state
+                    .running_since
+                    .is_some_and(|started| started.elapsed() >= WRITER_RESTART_BUDGET)
+            })
     }
 
     pub async fn healthy(&self) -> Result<(), StoreError> {
@@ -262,10 +314,44 @@ impl Store {
         &self,
         operation: impl FnOnce(&mut Database) -> Result<T, StoreError> + Send + 'static,
     ) -> Result<T, StoreError> {
+        self.call_with_budget(COMPLETION_BUDGET, operation).await
+    }
+
+    async fn call_with_budget<T: Send + 'static>(
+        &self,
+        completion_budget: Duration,
+        operation: impl FnOnce(&mut Database) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, StoreError> {
+        let result = self.enqueue(operation)?;
+        tokio::time::timeout(completion_budget, result)
+            .await
+            .map_err(|_| StoreError::OutcomeUnknown)?
+            .map_err(|_| StoreError::Unavailable)?
+    }
+
+    fn enqueue<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Database) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<oneshot::Receiver<Result<T, StoreError>>, StoreError> {
         let (reply, result) = oneshot::channel();
-        let deadline = Instant::now() + WRITE_WINDOW;
+        let queued_at = Instant::now();
+        let deadline = queued_at + WRITE_WINDOW;
+        let progress = Arc::clone(&self.progress);
         let job = Box::new(move |db: &mut Database| {
-            let outcome = if Instant::now() >= deadline {
+            let started = Instant::now();
+            let not_executed = reply.is_closed() || started >= deadline;
+            if let Ok(mut state) = progress.lock() {
+                state.oldest_queued_at.pop_front();
+                state.maximum_queue_wait_ms = state
+                    .maximum_queue_wait_ms
+                    .max(counter_ms(started - queued_at).0);
+                if not_executed {
+                    state.cancelled_queued = state.cancelled_queued.saturating_add(1);
+                } else {
+                    state.running_since = Some(started);
+                }
+            }
+            let outcome = if not_executed {
                 Err(StoreError::Deadline)
             } else {
                 if db.budget.should_retry() {
@@ -284,19 +370,37 @@ impl Store {
                 }
                 outcome
             };
+            if !not_executed && let Ok(mut state) = progress.lock() {
+                state.running_since = None;
+                state.completed = state.completed.saturating_add(1);
+                state.maximum_operation_ms = state
+                    .maximum_operation_ms
+                    .max(counter_ms(started.elapsed()).0);
+            }
             let _ = reply.send(outcome);
         });
-        match self
-            .worker
-            .requests
-            .as_ref()
-            .ok_or(StoreError::Unavailable)?
-            .try_send(job)
         {
-            Ok(()) => result.await.map_err(|_| StoreError::Unavailable)?,
-            Err(TrySendError::Full(_)) => Err(StoreError::Busy),
-            Err(TrySendError::Disconnected(_)) => Err(StoreError::Unavailable),
+            let sender = self
+                .worker
+                .requests
+                .as_ref()
+                .ok_or(StoreError::Unavailable)?;
+            let mut state = self.progress.lock().map_err(|_| StoreError::Unavailable)?;
+            match sender.try_send(job) {
+                Ok(()) => {
+                    state.oldest_queued_at.push_back(queued_at);
+                    state.queue_high_water = state
+                        .queue_high_water
+                        .max(state.oldest_queued_at.len().min(self.queue_capacity));
+                }
+                Err(TrySendError::Full(_)) => {
+                    state.rejected_queue_full = state.rejected_queue_full.saturating_add(1);
+                    return Err(StoreError::Busy);
+                }
+                Err(TrySendError::Disconnected(_)) => return Err(StoreError::Unavailable),
+            }
         }
+        Ok(result)
     }
 
     pub async fn create(&self, new: NewIncident, now: UnixMillis) -> Result<Incident, StoreError> {
@@ -510,6 +614,14 @@ impl Store {
         cutoff: UnixMillis,
         now: UnixMillis,
     ) -> Result<(), StoreError> {
+        self.retire_evidence_step(cutoff, now).await.map(|_| ())
+    }
+
+    pub async fn retire_evidence_step(
+        &self,
+        cutoff: UnixMillis,
+        now: UnixMillis,
+    ) -> Result<bool, StoreError> {
         if cutoff >= now {
             return Err(StoreError::Invalid);
         }
@@ -526,6 +638,14 @@ impl Store {
         destination: PathBuf,
         limits: BackupLimits,
     ) -> Result<(), StoreError> {
-        self.call(move |db| db.backup(&destination, limits)).await
+        // This entry point runs offline with exclusive ownership of the store.
+        // Large, valid backups can take longer than a serving API command.
+        self.enqueue(move |db| db.backup(&destination, limits))?
+            .await
+            .map_err(|_| StoreError::Unavailable)?
     }
+}
+
+fn counter_ms(duration: Duration) -> sw_protocol::Counter {
+    sw_protocol::Counter(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
 }

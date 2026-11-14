@@ -355,4 +355,24 @@ pub struct CoreStatus {
     pub version: String,
     pub inference: InferenceStatus,
     pub media: Option<MediaStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<WriterStatus>,
+    /// Bounded local snapshot sized by the camera registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_coverage: Option<Vec<CameraCoverage>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WriterStatus {
+    pub queue_capacity: usize,
+    pub queued: usize,
+    pub queue_high_water: usize,
+    pub running_ms: Option<Counter>,
+    pub oldest_queued_ms: Option<Counter>,
+    pub completed: Counter,
+    pub rejected_queue_full: Counter,
+    pub cancelled_queued: Counter,
+    pub maximum_queue_wait_ms: Counter,
+    pub maximum_operation_ms: Counter,
 }

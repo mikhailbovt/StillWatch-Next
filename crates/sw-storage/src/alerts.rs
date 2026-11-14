@@ -102,19 +102,40 @@ impl Store {
     }
 
     pub async fn expire_alerts(&self, now: UnixMillis) -> Result<(), StoreError> {
+        self.expire_alerts_step(now).await.map(|_| ())
+    }
+
+    pub async fn expire_alerts_step(&self, now: UnixMillis) -> Result<bool, StoreError> {
         self.call(move |db| {
             let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            tx.execute(
-                "UPDATE notification_outbox SET state = 'expired' WHERE state = 'queued' AND expires_at <= ?",
+            let expired = tx.execute(
+                "UPDATE notification_outbox SET state = 'expired' WHERE id IN (
+                  SELECT id FROM notification_outbox WHERE state = 'queued' AND expires_at <= ?
+                  ORDER BY expires_at, id LIMIT 512)",
                 [now],
             )?;
-            tx.execute(
-                "DELETE FROM notification_outbox WHERE state = 'expired' AND expires_at <= ?",
-                [now.saturating_sub(AUDIT_RETENTION_MS)],
+            let cutoff = now.saturating_sub(AUDIT_RETENTION_MS);
+            let receipts = tx.execute(
+                "DELETE FROM notification_receipts WHERE rowid IN (
+                  SELECT r.rowid FROM notification_outbox n
+                  JOIN notification_receipts r ON r.alert_id = n.id
+                  WHERE n.state = 'expired' AND n.expires_at <= ? LIMIT 512)",
+                [cutoff],
             )?;
-            tx.execute("DELETE FROM alert_silences WHERE until_utc <= ?", [now])?;
+            let removed = tx.execute(
+                "DELETE FROM notification_outbox WHERE id IN (
+                  SELECT n.id FROM notification_outbox n WHERE n.state = 'expired' AND n.expires_at <= ?
+                    AND NOT EXISTS (SELECT 1 FROM notification_receipts r WHERE r.alert_id = n.id)
+                  ORDER BY n.expires_at, n.id LIMIT 512)",
+                [cutoff],
+            )?;
+            let silences = tx.execute(
+                "DELETE FROM alert_silences WHERE rowid IN (
+                  SELECT rowid FROM alert_silences WHERE until_utc <= ? ORDER BY until_utc, rowid LIMIT 512)",
+                [now],
+            )?;
             tx.commit()?;
-            Ok(())
+            Ok([expired, receipts, removed, silences].contains(&512))
         }).await
     }
 }

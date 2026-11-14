@@ -20,6 +20,196 @@ const BLACK: &[u8] = include_bytes!("../../../tests/fixtures/evidence/black.jpg"
 const WHITE: &[u8] = include_bytes!("../../../tests/fixtures/evidence/white.jpg");
 
 #[tokio::test]
+async fn a_cancelled_queued_command_does_not_mutate_and_retry_is_idempotent() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(
+        root.path(),
+        StoreConfig {
+            queue_capacity: 1,
+            ..StoreConfig::default()
+        },
+    )
+    .unwrap();
+    let held = store.clone();
+    let (started, active) = tokio::sync::oneshot::channel();
+    let (release, finish) = std::sync::mpsc::channel();
+    let running = tokio::spawn(async move {
+        held.call(move |_| {
+            let _ = started.send(());
+            finish.recv().map_err(|_| StoreError::Unavailable)
+        })
+        .await
+        .unwrap();
+    });
+    active.await.unwrap();
+    let saved = incident();
+    let id = saved.id;
+    let queued = store.clone();
+    let requested = saved.clone();
+    let cancelled = tokio::spawn(async move { queued.create(requested, 1000).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while store.writer_status().unwrap().queued == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        store.create(incident(), 1000).await,
+        Err(StoreError::Busy)
+    ));
+    cancelled.abort();
+    assert!(cancelled.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+    running.await.unwrap();
+    loop {
+        match store.healthy().await {
+            Ok(()) => break,
+            Err(StoreError::Busy) => tokio::task::yield_now().await,
+            result => panic!("unexpected health result: {result:?}"),
+        }
+    }
+    let first = store.create(saved.clone(), 1001).await.unwrap();
+    let second = store.create(saved, 1002).await.unwrap();
+    assert_eq!(first, second);
+    assert_eq!(second.created_at, 1001);
+    assert_eq!(store.writer_status().unwrap().cancelled_queued, Counter(1));
+    let (stored, events, alerts) = store.call(|db| Ok(counts(&db.conn))).await.unwrap();
+    assert_eq!((stored, events, alerts), (1, 1, 1));
+    assert_eq!(store.get(id).await.unwrap(), second);
+}
+
+#[tokio::test]
+async fn a_running_command_can_commit_after_a_completion_timeout() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let command = incident();
+    let requested = command.clone();
+    let (started, active) = tokio::sync::oneshot::channel();
+    let (release, finish) = std::sync::mpsc::channel();
+    let writer = store.clone();
+    let call = tokio::spawn(async move {
+        writer
+            .call_with_budget(std::time::Duration::from_millis(250), move |db| {
+                let _ = started.send(());
+                finish.recv().map_err(|_| StoreError::Unavailable)?;
+                db.create(requested, 2_000)
+            })
+            .await
+    });
+    active.await.unwrap();
+    let result = call.await.unwrap();
+    assert!(matches!(result, Err(StoreError::OutcomeUnknown)));
+    assert!(store.writer_status().unwrap().running_ms.unwrap().0 >= 200);
+    release.send(()).unwrap();
+    let retried = store.create(command, 3_000).await.unwrap();
+    assert_eq!(retried.created_at, 2_000);
+    assert_eq!(
+        store.call(|db| Ok(counts(&db.conn))).await.unwrap(),
+        (1, 1, 1)
+    );
+}
+
+#[tokio::test]
+async fn maintenance_drains_preaged_rows_in_bounded_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let active = store.create(incident(), 10_000).await.unwrap();
+    let active_id = active.id;
+    let old = store.create(incident(), 1_000).await.unwrap();
+    let old = store
+        .apply(
+            OperatorCommand {
+                incident_id: old.id,
+                actor_id: Uuid::new_v4(),
+                idempotency_key: "preaged-history".into(),
+                expected_revision: old.revision,
+                action: OperatorAction::Resolve {
+                    reason: "Reviewed".into(),
+                },
+            },
+            1_100,
+        )
+        .await
+        .unwrap()
+        .incident;
+    let old_id = old.id;
+    let now = 7 * 86_400_000;
+    let now = now + 2_000;
+    store.call(move |db| {
+        db.conn.execute_batch(
+            "WITH RECURSIVE rows(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM rows WHERE i<1537)
+             INSERT INTO idempotency_records
+             SELECT zeroblob(16), 'test', CAST(i AS TEXT), zeroblob(32), '{}', 500 FROM rows",
+        )?;
+        db.conn.execute(
+            "INSERT INTO idempotency_records VALUES(zeroblob(16),'test','active',zeroblob(32),'{}',?)",
+            [now + 1],
+        )?;
+        db.conn.execute(
+            "WITH RECURSIVE rows(i) AS (VALUES(2) UNION ALL SELECT i+1 FROM rows WHERE i<1026)
+             INSERT INTO notification_outbox(incident_id, attention_cycle, attention, state, created_at, expires_at, next_attempt_at)
+             SELECT ?1, i, 1, 'queued', 1, 500, 1 FROM rows",
+             [active_id.as_bytes()],
+        )?;
+        db.conn.execute(
+            "WITH RECURSIVE rows(i) AS (VALUES(3) UNION ALL SELECT i+1 FROM rows WHERE i<1025)
+             INSERT INTO change_events(incident_id, revision, occurred_at, opened, incident)
+             SELECT ?1, i, 1000, 0, ?2 FROM rows",
+             rusqlite::params![old_id.as_bytes(), serde_json::to_string(&old)?],
+        )?;
+        Ok(())
+    }).await.unwrap();
+    let snapshot = store.snapshot().await.unwrap();
+    for (index, expected) in [1026, 514, 2, 1].into_iter().enumerate() {
+        assert_eq!(
+            store.maintenance_step(2_000, 2_000, now).await.unwrap(),
+            index < 3
+        );
+        let count = store
+            .call(|db| {
+                db.conn
+                    .query_row(
+                        "SELECT count(*) FROM idempotency_records WHERE operation = 'test'",
+                        [],
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, expected);
+        let remaining = store
+            .call(move |db| {
+                db.conn
+                    .query_row(
+                        "SELECT count(*) FROM change_events WHERE incident_id = ?",
+                        [old_id.as_bytes()],
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(remaining, [513, 1, 0, 0][index]);
+    }
+    assert!(matches!(store.get(old_id).await, Err(StoreError::NotFound)));
+    assert_eq!(store.snapshot().await.unwrap().cursor, snapshot.cursor);
+    assert!(store.get(active_id).await.unwrap().resolution.is_none());
+    let foreign_errors = store
+        .call(|db| {
+            db.conn
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                    r.get::<_, u32>(0)
+                })
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(foreign_errors, 0);
+}
+
+#[tokio::test]
 async fn material_observations_are_durable_and_bounded_without_image_packets() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path(), StoreConfig::default()).unwrap();
@@ -1273,6 +1463,52 @@ fn evidence_commit_failure_leaves_a_reconcilable_orphan() {
             .unwrap(),
         EvidenceOutcome::Persisted(_)
     ));
+}
+
+#[test]
+fn uncertain_blob_bytes_recount_in_maintenance_slices() {
+    let root = tempfile::tempdir().unwrap();
+    let byte_count = 513;
+    let mut db = database(root.path(), byte_count + BLACK.len() as u64);
+    for i in 0..byte_count {
+        fs::write(db.blobs.join(format!("quota-{i}")), [0_u8]).unwrap();
+    }
+    let mut saved = db.create(incident(), 1_000).unwrap();
+    db.blob_bytes = None;
+    for i in 0..3 {
+        let stamp = EvidenceStamp {
+            packet_id: Uuid::new_v4(),
+            scope: saved.scope,
+            version: i + 1,
+            expires_at: 9_000,
+        };
+        let outcome = db
+            .persist_evidence(evidence_write(&saved, stamp, &[BLACK]), 2_000 + i as i64)
+            .unwrap();
+        saved = db.get(saved.id).unwrap();
+        if i < 2 {
+            assert!(matches!(outcome, EvidenceOutcome::Failed(result)
+                if result.failures == vec![(0, EvidenceFailure::Io)]));
+            assert!(db.retire_evidence(500, 3_000).unwrap());
+            assert_eq!(db.blob_bytes, None);
+            continue;
+        }
+        assert!(matches!(outcome, EvidenceOutcome::Failed(_)));
+        assert!(!db.retire_evidence(500, 3_000).unwrap());
+        assert_eq!(db.blob_bytes, Some(byte_count));
+    }
+    let stamp = EvidenceStamp {
+        packet_id: Uuid::new_v4(),
+        scope: saved.scope,
+        version: 4,
+        expires_at: 9_000,
+    };
+    assert!(matches!(
+        db.persist_evidence(evidence_write(&saved, stamp, &[BLACK]), 4_000)
+            .unwrap(),
+        EvidenceOutcome::Persisted(_)
+    ));
+    assert_eq!(db.blob_bytes, Some(byte_count + BLACK.len() as u64));
 }
 
 #[test]

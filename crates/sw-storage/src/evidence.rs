@@ -193,6 +193,11 @@ pub(crate) struct BlobInfo {
     pub byte_length: u64,
 }
 
+pub(crate) struct BlobRecount {
+    entries: fs::ReadDir,
+    bytes: u64,
+}
+
 impl Database {
     pub fn persist_evidence(
         &mut self,
@@ -279,9 +284,6 @@ impl Database {
                 write.stamp.expires_at, request_hash.as_slice(), write.context.as_ref().map(serde_json::to_string).transpose()?, observed],
         )?;
 
-        if self.blob_bytes.is_none() {
-            self.blob_bytes = Some(physical_bytes(&self.blobs)?);
-        }
         let mut result = EvidenceResult {
             packet_id: write.stamp.packet_id,
             incident_revision,
@@ -332,6 +334,7 @@ impl Database {
                 result.available += 1;
             }
         }
+        let has_retirable_images = result.available != 0;
         let outcome = EvidenceOutcome::new(result);
         transition.incident.evidence_state = match outcome {
             EvidenceOutcome::Persisted(_) => EvidenceState::Persisted,
@@ -349,8 +352,8 @@ impl Database {
             time.evidence_fresh(now, monotonic) && time.evidence_fresh(committed_at, Instant::now())
         });
         tx.execute(
-            "UPDATE evidence_packets SET persisted_at = ?, semantic_eligible = ? WHERE id = ?",
-            params![committed_at, eligible, packet],
+            "UPDATE evidence_packets SET persisted_at = ?, semantic_eligible = ?, has_retirable_images = ? WHERE id = ?",
+            params![committed_at, eligible, has_retirable_images, packet],
         )?;
         let queued =
             eligible && write.context.is_some() && matches!(outcome, EvidenceOutcome::Persisted(_));
@@ -496,16 +499,16 @@ impl Database {
         &mut self,
         cutoff: UnixMillis,
         now: UnixMillis,
-    ) -> Result<(), StoreError> {
+    ) -> Result<bool, StoreError> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS due_packets(id BLOB PRIMARY KEY, incident_id BLOB NOT NULL) WITHOUT ROWID;
                           DELETE FROM due_packets;")?;
-        tx.execute(
+        let due = tx.execute(
             "INSERT INTO due_packets
              SELECT p.id, p.incident_id FROM evidence_packets p
-             WHERE p.captured_at <= ? AND EXISTS (SELECT 1 FROM evidence_images i WHERE i.packet_id = p.id AND i.retired = 0 AND i.digest IS NOT NULL)
+             WHERE p.captured_at <= ? AND p.has_retirable_images = 1
              ORDER BY p.captured_at, p.id LIMIT 128",
             [cutoff],
         )?;
@@ -519,6 +522,10 @@ impl Database {
         };
         tx.execute(
             "UPDATE evidence_images SET retired = 1 WHERE packet_id IN (SELECT id FROM due_packets)",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE evidence_packets SET has_retirable_images = 0 WHERE id IN (SELECT id FROM due_packets)",
             [],
         )?;
         for digest in removed {
@@ -566,26 +573,45 @@ impl Database {
         if changed {
             self.notify.send_replace(());
         }
-        // Recount on the next write after scheduled maintenance, including any
-        // external loss or failed cleanup observed since the last count.
-        self.blob_bytes = None;
+        // Hold blob creates/deletes while the incremental scan is in progress.
+        // Packet metadata continues to retire and referenced blobs remain readable.
+        if self.blob_bytes.is_none() && self.recount_blobs_step()? {
+            return Ok(true);
+        }
         let cleanup = {
             let mut stmt = self
                 .conn
-                .prepare("SELECT digest FROM retired_blob_cleanup ORDER BY digest LIMIT 2048")?;
+                .prepare("SELECT digest FROM retired_blob_cleanup ORDER BY digest LIMIT 128")?;
             stmt.query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let more_cleanup = cleanup.len() == 128;
         if !cleanup.is_empty() {
+            let mut recount = false;
             for digest in &cleanup {
                 if has_active_reference(&self.conn, digest)? {
                     continue;
                 }
-                match fs::remove_file(blob_path(&self.blobs, digest)?) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                let path = blob_path(&self.blobs, digest)?;
+                let size = fs::symlink_metadata(&path)
+                    .ok()
+                    .filter(|metadata| metadata.file_type().is_file())
+                    .map(|metadata| metadata.len());
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        self.blob_bytes = self
+                            .blob_bytes
+                            .zip(size)
+                            .map(|(total, removed)| total.saturating_sub(removed));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        recount = true;
+                    }
                     Err(error) => return Err(error.into()),
                 }
+            }
+            if recount {
+                self.blob_bytes = None;
             }
             sync_directory(&self.blobs)?;
             let tx = self
@@ -599,7 +625,28 @@ impl Database {
             }
             tx.commit()?;
         }
-        Ok(())
+        Ok(due == 128 || more_cleanup || self.blob_bytes.is_none())
+    }
+
+    fn recount_blobs_step(&mut self) -> Result<bool, StoreError> {
+        let mut scan = match self.blob_recount.take() {
+            Some(scan) => scan,
+            None => BlobRecount {
+                entries: fs::read_dir(&self.blobs)?,
+                bytes: 0,
+            },
+        };
+        for _ in 0..256 {
+            let Some(entry) = scan.entries.next().transpose()? else {
+                self.blob_bytes = Some(scan.bytes);
+                return Ok(false);
+            };
+            if entry.file_type()?.is_file() {
+                scan.bytes = scan.bytes.saturating_add(entry.metadata()?.len());
+            }
+        }
+        self.blob_recount = Some(scan);
+        Ok(true)
     }
 
     pub fn reconcile_evidence(&mut self) -> Result<(), StoreError> {
@@ -700,6 +747,7 @@ impl Database {
         }
         tx.commit()?;
         self.blob_bytes = Some(physical_bytes(&self.blobs)?);
+        self.blob_recount = None;
         Ok(())
     }
 }

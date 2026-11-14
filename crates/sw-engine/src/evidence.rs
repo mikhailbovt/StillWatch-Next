@@ -53,21 +53,25 @@ impl EvidenceSampler {
         }
     }
 
-    pub async fn run(self: Arc<Self>, mut shutdown: watch::Receiver<bool>) {
+    pub async fn run(
+        self: Arc<Self>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), crate::WorkerError> {
         let mut tick = tokio::time::interval(Duration::from_millis(200));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = shutdown.wait_for(|stop| *stop) => return,
+                _ = shutdown.wait_for(|stop| *stop) => return Ok(()),
                 _ = tick.tick() => {},
             }
             let sampler = self.clone();
-            if tokio::task::spawn_blocking(move || sampler.sample())
-                .await
-                .is_err()
-            {
-                return;
-            }
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || sampler.sample()),
+            )
+            .await
+            .map_err(|_| crate::WorkerError::Deadline)?
+            .map_err(|_| crate::WorkerError::Exit)?;
         }
     }
 

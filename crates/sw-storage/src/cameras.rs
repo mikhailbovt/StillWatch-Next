@@ -259,7 +259,10 @@ impl Store {
             let result = CameraResult { camera, deleted };
             let response = serde_json::to_string(&result)?;
             let hash = action_hash(&command.action)?;
-            tx.execute("DELETE FROM idempotency_records WHERE expires_at <= ?", [now])?;
+            tx.execute(
+                "DELETE FROM idempotency_records WHERE actor_id = ? AND operation = ? AND key = ? AND expires_at <= ?",
+                params![id(&command.actor), command.action.operation(), command.key.as_str(), now],
+            )?;
             tx.execute(
                 "INSERT INTO idempotency_records(actor_id, operation, key, request_hash, result, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
                 params![id(&command.actor), command.action.operation(), command.key.as_str(), hash.as_slice(), response, now.saturating_add(IDEMPOTENCY_TTL_MS)],
