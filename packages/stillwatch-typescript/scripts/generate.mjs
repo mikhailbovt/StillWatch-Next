@@ -4,7 +4,7 @@ import { compile } from "json-schema-to-typescript";
 const names = [
   "AlertFeed", "AlertReceipt", "AnalysisStatus", "Bootstrap", "Camera", "CameraConfig", "CameraPage",
   "CameraPatch", "CaptureDevices", "Change", "CoreStatus", "DeviceCredentials", "Devices",
-  "EvidencePacket", "Health", "Incident", "IncidentPage", "OnvifDevices", "OnvifProfiles",
+  "EvidencePacket", "Health", "HealthEventPage", "Incident", "IncidentPage", "OnvifDevices", "OnvifProfiles",
   "OnvifProfilesRequest", "OnvifStream", "OnvifStreamRequest", "PairingOffer",
   "PairingRequest", "Problem", "ReplayUpload", "SemanticStatus", "Snapshot", "SourceProbe", "SourceProbeRequest",
   "StreamGrant", "StreamRequest",

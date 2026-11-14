@@ -4,18 +4,136 @@ use rusqlite::{Connection, ErrorCode};
 use sw_domain::{
     Assessment, Category, EvidenceStamp, EvidenceState, NewIncident, OperatorAction, SourceScope,
 };
+use sw_protocol::{CameraConfig, CameraSource, Counter, Dimensions};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
-    ChangeCursor, EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceWrite, OperatorCommand,
-    Store, StoreConfig, StoreError,
+    CameraAction, CameraCommand, CameraLimits, ChangeCursor, EvidenceFailure, EvidenceImage,
+    EvidenceOutcome, EvidenceWrite, HealthIssue, HealthObservation, OperatorCommand, Store,
+    StoreConfig, StoreError,
     db::{DATABASE_FILE, Database},
     restore_backup,
 };
 
 const BLACK: &[u8] = include_bytes!("../../../tests/fixtures/evidence/black.jpg");
 const WHITE: &[u8] = include_bytes!("../../../tests/fixtures/evidence/white.jpg");
+
+#[tokio::test]
+async fn health_intervals_survive_restart_and_respect_camera_revision_and_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let actor = Uuid::new_v4();
+    let limits = CameraLimits {
+        active: 2,
+        raw_bytes: 8_000_000,
+    };
+    let camera = store
+        .mutate_camera(
+            CameraCommand {
+                actor,
+                key: "health-create".parse().unwrap(),
+                action: CameraAction::Create(CameraConfig {
+                    name: "Camera".into(),
+                    source: CameraSource::Replay {
+                        file: "reference.mp4".into(),
+                        pace: true,
+                        repeat: true,
+                    },
+                    enabled: true,
+                    cloud_consent: false,
+                    privacy_masks: Vec::new(),
+                    controlled_fire_regions: Vec::new(),
+                }),
+            },
+            Some(Dimensions {
+                width: 640,
+                height: 360,
+            }),
+            None,
+            limits,
+            900,
+        )
+        .await
+        .unwrap()
+        .camera;
+    let frozen = HealthObservation {
+        camera: Some((camera.id, camera.revision)),
+        issue: HealthIssue::CameraFrozen,
+        active: true,
+    };
+    let disk = HealthObservation::global(HealthIssue::DiskSpaceLow, true);
+    store
+        .record_health(vec![frozen, disk], 1_000)
+        .await
+        .unwrap();
+    store
+        .record_health(vec![frozen, disk], 2_000)
+        .await
+        .unwrap();
+    let newest = store.health_events(None, 1, false, None).await.unwrap();
+    assert_eq!(newest.next, Some(Counter(2)));
+    assert_eq!(newest.events[0].camera_id, None);
+    let scope = Some(vec![camera.id]);
+    let older = store
+        .health_events(newest.next, 1, false, scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(older.events[0].opened_at.unix_millis(), 1_000);
+    assert_eq!(older.events[0].camera_id, Some(camera.id));
+    assert_eq!(older.next, None);
+    let hidden = store
+        .health_events(None, 5, true, Some(vec![Uuid::new_v4()]))
+        .await
+        .unwrap();
+    assert_eq!(hidden.events, newest.events);
+
+    drop(store);
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    assert_eq!(
+        store
+            .health_events(None, 5, false, scope.clone())
+            .await
+            .unwrap()
+            .events
+            .len(),
+        2
+    );
+    store.record_health(vec![frozen], 3_000).await.unwrap();
+    store
+        .mutate_camera(
+            CameraCommand {
+                actor,
+                key: "health-delete".parse().unwrap(),
+                action: CameraAction::Delete {
+                    id: camera.id,
+                    revision: camera.revision,
+                },
+            },
+            None,
+            None,
+            limits,
+            4_000,
+        )
+        .await
+        .unwrap();
+    store.record_health(vec![frozen], 5_000).await.unwrap();
+    let active = store
+        .health_events(None, 5, true, scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(active.events, newest.events);
+    let history = store
+        .health_events(None, 5, false, scope.clone())
+        .await
+        .unwrap();
+    assert_eq!(history.events.len(), 2);
+    assert_eq!(history.events[1].ended_at.unwrap().unix_millis(), 4_000);
+
+    store.retain_history(4_000, 5_001).await.unwrap();
+    let retained = store.health_events(None, 5, false, scope).await.unwrap();
+    assert_eq!(retained.events, newest.events);
+}
 
 fn incident() -> NewIncident {
     NewIncident {

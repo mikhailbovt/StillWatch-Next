@@ -9,6 +9,7 @@ import type { ArrayOf_CaptureDevice } from "./generated/CaptureDevices.js";
 import type { ArrayOf_Device } from "./generated/Devices.js";
 import type { EvidencePacket } from "./generated/EvidencePacket.js";
 import type { Health } from "./generated/Health.js";
+import type { HealthEvent, HealthEventPage } from "./generated/HealthEventPage.js";
 import type { Incident } from "./generated/Incident.js";
 import type { IncidentPage } from "./generated/IncidentPage.js";
 import type { ArrayOf_OnvifDevice } from "./generated/OnvifDevices.js";
@@ -32,6 +33,7 @@ import type { CoreStatus } from "./generated/CoreStatus.js";
 export type { Bootstrap, Camera, CameraConfig, CameraPatch, CoreStatus, EvidencePacket, Incident, PairingOffer, PairingRequest, ReplayUpload, Snapshot, StreamGrant };
 export type { ArrayOf_OnvifDevice, ArrayOf_OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest };
 export type { ChangeEvent };
+export type { HealthEvent, HealthEventPage };
 export { CoreError, Cursor, counter };
 
 export interface Credentials {
@@ -90,6 +92,13 @@ export class StillWatchClient {
 
   semanticStatus(signal?: AbortSignal): Promise<SemanticStatus> {
     return this.#json("GET", "/api/v2/semantic-status", { signal });
+  }
+
+  healthEvents(options: { before?: string; limit?: number; activeOnly?: boolean; signal?: AbortSignal } = {}): Promise<HealthEventPage> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 100) });
+    if (options.before !== undefined) query.set("before", counter(options.before));
+    if (options.activeOnly) query.set("active_only", "true");
+    return this.#json("GET", "/api/v2/health-events?" + query, { signal: options.signal });
   }
 
   cameras(after?: string, limit = 100, signal?: AbortSignal): Promise<CameraPage> {

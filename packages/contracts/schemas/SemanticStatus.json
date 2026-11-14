@@ -26,6 +26,12 @@
         "null"
       ]
     },
+    "route_ready": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "sdk_version": {
       "type": [
         "string",

@@ -7,8 +7,8 @@ use schemars::{JsonSchema, generate::SchemaSettings};
 use sw_protocol::{
     AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisStatus, Bootstrap, Camera, CameraConfig,
     CameraPage, CameraPatch, CaptureDevice, Change, CoreStatus, Counter, Cursor, Device,
-    DeviceCredentials, EvidencePacket, FeedbackRequest, Health, Incident, IncidentPage,
-    OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest,
+    DeviceCredentials, EvidencePacket, FeedbackRequest, Health, HealthEventPage, Incident,
+    IncidentPage, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest,
     PairingFinish, PairingOffer, PairingRequest, Problem, RefreshRequest, ReplayUpload,
     ResolveRequest, SemanticStatus, SilenceRequest, Snapshot, SourceProbe, SourceProbeRequest,
     StreamGrant, StreamRequest,
@@ -31,6 +31,7 @@ fn contracts(check: bool) -> Result<()> {
     write_schema::<Counter>(&root, "Counter", check)?;
     write_schema::<Cursor>(&root, "Cursor", check)?;
     write_schema::<Health>(&root, "Health", check)?;
+    write_schema::<HealthEventPage>(&root, "HealthEventPage", check)?;
     write_schema::<CoreStatus>(&root, "CoreStatus", check)?;
     write_schema::<Bootstrap>(&root, "Bootstrap", check)?;
     write_schema::<Camera>(&root, "Camera", check)?;

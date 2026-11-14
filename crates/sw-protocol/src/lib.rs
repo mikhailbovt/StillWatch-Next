@@ -3,6 +3,7 @@
 mod alerts;
 mod cameras;
 mod evidence;
+mod health;
 mod media;
 mod onvif;
 mod primitives;
@@ -17,6 +18,7 @@ use uuid::Uuid;
 pub use alerts::*;
 pub use cameras::*;
 pub use evidence::*;
+pub use health::*;
 pub use media::*;
 pub use onvif::*;
 pub use primitives::{Counter, Cursor, IdempotencyKey, InvalidValue, Reason, UtcTimestamp};

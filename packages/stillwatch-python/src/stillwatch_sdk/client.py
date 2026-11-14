@@ -153,6 +153,14 @@ class AsyncClient:
     async def semantic_status(self) -> Json:
         return await self._object("GET", "/api/v2/semantic-status")
 
+    async def health_events(self, *, before: str | None = None, limit: int = 100, active_only: bool = False) -> Json:
+        params: dict[str, str | int] = {"limit": limit}
+        if before is not None:
+            params["before"] = counter(before)
+        if active_only:
+            params["active_only"] = "true"
+        return await self._object("GET", "/api/v2/health-events", params=params)
+
     async def cameras(self, *, after: str | None = None, limit: int = 100) -> Json:
         return await self._object("GET", "/api/v2/cameras", params=_page(uuid(after) if after is not None else None, limit))
 

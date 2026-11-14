@@ -4,6 +4,7 @@ mod alerts;
 mod auth;
 mod cameras;
 mod errors;
+mod health;
 mod incidents;
 mod media;
 mod stream;
@@ -109,6 +110,7 @@ fn router(state: Api) -> Router {
         .route("/health/ready", get(readiness))
         .route("/api/v2/status", get(core_status))
         .route("/api/v2/semantic-status", get(semantic_status))
+        .route("/api/v2/health-events", get(health::list))
         .route("/api/v2/incidents", get(incidents::list))
         .route("/api/v2/incidents/{id}", get(incidents::detail))
         .route(

@@ -161,6 +161,7 @@ impl SemanticSupervisor {
             },
             status: RwLock::new(SemanticStatus {
                 state: SemanticState::Connecting,
+                route_ready: None,
                 last_inference_source: None,
                 sdk_version: None,
                 cloud_model: None,
@@ -175,6 +176,7 @@ impl SemanticSupervisor {
     pub fn disabled() -> SemanticStatus {
         SemanticStatus {
             state: SemanticState::Disabled,
+            route_ready: None,
             last_inference_source: None,
             sdk_version: None,
             cloud_model: None,
@@ -251,7 +253,11 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
                                         }
                                         .into(),
                                     );
-                                    status.state = SemanticState::Available;
+                                    status.state = if status.used_today < self.config.daily_limit {
+                                        SemanticState::Available
+                                    } else {
+                                        SemanticState::Degraded
+                                    };
                                 }
                                 Ok(false) => {}
                                 Err(_) => status.state = SemanticState::Degraded,
@@ -290,7 +296,9 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
             .semantic_usage(now.div_euclid(86_400_000) * 86_400_000)
             .await;
         if let Ok(mut status) = self.status.write() {
-            status.state = if capabilities.is_some_and(|info| ready(info, self.config.route))
+            let route_ready = capabilities.is_some_and(|info| ready(info, self.config.route));
+            status.route_ready = Some(route_ready);
+            status.state = if route_ready
                 && used
                     .as_ref()
                     .is_ok_and(|used| *used < self.config.daily_limit)

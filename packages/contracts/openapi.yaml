@@ -42,6 +42,27 @@ paths:
             application/json:
               schema: { $ref: schemas/CoreStatus.json }
         default: { $ref: '#/components/responses/Problem' }
+  /api/v2/health-events:
+    get:
+      operationId: listHealthEvents
+      parameters:
+        - name: before
+          in: query
+          description: Exclusive sequence cursor from the previous page. Omit for the newest intervals.
+          schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: active_only
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Core-wide and authorized camera health intervals, newest first. An interval is active until ended_at is set.
+          content:
+            application/json:
+              schema: { $ref: schemas/HealthEventPage.json }
+        default: { $ref: '#/components/responses/Problem' }
   /api/v2/pairing:
     post:
       operationId: issuePairing

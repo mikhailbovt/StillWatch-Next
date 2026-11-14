@@ -5,6 +5,7 @@ mod backup;
 mod cameras;
 mod db;
 mod evidence;
+mod health;
 mod legacy;
 mod retention;
 mod semantic;
@@ -38,6 +39,7 @@ pub use cameras::{CameraAction, CameraCommand, CameraLimits, CameraRecord, Camer
 pub use evidence::{
     EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceResult, EvidenceWrite,
 };
+pub use health::{HealthIssue, HealthObservation};
 pub use legacy::{LegacyImport, LegacyManifest, import_legacy};
 pub use semantic::{SemanticOutcome, SemanticWork};
 pub use trust::{DeviceAccess, PairingGrant};

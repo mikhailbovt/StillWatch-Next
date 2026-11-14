@@ -4,7 +4,7 @@ use sw_domain::UnixMillis;
 use crate::{Store, StoreError};
 
 impl Store {
-    /// Remove expired administrative records and old resolved incident history.
+    /// Remove expired administrative records and ended health and incident history.
     /// Open incidents and unexpired evidence stay available for review.
     pub async fn retain_history(
         &self,
@@ -56,6 +56,8 @@ impl Store {
             tx.execute("DELETE FROM pairing_grants WHERE expires_at <= ?", [now])?;
             tx.execute("DELETE FROM retired_refresh_credentials WHERE expires_at <= ?", [now])?;
             tx.execute("DELETE FROM device_sessions WHERE refresh_expiry <= ?", [now])?;
+            tx.execute("DELETE FROM health_events WHERE sequence IN (
+                SELECT sequence FROM health_events WHERE ended_at <= ? ORDER BY ended_at, sequence LIMIT 512)", [cutoff])?;
             tx.execute("DELETE FROM trust_audit WHERE sequence IN (
                 SELECT sequence FROM trust_audit WHERE occurred_at <= ? ORDER BY occurred_at, sequence LIMIT 512)", [cutoff])?;
             tx.execute("DELETE FROM trusted_devices WHERE id IN (

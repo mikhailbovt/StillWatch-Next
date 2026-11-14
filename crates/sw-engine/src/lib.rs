@@ -18,7 +18,7 @@ pub use capture_process::{
 pub use inference_process::verify_inference_startup;
 pub use media::{MediaAnswer, MediaConfig, MediaError, MediaService, TurnConfig};
 pub use onvif::{OnvifConfig, OnvifError};
-pub use registry::{CameraFrame, CameraRegistry, RegistryError, SourceConfig};
+pub use registry::{CameraFrame, CameraHealth, CameraRegistry, RegistryError, SourceConfig};
 pub use semantic::{
     FirebaseProvider, SemanticConfig, SemanticProvider, SemanticProviderError, SemanticSupervisor,
 };

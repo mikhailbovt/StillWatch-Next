@@ -134,6 +134,9 @@ def run(args):
         port = free_port()
         origin = f"http://127.0.0.1:{port}"
         config.write_text(json.dumps(fake_public_config | {"mode": "cloud_node"}), encoding="utf8")
+        encoded = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+        valid_claims = {"exp": int(time.time()) + 120, "sub": "1:000:web:offline-fixture",
+                        "iss": "https://firebaseappcheck.googleapis.com/000", "aud": ["projects/offline-fixture"]}
         with launch([str(node), str(entry), str(config), str(port), str(core_token), str(app_check)],
                     root / "cloud.log"):
             until(lambda: check_port(port))
@@ -145,9 +148,6 @@ def run(args):
             assert request(origin, "/evaluate", core_credential, fire_packet(), binary=True)[0] == 502
             # These fixtures only exercise local claim checks. No token is
             # presented to Firebase by the health endpoint.
-            encoded = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
-            valid_claims = {"exp": int(time.time()) + 120, "sub": "1:000:web:offline-fixture",
-                            "iss": "https://firebaseappcheck.googleapis.com/000", "aud": ["projects/offline-fixture"]}
             for claims, ready in ((valid_claims, True), (valid_claims | {"exp": 1}, False),
                                   (valid_claims | {"sub": "1:000:web:other"}, False),
                                   (valid_claims | {"aud": ["projects/other"]}, False)):
@@ -157,7 +157,10 @@ def run(args):
             if args.core:
                 with run_core(args.core, args.worker, root / "core", root, root / "core.log",
                               "--semantic-worker", f"127.0.0.1:{port}",
-                              "--semantic-token-file", str(core_token)) as (_, client):
+                              "--semantic-token-file", str(core_token),
+                              "--semantic-daily-limit", "1") as (_, client):
+                    from analysis_core import health_events
+
                     def connected():
                         _, state = client.call("GET", "/api/v2/semantic-status")
                         return state if state["state"] == "degraded" and state["sdk_version"] else None
@@ -166,6 +169,36 @@ def run(args):
                     assert state["sdk_version"] == "13.3.0"
                     assert state["last_inference_source"] is None and state["used_today"] == 0
                     assert client.call("GET", "/health/ready")[0] == 200
+                    unavailable, = until(lambda: health_events(client, "semantic_unavailable", active_only=True), 5)
+
+                    # Seed one committed usage reservation from this UTC day.
+                    # The worker only reports capabilities. No evidence is submitted.
+                    from sdk_core import create_camera, open_incident
+
+                    database = root / "core" / "stillwatch.sqlite3"
+                    camera = create_camera(client, "Budget reference camera")
+                    open_incident(database, camera, 0)
+                    with closing(sqlite3.connect(database)) as db, db:
+                        incident, = db.execute("SELECT id FROM incidents").fetchone()
+                        packet = uuid.uuid4().bytes
+                        now = time.time_ns() // 1_000_000
+                        db.execute(
+                            "INSERT INTO evidence_packets(id, incident_id, version, incident_revision, "
+                            "captured_at, expires_at, request_hash) VALUES (?, ?, 1, 1, ?, ?, ?)",
+                            (packet, incident, now, now + 60000, bytes(32)),
+                        )
+                        db.execute(
+                            "INSERT INTO semantic_attempts(packet_id, route, incident_id, camera_id, started_at) "
+                            "VALUES (?, 'cloud_only', ?, ?, ?)",
+                            (packet, incident, uuid.UUID(camera).bytes, now),
+                        )
+                    until(lambda: health_events(client, "semantic_budget_exhausted", active_only=True), 10)
+                    assert len(health_events(client, "semantic_unavailable", active_only=True)) == 1
+                    private(app_check, f"{encoded({'alg': 'RS256'})}.{encoded(valid_claims)}.fixture")
+                    until(lambda: not health_events(client, "semantic_unavailable", active_only=True), 10)
+                    ended, = health_events(client, "semantic_unavailable")
+                    assert ended["sequence"] == unavailable["sequence"] and ended["ended_at"]
+                    assert len(health_events(client, "semantic_budget_exhausted", active_only=True)) == 1
         port = free_port()
         origin = f"http://127.0.0.1:{port}"
         config.write_text(json.dumps(fake_public_config | {"mode": "hybrid_web"}), encoding="utf8")
@@ -183,6 +216,7 @@ def run(args):
         print(json.dumps({"node_and_hybrid_started": True, "scope_and_origin_enforced": True,
                           "invalid_app_check_fails_closed": True, "core_capability_handshake": bool(args.core),
                           "bounded_browser_long_poll": True, "local_only_denies_attestation": True,
+                          "health_route_and_quota_independent": bool(args.core),
                           "firebase_network_inference": False}))
 
 

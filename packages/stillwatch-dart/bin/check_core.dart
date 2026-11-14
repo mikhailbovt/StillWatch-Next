@@ -46,6 +46,16 @@ Future<void> main(List<String> arguments) async {
       cameras.items.length == 1 && cameras.items.single.id == options['camera'],
       'Camera scope mismatch',
     );
+    final health = await client.healthEvents(limit: 1);
+    check(
+      health.items.single.cameraId == options['camera'] && health.next != null,
+      'Camera health scope mismatch',
+    );
+    final older = await client.healthEvents(before: health.next, limit: 1);
+    check(
+      older.items.single.cameraId == null && older.next == null,
+      'Health page mismatch',
+    );
     final cursor = (reads[0] as Snapshot).cursor;
     final markers = options['reconnect_markers'] as String?;
     if (markers != null) {

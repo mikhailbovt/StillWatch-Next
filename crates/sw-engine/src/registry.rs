@@ -75,6 +75,8 @@ struct State {
     dropped: u64,
     last: Option<(u64, Instant)>,
     repeated_frame: bool,
+    retrying: bool,
+    clock_held: bool,
 }
 
 struct Slot {
@@ -105,6 +107,16 @@ pub struct SourceConfig {
     pub rtsp_peers: HashSet<SocketAddr>,
     pub credentials_root: Option<PathBuf>,
     pub onvif: OnvifConfig,
+}
+
+pub struct CameraHealth {
+    pub id: Uuid,
+    pub revision: u64,
+    pub phase: CaptureState,
+    pub retrying: bool,
+    pub repeated_frame: bool,
+    pub clock_held: bool,
+    pub usable_epoch: Option<u64>,
 }
 
 impl CameraRegistry {
@@ -168,6 +180,8 @@ impl CameraRegistry {
             dropped: 0,
             last: None,
             repeated_frame: false,
+            retrying: false,
+            clock_held: false,
         });
         let (frame, last_frame_age_ms) = state.last.map_or((None, None), |(frame, time)| {
             (
@@ -204,6 +218,34 @@ impl CameraRegistry {
 
     pub fn latest(&self, id: Uuid) -> Option<Arc<CameraFrame>> {
         self.slots.read().ok()?.get(&id)?.latest.borrow().clone()
+    }
+
+    pub fn capture_health(&self) -> Option<Vec<CameraHealth>> {
+        let slots = self.slots.read().ok()?;
+        Some(
+            slots
+                .iter()
+                .map(|(&id, slot)| {
+                    let current = slot.current.borrow().clone();
+                    CameraHealth {
+                        id,
+                        revision: slot.revision,
+                        phase: current.phase,
+                        retrying: current.retrying,
+                        repeated_frame: current.repeated_frame,
+                        clock_held: current.clock_held,
+                        usable_epoch: slot.latest.borrow().as_ref().and_then(|frame| {
+                            (matches!(
+                                current.phase,
+                                CaptureState::Streaming | CaptureState::Replaying
+                            ) && frame.usable_for_analysis
+                                && frame.captured_at.elapsed() <= FRAME_TIMEOUT)
+                                .then_some(frame.scope.epoch)
+                        }),
+                    }
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn inference_lane(&self, id: Uuid) -> Option<usize> {
@@ -611,6 +653,8 @@ impl CameraRegistry {
                 dropped: 0,
                 last: None,
                 repeated_frame: false,
+                retrying: false,
+                clock_held: false,
             });
             let (frame, latest) = watch::channel(None);
             if let Ok(mut slots) = self.slots.write() {
@@ -838,6 +882,10 @@ impl CameraRegistry {
                     state.last = Some((frame_id, now));
                 }
                 state.repeated_frame = content.holding;
+                state.retrying = false;
+                state.clock_held = clock
+                    .hold_started
+                    .is_some_and(|since| now.duration_since(since) >= Duration::from_secs(3));
             });
         }
     }
@@ -854,6 +902,10 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
     state.send_modify(|state| {
         state.phase = phase;
         state.repeated_frame = false;
+        state.clock_held = false;
+        if phase == CaptureState::Retrying {
+            state.retrying = true;
+        }
     });
 }
 

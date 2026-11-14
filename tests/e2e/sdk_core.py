@@ -80,6 +80,7 @@ def python_client():
     with Client(registration.core, seed=registration.seed, credentials=registration.credentials, persist=lambda _: None) as client:
         assert client.core()["instance_id"] == registration.core.instance
         assert [camera["id"] for camera in client.cameras()["cameras"]] == [options["camera"]]
+        assert client.health_events(active_only=True)["events"][0]["camera_id"] is None
     registration.credentials["access_expires_at"] = "2001-01-01T00:00:00Z"
 
     async def check():
@@ -93,6 +94,10 @@ def python_client():
             snapshot, _, cameras = await asyncio.gather(client.snapshot(), client.snapshot(), client.cameras())
             assert refreshes == 1
             assert [camera["id"] for camera in cameras["cameras"]] == [options["camera"]]
+            health = await client.health_events(limit=1)
+            assert health["events"][0]["camera_id"] == options["camera"] and health["next"]
+            older = await client.health_events(before=health["next"], limit=1)
+            assert older["events"][0]["camera_id"] is None and older["next"] is None
             marker_dir = options.get("reconnect_markers")
             if marker_dir:
                 (Path(marker_dir) / "ready-python").touch(exist_ok=False)
@@ -156,6 +161,15 @@ def run(args):
             _, local = writer.enter_context(run_core(args.core, args.worker, data, sources, root / "core.log", *flags))
             visible = create_camera(local, "Visible SDK camera")
             hidden = create_camera(local, "Hidden SDK camera")
+            # Deliberate DB fixtures for scope, without depending on capture timing.
+            with closing(sqlite3.connect(data / "stillwatch.sqlite3", timeout=3)) as db, db:
+                timestamp = time.time_ns() // 1_000_000
+                db.executemany(
+                    "INSERT INTO health_events(camera_id, code, opened_at, ended_at) VALUES (?,?,?,?)",
+                    [(None, "semantic_unavailable", timestamp, None),
+                     (UUID(visible).bytes, "camera_frozen", timestamp, timestamp),
+                     (UUID(hidden).bytes, "camera_offline", timestamp, None)],
+                )
             commands = {
                 "python": [sys.executable, __file__, "--python-client"],
                 "dart": [str(args.dart), "run", "bin/check_core.dart", str(FIXTURE)],
@@ -203,7 +217,8 @@ def run(args):
                         process.kill()
                         process.wait()
         print(json.dumps({"sdk": list(commands), "pinned_tls": True, "scoped_sse": True,
-                          "counter_fixtures": True, "https_proxy": bool(args.nginx), "core_restart_resume": reconnect}))
+                          "counter_fixtures": True, "scoped_health_history": True,
+                          "https_proxy": bool(args.nginx), "core_restart_resume": reconnect}))
 
 
 if __name__ == "__main__":

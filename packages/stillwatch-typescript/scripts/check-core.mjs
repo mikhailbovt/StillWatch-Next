@@ -23,6 +23,12 @@ try {
   const [snapshot, , cameras] = await Promise.all([client.snapshot(), client.snapshot(), client.cameras()]);
   assert.equal(refreshes, 1);
   assert.deepEqual(cameras.cameras.map(camera => camera.id), [options.camera]);
+  const health = await client.healthEvents({ limit: 1 });
+  assert.deepEqual(health.events.map(event => event.camera_id), [options.camera]);
+  assert(health.next);
+  const older = await client.healthEvents({ limit: 1, before: health.next });
+  assert.deepEqual(older.events.map(event => event.camera_id), [null]);
+  assert.equal(older.next, null);
   const markers = options.reconnect_markers;
   if (markers) await writeFile(join(markers, "ready-typescript"), "", { flag: "wx" });
   const stream = client.changes(new Cursor(snapshot.cursor), AbortSignal.timeout(60_000));

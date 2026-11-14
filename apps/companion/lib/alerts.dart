@@ -19,12 +19,16 @@ final class LocalAlerts extends ChangeNotifier {
   final _notifications = FlutterLocalNotificationsPlugin();
   final _active = <String, int>{};
   static const _preference = 'stillwatch.alerts.foreground';
+  static const _blockedAtKey = 'stillwatch.alerts.permission_blocked_at';
   static const _urgentChannel = 'stillwatch-urgent';
   bool enabled = false;
   bool available = false;
-  bool allowedBySystem = true;
+  DateTime? permissionBlockedAt;
   bool _busy = false;
+  bool _changingPreference = false;
   bool _closed = false;
+  bool _wasForeground = true;
+  Future<bool>? _permissionCheck;
   Timer? _poll;
 
   Future<void> initialize() async {
@@ -66,6 +70,9 @@ final class LocalAlerts extends ChangeNotifier {
       );
       available = true;
       enabled = await storage.read(key: _preference) == 'yes';
+      permissionBlockedAt = DateTime.tryParse(
+        await storage.read(key: _blockedAtKey) ?? '',
+      )?.toUtc();
       await _checkPermissions();
       if (enabled) _connectionChanged();
       final launch = await _notifications.getNotificationAppLaunchDetails();
@@ -80,32 +87,60 @@ final class LocalAlerts extends ChangeNotifier {
   }
 
   Future<void> setEnabled(bool value) async {
+    if (_changingPreference) return;
     if (!available) throw const StillWatchException('notification_unavailable');
-    if (value) {
-      final allowed = switch (Platform.operatingSystem) {
-        'android' =>
-          await _notifications
-              .resolvePlatformSpecificImplementation<
-                AndroidFlutterLocalNotificationsPlugin
-              >()
-              ?.requestNotificationsPermission(),
-        'ios' =>
-          await _notifications
-              .resolvePlatformSpecificImplementation<
-                IOSFlutterLocalNotificationsPlugin
-              >()
-              ?.requestPermissions(alert: true, sound: true, badge: false),
-        _ => true,
-      };
-      if (allowed != true) {
-        throw const StillWatchException('notification_permission');
+    _changingPreference = true;
+    try {
+      try {
+        await _permissionCheck;
+      } catch (_) {
+        // Retry the system check after changing the preference.
       }
+      if (value) {
+        final allowed = switch (Platform.operatingSystem) {
+          'android' =>
+            await _notifications
+                .resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin
+                >()
+                ?.requestNotificationsPermission(),
+          'ios' =>
+            await _notifications
+                .resolvePlatformSpecificImplementation<
+                  IOSFlutterLocalNotificationsPlugin
+                >()
+                ?.requestPermissions(alert: true, sound: true, badge: false),
+          _ => true,
+        };
+        if (allowed != true) {
+          await _recordPermission(false, requested: true);
+          throw const StillWatchException('notification_permission');
+        }
+      }
+      await storage.write(key: _preference, value: value ? 'yes' : 'no');
+      enabled = value;
+      await _checkPermissions();
+    } finally {
+      _changingPreference = false;
+      _connectionChanged();
+      if (!_closed) notifyListeners();
     }
-    await storage.write(key: _preference, value: value ? 'yes' : 'no');
-    enabled = value;
-    await _checkPermissions();
-    _connectionChanged();
-    if (!_closed) notifyListeners();
+  }
+
+  Future<bool> _refreshPermissions() async {
+    if (_permissionCheck case final pending?) {
+      return pending.onError((_, _) => false);
+    }
+    final check = _checkPermissions();
+    _permissionCheck = check;
+    try {
+      return await check;
+    } catch (_) {
+      // The notification service can be unavailable during app transitions.
+      return false;
+    } finally {
+      _permissionCheck = null;
+    }
   }
 
   Future<bool> _checkPermissions() async {
@@ -136,19 +171,48 @@ final class LocalAlerts extends ChangeNotifier {
     } else {
       allowed = true;
     }
-    if (!_closed && allowedBySystem != allowed) {
-      allowedBySystem = allowed;
-      notifyListeners();
-    }
+    await _recordPermission(allowed);
     return allowed;
   }
 
+  Future<void> _recordPermission(bool allowed, {bool requested = false}) async {
+    if (_closed) return;
+    final previous = permissionBlockedAt;
+    if (allowed) {
+      permissionBlockedAt = null;
+    } else if (enabled || requested) {
+      permissionBlockedAt ??= DateTime.now().toUtc();
+    }
+    if (previous != permissionBlockedAt) {
+      notifyListeners();
+      try {
+        final blocked = permissionBlockedAt;
+        if (blocked == null) {
+          await storage.delete(key: _blockedAtKey);
+        } else {
+          await storage.write(
+            key: _blockedAtKey,
+            value: blocked.toIso8601String(),
+          );
+        }
+      } catch (_) {
+        // Keep the current device permission visible if secure storage is unavailable.
+      }
+    }
+  }
+
   void _connectionChanged() {
-    if (_closed ||
-        !enabled ||
+    if (_closed) return;
+    final resumed = console.foreground && !_wasForeground;
+    _wasForeground = console.foreground;
+    if (resumed && available && !_changingPreference) {
+      unawaited(_refreshPermissions());
+    }
+    if (!enabled ||
         !available ||
         !console.foreground ||
-        console.link != LinkState.connected) {
+        console.link != LinkState.connected ||
+        _changingPreference) {
       _poll?.cancel();
       _poll = null;
       if (_active.isNotEmpty) unawaited(_removeAll());
@@ -165,10 +229,10 @@ final class LocalAlerts extends ChangeNotifier {
 
   Future<void> _sync() async {
     final profile = console.selected;
-    if (profile == null || _busy || _closed) return;
+    if (profile == null || _busy || _closed || _changingPreference) return;
     _busy = true;
     try {
-      if (!await _checkPermissions()) {
+      if (!await _refreshPermissions()) {
         if (_active.isNotEmpty) await _removeAll();
         return;
       }
@@ -251,6 +315,7 @@ final class LocalAlerts extends ChangeNotifier {
   bool _canNotify(CoreProfile profile) =>
       enabled &&
       !_closed &&
+      !_changingPreference &&
       console.foreground &&
       console.selected == profile &&
       console.link == LinkState.connected;

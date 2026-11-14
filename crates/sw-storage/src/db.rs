@@ -23,7 +23,7 @@ use crate::{
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
 pub const APPLICATION_ID: i64 = 0x53574e32;
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
@@ -432,7 +432,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match (application_id, version) {
         (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
-        (APPLICATION_ID, 1..=6) => {
+        (APPLICATION_ID, 1..=7) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 1 {
                 tx.execute_batch(include_str!("migrations/002.sql"))?;
@@ -449,7 +449,10 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             if version <= 5 {
                 tx.execute_batch(include_str!("migrations/006.sql"))?;
             }
-            tx.execute_batch(include_str!("migrations/007.sql"))?;
+            if version <= 6 {
+                tx.execute_batch(include_str!("migrations/007.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/008.sql"))?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -471,6 +474,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             tx.execute_batch(include_str!("migrations/005.sql"))?;
             tx.execute_batch(include_str!("migrations/006.sql"))?;
             tx.execute_batch(include_str!("migrations/007.sql"))?;
+            tx.execute_batch(include_str!("migrations/008.sql"))?;
             tx.execute(
                 "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
                 params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],

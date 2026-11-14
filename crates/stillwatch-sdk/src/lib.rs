@@ -18,15 +18,21 @@ pub use sw_protocol as protocol;
 use sw_protocol::{
     AcknowledgeRequest, AlertFeed, AlertReceipt, AnalysisStatus, ApiVersion, Bootstrap, Camera,
     CameraConfig, CameraPage, CameraPatch, CaptureDevice, Counter, Device, EvidencePacket,
-    FeedbackRequest, Health, IdempotencyKey, Incident, IncidentPage, MAX_REPLAY_UPLOAD_BYTES,
-    OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, PairingOffer,
-    PairingRequest, Problem, ReplayUpload, ResolveRequest, SemanticStatus, SilenceRequest,
-    Snapshot, SourceProbe, SourceProbeRequest, StreamGrant, StreamRequest,
+    FeedbackRequest, Health, HealthEventPage, IdempotencyKey, Incident, IncidentPage,
+    MAX_REPLAY_UPLOAD_BYTES, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
+    OnvifStreamRequest, PairingOffer, PairingRequest, Problem, ReplayUpload, ResolveRequest,
+    SemanticStatus, SilenceRequest, Snapshot, SourceProbe, SourceProbeRequest, StreamGrant,
+    StreamRequest,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const CAMERA_SETUP_TIMEOUT: Duration = Duration::from_secs(22);
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
+
+fn health_events_path(before: Option<Counter>, limit: u16, active_only: bool) -> String {
+    let before = before.map_or_else(String::new, |sequence| format!("&before={sequence}"));
+    format!("/api/v2/health-events?limit={limit}&active_only={active_only}{before}")
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -155,6 +161,16 @@ impl Client {
 
     pub async fn semantic_status(&self) -> Result<SemanticStatus, Error> {
         self.get("/api/v2/semantic-status").await
+    }
+
+    pub async fn health_events(
+        &self,
+        before: Option<Counter>,
+        limit: u16,
+        active_only: bool,
+    ) -> Result<HealthEventPage, Error> {
+        self.get(&health_events_path(before, limit, active_only))
+            .await
     }
 
     pub async fn cameras(&self, after: Option<Uuid>, limit: u16) -> Result<CameraPage, Error> {

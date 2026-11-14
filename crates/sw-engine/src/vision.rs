@@ -109,7 +109,11 @@ impl VisionScheduler {
                 .iter()
                 .filter(|lane| lane.state == AnalysisState::Ready)
                 .count();
-            result.failure = progress.lanes.iter().find_map(|lane| lane.failure);
+            result.failure = progress
+                .lanes
+                .iter()
+                .filter_map(|lane| lane.failure)
+                .min_by_key(|failure| *failure != InferenceFailure::ModelPackUnavailable);
             result.state = if result.ready_workers == self.lanes {
                 AnalysisState::Ready
             } else if result.failure.is_some() {

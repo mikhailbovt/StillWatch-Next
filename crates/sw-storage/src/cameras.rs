@@ -196,6 +196,13 @@ impl Store {
                     camera.reviewed_scene],
             )?;
             tx.execute("INSERT INTO camera_config_versions VALUES (?, ?, ?, ?, ?, ?)", params![id(&camera.id), revision, id(&command.actor), now, config, deleted])?;
+            if !camera.config.enabled {
+                tx.execute(
+                    "UPDATE health_events SET ended_at = max(opened_at, ?1)
+                     WHERE ended_at IS NULL AND ifnull(camera_id, X'') = ?2",
+                    params![now, id(&camera.id)],
+                )?;
+            }
             let result = CameraResult { camera, deleted };
             let response = serde_json::to_string(&result)?;
             let hash = action_hash(&command.action)?;

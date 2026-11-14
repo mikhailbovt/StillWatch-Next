@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import socket
 import subprocess
 import sqlite3
@@ -19,6 +20,15 @@ from tempfile import TemporaryDirectory
 
 from replay_core import capture_children, run_core, until, workers_alive
 from rtsp_core import check_port, free_port, launch
+
+
+def health_events(client, code, camera_id=None, *, active_only=False):
+    status, page = client.call("GET", f"/api/v2/health-events?active_only={str(active_only).lower()}")
+    assert status == 200, (status, page)
+    return [
+        event for event in page["events"]
+        if event["code"] == code and event["camera_id"] == camera_id
+    ]
 
 
 def digest(path):
@@ -105,6 +115,8 @@ def run(args):
             verify_repeated_frames(args, root, model_options)
         if args.worker_faults:
             verify_inference_recovery(args, root, model_options)
+        if args.model_fault:
+            verify_corrupt_model(args, root, model_options)
 
 
 def inference_worker(parent):
@@ -153,6 +165,7 @@ def verify_inference_recovery(args, root, model_options):
             assert state["state"] == "degraded"
             assert all(state[name] is None for name in ("people", "fire_regions", "smoke_regions"))
             assert client.call("GET", "/health/ready")[0] == 200
+            until(lambda: health_events(client, "inference_unavailable", active_only=True))
 
             def recovered():
                 value = ready()
@@ -164,8 +177,44 @@ def verify_inference_recovery(args, root, model_options):
 
             initial = until(recovered, 30)
             assert inference_worker(process.pid) != pid
+            until(lambda: not health_events(client, "inference_unavailable", active_only=True), 5)
+        assert len(health_events(client, "inference_unavailable")) == 2
         print(json.dumps({"native_inference_hang_reaped": True, "native_inference_crash_restarted": True,
-                          "unavailable_observations_hidden": True, "core_stayed_live": True}))
+                          "unavailable_observations_hidden": True, "core_stayed_live": True,
+                          "inference_failures_recorded_and_ended": True}))
+
+
+def verify_corrupt_model(args, root, model_options):
+    damaged = root / "corrupt-model-pack"
+    damaged.mkdir()
+    shutil.copyfile(args.models / "models.lock.json", damaged / "models.lock.json")
+    manifest = json.loads((damaged / "models.lock.json").read_bytes())
+    for name, entry in manifest["models"].items():
+        artifact = entry["artifact"]
+        if name == "fire":
+            (damaged / artifact).write_bytes(b"rejected artifact")
+        else:
+            shutil.copyfile(args.models / artifact, damaged / artifact)
+    assert manifest["models"]["fire"]["artifact"]
+    data = root / "corrupt-model-data"
+    with run_core(args.core, args.worker, data, root, root / "corrupt-model-core.log",
+                  "--model-pack", str(damaged), *model_options[2:]) as (_, client):
+        initial = until(lambda: health_events(client, "model_pack_unverified", active_only=True))
+        assert len(initial) == 1, initial
+        assert health_events(client, "inference_unavailable", active_only=True)
+        _, status = client.call("GET", "/api/v2/status")
+        assert status["inference"]["failure"] == "model_pack_unavailable", status
+        assert client.call("GET", "/health/ready")[0] == 200
+    with run_core(args.core, args.worker, data, root, root / "verified-model-core.log",
+                  *model_options) as (_, client):
+        ended = until(
+            lambda: event if (event := health_events(client, "model_pack_unverified")[0])["ended_at"] else None
+        )
+        assert ended["sequence"] == initial[0]["sequence"]
+        assert ended["opened_at"] == initial[0]["opened_at"]
+        assert not health_events(client, "inference_unavailable", active_only=True)
+        assert client.call("GET", "/api/v2/incidents")[1]["incidents"] == []
+    print(json.dumps({"model_hash_mismatch_recorded": True, "same_interval_ended_after_restart": True}))
 
 
 def rtsp_router(root, name):
@@ -241,7 +290,8 @@ def verify_repeated_frames(args, root, model_options):
     # Keyframes are losslessly repeated so decoder noise cannot imitate movement.
     with launch([str(args.mediamtx), str(config)], root / "repeated-media.log"):
         until(lambda: check_port(port))
-        with run_core(args.core, args.worker, root / "repeated-data", root, root / "repeated-core.log",
+        data = root / "repeated-data"
+        with run_core(args.core, args.worker, data, root, root / "repeated-core.log",
                       *model_options, "--rtsp-peer", peer, *snapshot_flags(args)) as (_, client):
             with launch(publish, root / "repeated-publisher.log") as publisher:
                 source = {"type": "rtsp", "peer": peer, "stream_path": "/fixture",
@@ -275,6 +325,9 @@ def verify_repeated_frames(args, root, model_options):
                 assert analysis["people"] is analysis["smoke_regions"] is analysis["fire_regions"] is None
                 assert client.call("GET", "/health/ready")[0] == 200
                 expect_snapshot(args, client, cam_id, 503)
+                freeze_events = until(lambda: health_events(client, "camera_frozen", cam_id), 4)
+                assert len(freeze_events) == 1 and freeze_events[0]["ended_at"] is None, freeze_events
+                assert not health_events(client, "camera_offline", cam_id, active_only=True)
 
                 def recovered():
                     item = normal()
@@ -291,9 +344,22 @@ def verify_repeated_frames(args, root, model_options):
                     }) from error
                 assert int(after["runtime"]["frame"]) > int(frozen["runtime"]["frame"])
                 expect_snapshot(args, client, cam_id, 200)
+                until(lambda: not health_events(client, "camera_frozen", cam_id, active_only=True), 4)
+                ended, = health_events(client, "camera_frozen", cam_id)
+                assert ended["sequence"] == freeze_events[0]["sequence"]
                 assert publisher.poll() is None, "The RTSP publisher should still be connected"
+            until(lambda: health_events(client, "camera_offline", cam_id, active_only=True), 12)
+            status, _ = client.call("PATCH", f"/api/v2/cameras/{cam_id}", {"enabled": False},
+                                    key="disable-after-disconnect", revision=client.camera(cam_id)["revision"])
+            assert status == 200
+            assert not health_events(client, "camera_offline", cam_id, active_only=True)
+        with run_core(args.core, args.worker, data, root, root / "restarted-core.log",
+                      *model_options, "--rtsp-peer", peer) as (_, client):
+            assert health_events(client, "camera_frozen", cam_id) == [ended]
+            assert health_events(client, "camera_offline", cam_id)[0]["ended_at"] is not None
     print(json.dumps({"repeated_pixels_detected_with_native_pts": True, "observations_withheld": True,
                       "moving_pixels_rotated_source_epoch": True, "rtsp_publisher_unchanged": True,
+                      "freeze_and_disconnect_history_survived_restart": True,
                       "snapshot_unavailable_during_hold": True if args.media_encoder else None}))
 
 
@@ -335,6 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("--media-encoder", type=lambda value: Path(value).resolve(strict=True),
                         help="Also verify JPEG availability during the source-freeze test")
     parser.add_argument("--worker-faults", action="store_true", help="Suspend and kill the actual Linux ONNX worker")
+    parser.add_argument("--model-fault", action="store_true", help="Reject a corrupted, disposable copy of the model pack")
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():

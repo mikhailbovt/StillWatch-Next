@@ -7,6 +7,7 @@ export interface SemanticStatus {
   daily_request_limit: number;
   last_inference_source?: string | null;
   local_model_state?: string | null;
+  route_ready?: boolean | null;
   sdk_version?: string | null;
   state: SemanticState;
   used_today: number;

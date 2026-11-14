@@ -65,6 +65,19 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let key = DeviceKey::generate()?;
     let (endpoint, credentials) = enroll(input.offer, &key, "SDK QA Rust".into()).await?;
+    #[cfg(feature = "blocking")]
+    {
+        let endpoint = endpoint.clone();
+        let token = credentials.access_token.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let client = stillwatch_sdk::blocking::Client::pinned(&endpoint, token)?;
+            let active = client.health_events(None, 1, true)?;
+            assert_eq!(active.events.len(), 1);
+            assert_eq!(active.events[0].camera_id, None);
+            Ok(())
+        })
+        .await??;
+    }
     let session = Arc::new(DeviceSession::new(&endpoint, key, credentials, None)?);
     let wrong = Client::pinned(&wrong_identity, session.clone())?;
     assert!(matches!(wrong.capabilities().await, Err(Error::Identity)));
@@ -76,6 +89,11 @@ async fn main() -> anyhow::Result<()> {
     let cameras = client.cameras(None, 100).await?;
     assert_eq!(cameras.cameras.len(), 1);
     assert_eq!(cameras.cameras[0].id, input.camera);
+    let health = client.health_events(None, 1, false).await?;
+    assert_eq!(health.events[0].camera_id, Some(input.camera));
+    let older = client.health_events(health.next, 1, false).await?;
+    assert_eq!(older.events[0].camera_id, None);
+    assert!(health.next.is_some() && older.next.is_none());
     let mut changes = client.changes(client.snapshot().await?.cursor);
     if let Some(directory) = &input.reconnect_markers {
         std::fs::File::create_new(directory.join("ready-rust"))?;

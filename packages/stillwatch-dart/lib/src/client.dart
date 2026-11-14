@@ -63,6 +63,28 @@ final class StillWatchClient {
   Future<Json> status() => _json('GET', '/api/v2/status');
   Future<Json> semanticStatus() => _json('GET', '/api/v2/semantic-status');
 
+  Future<Page<HealthEvent>> healthEvents({
+    String? before,
+    int limit = 100,
+    bool activeOnly = false,
+  }) async {
+    final json = await _json(
+      'GET',
+      Uri(
+        path: '/api/v2/health-events',
+        queryParameters: {
+          'limit': '$limit',
+          if (before != null) 'before': counter(before),
+          if (activeOnly) 'active_only': 'true',
+        },
+      ).toString(),
+    );
+    return Page(
+      List.unmodifiable(objects(json, 'events').map(HealthEvent.fromJson)),
+      json['next'] == null ? null : counter(json['next']),
+    );
+  }
+
   Future<Page<Camera>> cameras({String? after, int limit = 100}) async {
     final json = await _json(
       'GET',

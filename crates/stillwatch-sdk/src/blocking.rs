@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use sw_protocol::{Bootstrap, Health, Snapshot};
+use sw_protocol::{Bootstrap, Counter, Health, HealthEventPage, Snapshot};
 use uuid::Uuid;
 
-use crate::{Error, PairedEndpoint, endpoint_url, valid_token};
+use crate::{Error, PairedEndpoint, endpoint_url, health_events_path, valid_token};
 
 pub struct Client {
     endpoint: reqwest::Url,
@@ -51,6 +51,14 @@ impl Client {
     }
     pub fn status(&self) -> Result<sw_protocol::CoreStatus, Error> {
         self.get("/api/v2/status")
+    }
+    pub fn health_events(
+        &self,
+        before: Option<Counter>,
+        limit: u16,
+        active_only: bool,
+    ) -> Result<HealthEventPage, Error> {
+        self.get(&health_events_path(before, limit, active_only))
     }
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
         self.get("/api/v2/snapshot")

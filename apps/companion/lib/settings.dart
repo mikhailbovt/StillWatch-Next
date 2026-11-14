@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:stillwatch_sdk/stillwatch_sdk.dart';
 
 import 'alerts.dart';
+import 'health_history.dart';
 import 'incidents.dart';
 import 'profiles.dart';
 
@@ -125,6 +126,20 @@ class _CoreSettingsState extends State<CoreSettings> {
             ),
             if (console.lastSync != null)
               Text('Last synchronized · ${shortTime(console.lastSync!)}'),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.monitor_heart_outlined),
+              title: const Text('Core health history'),
+              trailing: const Icon(Icons.chevron_right),
+              enabled: online,
+              onTap: online
+                  ? () => Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                        builder: (_) => HealthHistory(console: console),
+                      ),
+                    )
+                  : null,
+            ),
             const SizedBox(height: 18),
             const Divider(),
             Row(
@@ -228,27 +243,30 @@ class _CoreSettingsState extends State<CoreSettings> {
             const Divider(),
             ListenableBuilder(
               listenable: widget.alerts,
-              builder: (context, _) => SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Foreground notifications'),
-                subtitle: Text(
-                  !widget.alerts.available
-                      ? 'The system notification service is unavailable.'
-                      : widget.alerts.enabled && !widget.alerts.allowedBySystem
-                      ? 'System settings have blocked StillWatch notifications.'
-                      : 'Show system notifications for urgent incidents while StillWatch is open.',
-                ),
-                value: widget.alerts.enabled,
-                onChanged: widget.alerts.available
-                    ? (value) async {
-                        try {
-                          await widget.alerts.setEnabled(value);
-                        } catch (error) {
-                          if (context.mounted) showFailure(context, error);
+              builder: (context, _) {
+                final blocked = widget.alerts.permissionBlockedAt;
+                return SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Foreground notifications'),
+                  subtitle: Text(
+                    !widget.alerts.available
+                        ? 'The system notification service is unavailable.'
+                        : blocked != null
+                        ? 'System settings blocked StillWatch notifications · ${shortTime(blocked)}'
+                        : 'Show system notifications for urgent incidents while StillWatch is open.',
+                  ),
+                  value: widget.alerts.enabled,
+                  onChanged: widget.alerts.available
+                      ? (value) async {
+                          try {
+                            await widget.alerts.setEnabled(value);
+                          } catch (error) {
+                            if (context.mounted) showFailure(context, error);
+                          }
                         }
-                      }
-                    : null,
-              ),
+                      : null,
+                );
+              },
             ),
             if (Platform.isWindows || Platform.isLinux)
               ListTile(

@@ -45,6 +45,8 @@ pub enum SemanticState {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SemanticStatus {
     pub state: SemanticState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_ready: Option<bool>,
     pub last_inference_source: Option<String>,
     pub sdk_version: Option<String>,
     pub cloud_model: Option<String>,

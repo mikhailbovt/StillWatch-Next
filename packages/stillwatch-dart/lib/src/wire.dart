@@ -209,6 +209,21 @@ final class Incident {
   final DateTime updatedAt;
 }
 
+final class HealthEvent {
+  HealthEvent.fromJson(Json value)
+    : sequence = counter(value['sequence']),
+      cameraId = value['camera_id'] == null ? null : uuid(value['camera_id']),
+      code = text(value, 'code'),
+      openedAt = timestamp(value, 'opened_at'),
+      endedAt = value['ended_at'] == null ? null : timestamp(value, 'ended_at');
+
+  final String sequence;
+  final String? cameraId;
+  final String code;
+  final DateTime openedAt;
+  final DateTime? endedAt;
+}
+
 final class Page<T> {
   const Page(this.items, this.next);
   final List<T> items;

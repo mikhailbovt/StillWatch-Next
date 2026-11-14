@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod health;
 mod lan;
 mod network;
 mod proxy;
@@ -398,6 +399,7 @@ async fn serve(
     let inference = inference_config(&config)?;
     let dir = config.data_dir;
     let media_root = dir.clone();
+    let storage_root = dir.clone();
     let source_root = config.replay_root;
     let peers = config.rtsp_peer;
     let onvif = OnvifConfig {
@@ -562,9 +564,17 @@ async fn serve(
     let (stop_registry, registry_shutdown) = watch::channel(false);
     let mut maintenance = tokio::spawn(maintain_storage(
         store.clone(),
+        storage_root,
         registry_shutdown.clone(),
         evidence_retention_ms,
         history_retention_ms,
+    ));
+    let mut health_task = tokio::spawn(health::monitor(
+        store.clone(),
+        registry.clone(),
+        vision.clone(),
+        semantic.clone(),
+        registry_shutdown.clone(),
     ));
     let media_task = media.map(|service| tokio::spawn(service.run(registry_shutdown.clone())));
     let lan_task = lan_network.map(|(lan, listener, router)| {
@@ -606,6 +616,12 @@ async fn serve(
         watchdog.abort();
     }
     stop_registry.send_replace(true);
+    if tokio::time::timeout(Duration::from_secs(3), &mut health_task)
+        .await
+        .is_err()
+    {
+        health_task.abort();
+    }
     if tokio::time::timeout(Duration::from_secs(3), &mut maintenance)
         .await
         .is_err()
@@ -652,6 +668,7 @@ async fn serve(
 
 async fn maintain_storage(
     store: Store,
+    storage_root: PathBuf,
     mut stop: watch::Receiver<bool>,
     evidence_retention_ms: i64,
     history_retention_ms: i64,
@@ -662,6 +679,7 @@ async fn maintain_storage(
         tokio::select! {
             _ = async { let _ = stop.wait_for(|stopping| *stopping).await; } => return,
             _ = tick.tick() => {
+                health::check_disk(&store, &storage_root).await;
                 let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
                 if store.expire_alerts(now).await.is_err() {
                     eprintln!("StillWatch could not expire notification intents");

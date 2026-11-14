@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 axum.workspace = true
 clap.workspace = true
+fs4 = "=1.1.0"
 getrandom.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
