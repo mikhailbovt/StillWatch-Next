@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sw_domain::UnixMillis;
+use sw_domain::{SourceScope, UnixMillis};
 use sw_protocol::{CameraConfig, CameraPatch, Dimensions, IdempotencyKey};
 use uuid::Uuid;
 
@@ -68,6 +68,36 @@ pub struct CameraLimits {
 }
 
 impl Store {
+    pub async fn current_camera_scopes(
+        &self,
+        scopes: Vec<SourceScope>,
+    ) -> Result<Vec<SourceScope>, StoreError> {
+        if scopes.len() > MAX_PAGE {
+            return Err(StoreError::Invalid);
+        }
+        self.call(move |db| {
+            let mut query = db.conn.prepare(
+                "SELECT EXISTS(SELECT 1 FROM cameras WHERE id = ? AND source_epoch = ?
+                 AND scene_revision = ? AND enabled = 1 AND deleted = 0)",
+            )?;
+            let mut current = Vec::new();
+            for scope in scopes {
+                if query.query_row(
+                    params![
+                        id(&scope.camera_id),
+                        sql_counter(scope.epoch)?,
+                        sql_counter(scope.scene_revision)?
+                    ],
+                    |row| row.get::<_, bool>(0),
+                )? {
+                    current.push(scope);
+                }
+            }
+            Ok(current)
+        })
+        .await
+    }
+
     pub async fn camera(&self, id: Uuid) -> Result<CameraRecord, StoreError> {
         self.call(move |db| get(&db.conn, id)).await
     }
@@ -143,10 +173,10 @@ impl Store {
                         || (dimensions.is_some() && dimensions != previous.dimensions)
                         || patch.controlled_fire_regions.is_some();
                     let reviewed_scene = if scene_changed { reviewed_scene } else { previous.reviewed_scene.clone() };
-                    // A consent change must take effect in the same transaction as
-                    // the config. Evidence already captured under the old setting
-                    // is ineligible even before the capture worker restarts.
-                    let epoch = if config.cloud_consent != previous.config.cloud_consent {
+                    // Invalidate frames in the same transaction as a consent change
+                    // or disable, before the capture worker has been stopped.
+                    let epoch = if config.cloud_consent != previous.config.cloud_consent
+                        || (!config.enabled && previous.config.enabled) {
                         next(previous.epoch)?
                     } else {
                         previous.epoch
@@ -161,6 +191,7 @@ impl Store {
                     let mut camera = check_revision(&tx, *id, *revision)?;
                     camera.config.enabled = false;
                     camera.revision = next(camera.revision)?;
+                    camera.epoch = next(camera.epoch)?;
                     (camera, true)
                 }
             };

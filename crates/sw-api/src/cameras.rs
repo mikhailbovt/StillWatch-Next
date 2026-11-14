@@ -240,7 +240,16 @@ async fn mutate(
         action,
     };
     let now = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
-    Ok(registry(state)?.apply(command, now).await?)
+    let saved = registry(state)?.apply(command, now).await?;
+    if let Some(media) = &state.media
+        && saved.camera.revision > 1
+    {
+        let camera = &saved.camera;
+        media
+            .retire_camera_before(camera.id, camera.epoch, camera.scene_revision)
+            .await;
+    }
+    Ok(saved)
 }
 
 fn registry(state: &Api) -> Result<&Arc<CameraRegistry>, ApiError> {

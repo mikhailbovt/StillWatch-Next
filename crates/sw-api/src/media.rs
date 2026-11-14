@@ -25,10 +25,13 @@ pub async fn issue(
     principal.scope(DeviceScope::StreamsRead)?;
     let Json(request) = body.map_err(|_| ApiError::invalid("Invalid stream request"))?;
     principal.camera(request.camera_id)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(media(&state)?.issue(principal.id(), request, now_ms())?),
-    ))
+    let media = media(&state)?;
+    let grant = media.issue(principal.id(), request, now_ms()).await?;
+    if !principal.check_session(&state.store).await {
+        let _ = media.close(principal.id(), grant.id).await;
+        return Err(ApiError::unauthorized());
+    }
+    Ok((StatusCode::CREATED, Json(grant)))
 }
 
 pub async fn offer(
@@ -109,6 +112,9 @@ pub async fn snapshot(
         }
         result => result?,
     };
+    if !principal.check_session(&state.store).await {
+        return Err(ApiError::unauthorized());
+    }
     let age = HeaderValue::from_str(&age.to_string()).map_err(|_| ApiError::internal())?;
     Ok((
         [

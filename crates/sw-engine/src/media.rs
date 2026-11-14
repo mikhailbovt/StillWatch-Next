@@ -388,19 +388,20 @@ impl MediaService {
         }
     }
 
-    pub fn issue(
+    pub async fn issue(
         self: &Arc<Self>,
         actor: Uuid,
         request: StreamRequest,
         now_ms: i64,
     ) -> Result<StreamGrant, MediaError> {
-        let frame = self
+        let scope = self
             .cameras
             .latest(request.camera_id)
-            .filter(|frame| usable(frame))
+            .and_then(|frame| usable(&frame).then_some(frame.scope))
             .ok_or(MediaError::Unavailable)?;
+        self.check_camera_scope(scope).await?;
         let key = StreamKey {
-            scope: frame.scope,
+            scope,
             profile: request.profile,
         };
         let mut state = self.state.lock().map_err(|_| MediaError::Unavailable)?;
@@ -489,6 +490,11 @@ impl MediaService {
         let result = self.negotiate(key, &path, sdp).await;
         match result {
             Ok((route, answer)) => {
+                if let Err(error) = self.check_camera_scope(key.scope).await {
+                    let _ = self.close(actor, id).await;
+                    self.delete_route(&route).await;
+                    return Err(error);
+                }
                 let accepted = if let Ok(mut state) = self.state.lock()
                     && let Ok(viewer) = authorized(&mut state, actor, id)
                 {
@@ -523,6 +529,7 @@ impl MediaService {
         path: &str,
         sdp: String,
     ) -> Result<(String, MediaAnswer), MediaError> {
+        self.check_camera_scope(key.scope).await?;
         let url = format!("http://{}/{path}/whep", self.webrtc);
         for attempt in 0..12 {
             if !self.camera_frame(key).is_some_and(|frame| usable(&frame)) {
@@ -641,6 +648,29 @@ impl MediaService {
         self.remove_where(|viewer| viewer.actor == actor).await;
     }
 
+    pub async fn retire_camera_before(&self, camera: Uuid, epoch: u64, scene_revision: u64) {
+        let retired = |scope: SourceScope| {
+            scope.camera_id == camera
+                && (scope.epoch < epoch || scope.scene_revision < scene_revision)
+        };
+        let publishers = if let Ok(mut state) = self.state.lock() {
+            state
+                .publishers
+                .extract_if(|key, _| retired(key.scope))
+                .map(|(_, publisher)| publisher)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        for publisher in &publishers {
+            publisher.stop.send_replace(true);
+        }
+        self.remove_where(|viewer| retired(viewer.key.scope)).await;
+        for publisher in publishers {
+            let _ = publisher.task.await;
+        }
+    }
+
     pub async fn snapshot(&self, camera: Uuid) -> Result<(Vec<u8>, u64), MediaError> {
         let permit = Arc::clone(&self.snapshots)
             .try_acquire_owned()
@@ -659,19 +689,9 @@ impl MediaService {
         .await
         .map_err(|_| MediaError::Unavailable)?
         .ok_or(MediaError::Unavailable)?;
-        let current = self
-            .store
-            .camera(camera)
-            .await
-            .map_err(|error| match error {
-                sw_storage::StoreError::NotFound => MediaError::Missing,
-                _ => MediaError::Unavailable,
-            })?;
+        self.check_camera_scope(scope).await?;
         let age = captured_at.elapsed();
-        if !current.config.enabled
-            || scope.epoch != current.epoch
-            || scope.scene_revision != current.scene_revision
-            || age > STALE
+        if age > STALE
             || !self
                 .cameras
                 .latest(camera)
@@ -683,6 +703,24 @@ impl MediaService {
         Ok((jpeg, age))
     }
 
+    async fn check_camera_scope(&self, scope: SourceScope) -> Result<(), MediaError> {
+        let current = self
+            .store
+            .camera(scope.camera_id)
+            .await
+            .map_err(|error| match error {
+                sw_storage::StoreError::NotFound => MediaError::Missing,
+                _ => MediaError::Unavailable,
+            })?;
+        if !current.config.enabled
+            || scope.epoch != current.epoch
+            || scope.scene_revision != current.scene_revision
+        {
+            return Err(MediaError::Unavailable);
+        }
+        Ok(())
+    }
+
     fn camera_frame(&self, key: StreamKey) -> Option<Arc<CameraFrame>> {
         self.cameras
             .latest(key.scope.camera_id)
@@ -691,7 +729,7 @@ impl MediaService {
 
     async fn reap_stale(&self) {
         let now = Instant::now();
-        let (actors, failed) = self
+        let (actors, failed, scopes) = self
             .state
             .lock()
             .map(|state| {
@@ -707,7 +745,12 @@ impl MediaService {
                     .filter(|(_, publisher)| publisher.task.is_finished())
                     .map(|(&key, _)| key)
                     .collect::<HashSet<_>>();
-                (actors, failed)
+                let scopes = state
+                    .viewers
+                    .values()
+                    .map(|viewer| viewer.key.scope)
+                    .collect::<HashSet<_>>();
+                (actors, failed, scopes)
             })
             .unwrap_or_default();
         let invalid = if actors.is_empty() {
@@ -720,10 +763,21 @@ impl MediaService {
                 .into_iter()
                 .collect()
         };
+        let current = if scopes.is_empty() {
+            HashSet::new()
+        } else {
+            self.store
+                .current_camera_scopes(scopes.iter().copied().collect())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
         self.remove_where(|viewer| {
             viewer.expires <= now
                 || invalid.contains(&viewer.actor)
                 || failed.contains(&viewer.key)
+                || (scopes.contains(&viewer.key.scope) && !current.contains(&viewer.key.scope))
                 || self
                     .camera_frame(viewer.key)
                     .is_none_or(|frame| !usable(&frame))

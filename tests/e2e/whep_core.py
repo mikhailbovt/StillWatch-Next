@@ -58,7 +58,7 @@ def request(lan, token, method, path, data=None, content_type=None):
         return response.status, dict(response.headers), response.read(512 * 1024)
 
 
-async def connect(lan, session, camera, turn_url, turn_certificate):
+async def connect(lan, session, camera, turn_url, turn_certificate, *, mask_right=False):
     token = session["access_token"]
     def issue():
         status, grant = lan.request("POST", "/api/v2/stream-sessions", {"camera_id": camera, "profile": "preview"}, token)
@@ -112,8 +112,9 @@ async def connect(lan, session, camera, turn_url, turn_certificate):
         if turn_url:
             assert ice._nominated[1].local_candidate.type == "relay"
         assert frame.width == 320 and frame.height == 240, (frame.width, frame.height)
-        assert rgb[:, :135, :].max() < 25, "Masked region contains source pixels"
-        assert rgb[:, 190:, :].max() > 100, "Unmasked region is empty"
+        masked, visible = (rgb[:, 190:], rgb[:, :135]) if mask_right else (rgb[:, :135], rgb[:, 190:])
+        assert masked.max() < 25, "Masked region contains source pixels"
+        assert visible.max() > 100, "Unmasked region is empty"
         return peer, track, grant
     except Exception:
         await peer.close()
@@ -155,6 +156,40 @@ async def viewers(lan, session, camera, local, turn_url, turn_certificate):
     finally:
         await a[0].close()
         await b[0].close()
+
+
+async def mask_change(lan, session, camera, local, turn_url, turn_certificate):
+    previous, track, grant = await connect(lan, session, camera, turn_url, turn_certificate)
+    try:
+        old = local.camera(camera)
+        status, updated = await asyncio.to_thread(local.call, "PATCH", f"/api/v2/cameras/{camera}", {
+            "privacy_masks": [{"left": 5000, "top": 0, "right": 10000, "bottom": 10000}],
+        }, key=uuid.uuid4().hex, revision=old["revision"])
+        assert status == 200 and int(updated["scene_revision"]) > int(grant["scene_revision"])
+        closed, _, _ = await asyncio.to_thread(request, lan, session["access_token"], "DELETE", grant["whep_path"])
+        assert closed == 404, closed
+        deadline = asyncio.get_running_loop().time() + 8
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                await asyncio.wait_for(track.recv(), 2)
+            except (TimeoutError, EOFError, av.error.EOFError):
+                break
+            except Exception as error:
+                if type(error).__name__ == "MediaStreamError":
+                    break
+                raise
+        else:
+            raise AssertionError("Previous stream continued after the mask changed")
+        replacement, _, current = await connect(lan, session, camera, turn_url, turn_certificate, mask_right=True)
+        try:
+            assert current["scene_revision"] == updated["scene_revision"]
+            assert current["id"] != grant["id"]
+            code, _, _ = await asyncio.to_thread(request, lan, session["access_token"], "DELETE", current["whep_path"])
+            assert code == 204
+        finally:
+            await replacement.close()
+    finally:
+        await previous.close()
 
 
 @contextlib.contextmanager
@@ -281,6 +316,13 @@ def run(args):
             })
             assert status == 201
             until(lambda: local.camera(camera_id)["runtime"]["state"] == "replaying")
+            if args.mask_change:
+                asyncio.run(mask_change(lan, session, camera_id, local, turn_url, turn_certificate))
+                status, _ = local.call("PATCH", f"/api/v2/cameras/{camera_id}", {
+                    "privacy_masks": [{"left": 0, "top": 0, "right": 5000, "bottom": 10000}],
+                }, key=uuid.uuid4().hex, revision=local.camera(camera_id)["revision"])
+                assert status == 200
+                until(lambda: local.camera(camera_id)["runtime"]["state"] == "replaying")
             asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
             if args.crash_restart:
                 old_epoch = int(local.camera(camera_id)["source_epoch"])
@@ -310,6 +352,7 @@ def run(args):
         print(json.dumps({"native_mediamtx": True, "input_codec": args.input_codec, "whep_h264": True, "viewers": 2,
                           "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": True,
                           "router_config_has_no_cleartext_credentials": True, "ignores_inherited_router_settings": True,
+                          "mask_change_retires_previous_stream": args.mask_change,
                           "viewer_turn_over_tcp": bool(turn_url), "turn_tls": bool(turn_certificate),
                           "https_proxy": bool(args.nginx), "foreground_crash_restart": args.crash_restart}))
 
@@ -320,6 +363,7 @@ if __name__ == "__main__":
         parser.add_argument(f"--{name}", type=lambda path: Path(path).resolve(strict=True), required=True)
     parser.add_argument("--address", required=True, help="Private IPv4 address assigned to an active LAN interface")
     parser.add_argument("--input-codec", choices=("h264", "hevc"), default="h264")
+    parser.add_argument("--mask-change", action="store_true")
     parser.add_argument("--encoder", type=lambda path: Path(path).resolve(strict=True),
                         help="Use a separately built production media encoder")
     parser.add_argument("--turnserver", type=lambda path: Path(path).resolve(strict=True),
