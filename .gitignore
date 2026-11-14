@@ -16,3 +16,8 @@
 *.onnx.data
 *.pt
 *.safetensors
+*.ipa
+*.xcarchive/
+*.mobileprovision
+*.p12
+*.pfx

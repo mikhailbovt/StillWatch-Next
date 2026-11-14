@@ -34,12 +34,37 @@ jobs:
         run: |
           set -euo pipefail
           flutter build ipa --release --no-codesign --no-pub
-          app=build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app
+          archive=build/ios/archive/Runner.xcarchive
+          app="$archive/Products/Applications/Runner.app"
           test -d "$app"
           find "$app" -type f -print | sed "s|^$app/||" | LC_ALL=C sort > "$RUNNER_TEMP/ios-inventory.txt"
           if grep -Ei '(\.(onnx|pt|safetensors|tflite)$|onnxruntime|stillwatch-core|firebase[._-]ai)' "$RUNNER_TEMP/ios-inventory.txt"; then
             exit 1
           fi
+          if test -n "$(find "$app" -name embedded.mobileprovision -print -quit)"; then
+            exit 1
+          fi
+          /usr/bin/lipo "$app/Runner" -verify_arch arm64
+          /usr/bin/lipo "$app/Frameworks/App.framework/App" -verify_arch arm64
+          /usr/bin/xcrun vtool -show-build "$app/Runner" > "$RUNNER_TEMP/ios-device-platform.txt"
+          grep -Eq '^[[:space:]]+platform IOS$' "$RUNNER_TEMP/ios-device-platform.txt"
+          mkdir -p "$RUNNER_TEMP/stillwatch-ios-device"
+          tar -czf "$RUNNER_TEMP/stillwatch-ios-device/StillWatch-Companion-unsigned.xcarchive.tar.gz" \
+            -C build/ios/archive Runner.xcarchive
+          cp "$RUNNER_TEMP/ios-inventory.txt" "$RUNNER_TEMP/ios-device-platform.txt" "$RUNNER_TEMP/stillwatch-ios-device/"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/stillwatch-ios-device/source-commit.txt"
+          (
+            cd "$RUNNER_TEMP/stillwatch-ios-device"
+            shasum -a 256 StillWatch-Companion-unsigned.xcarchive.tar.gz > SHA256SUMS
+          )
+      - name: Retain unsigned iOS device archive for offline signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stillwatch-ios-device-unsigned
+          path: ${{ runner.temp }}/stillwatch-ios-device/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
       - name: Build and launch on iOS Simulator
         working-directory: apps/companion
         shell: bash
@@ -103,7 +128,7 @@ jobs:
             --mediamtx "$native/mediamtx" --app "$app" --address 127.0.0.1 \
             --device "$STILLWATCH_IOS_SIMULATOR"
       - name: Retain simulator screenshot and archive inventory
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.STILLWATCH_IOS_SIMULATOR != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: stillwatch-ios-simulator

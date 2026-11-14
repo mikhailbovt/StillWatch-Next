@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -350,35 +349,43 @@ void main() {
       await tester.tap(enabled);
       await tester.pumpAndSettle();
 
-      Future<void> press(String label, Future<void> handled) async {
-        await tester.tap(find.text(label));
-        for (var i = 0; i < 40; i++) {
-          final done = await tester.runAsync(
-            () => handled
-                .then((_) => true)
-                .timeout(
-                  const Duration(milliseconds: 30),
-                  onTimeout: () => false,
-                ),
+      Future<void> press(
+        String label,
+        Finder result, {
+        bool gone = false,
+      }) async {
+        final button = tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, label),
+        );
+        await tester.runAsync(() async {
+          button.onPressed!();
+          // Let the SDK begin its I/O in the real async zone before pumping.
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        });
+        for (
+          var i = 0;
+          i < 120 &&
+              (result.evaluate().isEmpty != gone ||
+                  find.text('Working…').evaluate().isNotEmpty);
+          i++
+        ) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
           );
-          await tester.pump();
-          if (done == true) break;
+          await tester.pump(const Duration(milliseconds: 20));
         }
         await tester.pumpAndSettle();
+        expect(result, gone ? findsNothing : findsOneWidget);
       }
 
-      core.probeHandled = Completer<void>();
-      await press('Save', core.probeHandled!.future);
-      expect(find.textContaining('Capture capacity exceeded'), findsOneWidget);
+      await press('Save', find.textContaining('Capture capacity exceeded'));
       expect(find.text('Save camera'), findsNothing);
       expect(core.cameraSaves, 0);
 
       core.cameraFits = true;
-      core.probeHandled = Completer<void>();
-      await press('Save', core.probeHandled!.future);
-      expect(find.textContaining('H264 · 640 × 360'), findsOneWidget);
+      await press('Save', find.textContaining('H264 · 640 × 360'));
       expect(core.cameraSaves, 0);
-      await press('Save camera', core.saveHandled.future);
+      await press('Save camera', find.text('Add camera'), gone: true);
       expect(core.cameraSaves, 1);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
@@ -398,8 +405,6 @@ final class _CoreFixture {
   bool omitFromSnapshot = false;
   bool cameraFits = false;
   int cameraSaves = 0;
-  Completer<void>? probeHandled;
-  final saveHandled = Completer<void>();
   final writes = <({String path, String key, String revision, String body})>[];
 
   static Future<_CoreFixture> start() =>
@@ -439,6 +444,9 @@ final class _CoreFixture {
   Future<void> handle(HttpRequest request) async {
     final response = request.response;
     final path = request.uri.path;
+    if (path.startsWith('/api/v2/cameras') || path == '/api/v2/source-probes') {
+      response.persistentConnection = false;
+    }
     response.headers.contentType = ContentType.json;
     if (request.method == 'POST' && path == '/api/v2/source-probes') {
       final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
@@ -456,18 +464,12 @@ final class _CoreFixture {
           },
         }),
       );
-      await response.close();
-      probeHandled?.complete();
-      return;
     } else if (request.method == 'POST' && path == '/api/v2/cameras') {
       final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
       expect(body['enabled'], true);
       cameraSaves += 1;
       response.statusCode = 201;
       response.write(jsonEncode({..._camera, 'config': body}));
-      await response.close();
-      saveHandled.complete();
-      return;
     } else if (request.method == 'POST') {
       writes.add((
         path: path,

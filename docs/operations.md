@@ -192,7 +192,24 @@ Closing the Companion window leaves the agent available in the signed-in session
 
 Use the Flutter framework revision in the CI workflow and run `flutter pub get --enforce-lockfile` from the Companion directory before building. This generates the native Android registrant for secure storage, file selection, notifications, discovery, and WebRTC. For Android-only builds on Windows, you can use Flutter's `config --no-enable-windows-desktop` in a separate Flutter configuration directory. Windows desktop builds still require native symbolic link support.
 
-Use `flutter build apk --release --target-platform android-arm64` and `flutter build appbundle --release --target-platform android-arm64`. The release build refreshes Android's plugin registrant to exclude the development-only integration test plugin. Android release signing reads the local, ignored key.properties file. For an iOS archive, use the locked Flutter version on a macOS host with Xcode and a matching Apple distribution or development profile. Record the signing profile type and applicable devices when handing over an iOS build.
+Use `flutter build apk --release --target-platform android-arm64` and `flutter build appbundle --release --target-platform android-arm64`. The release build refreshes Android's plugin registrant to exclude the development-only integration test plugin. Android release signing reads the local, ignored key.properties file.
+
+The iOS workflow builds the unsigned arm64 device archive with the locked Flutter toolchain and retains it for local signing. Check its `source-commit.txt` and run `sha256sum -c SHA256SUMS` before extracting the archive in Linux or WSL. The archive preserves the native QR scanner, notification delegate, Keychain plugin and WebRTC framework.
+
+On Linux or WSL, put `rcodesign` 0.29.0, OpenSSL 3 and Zip on PATH. Use Apple's PEM root certificates, a StillWatch development or ad hoc provisioning profile covering the target iPhone, and its matching PKCS#12 identity. Keep the inputs and output in private storage. Set `$signing` to the directory holding the signing inputs. [Apple PKI](https://www.apple.com/certificateauthority/) [Registered device distribution](https://developer.apple.com/documentation/xcode/distributing-your-app-to-registered-devices) [Apple Codesign 0.29.0](https://github.com/indygreg/apple-platform-rs/releases/tag/apple-codesign%2F0.29.0)
+
+```bash
+python3 deploy/packaging/ios-sign.py \
+  --app Runner.xcarchive/Products/Applications/Runner.app \
+  --profile "$signing/stillwatch.mobileprovision" \
+  --identity "$signing/stillwatch.p12" \
+  --password-file "$signing/password" \
+  --apple-roots "$signing/apple-roots.pem" \
+  --device-file "$signing/iphone-udid" \
+  --output StillWatch.ipa > StillWatch.signing.json
+```
+
+The JSON records the profile type, expiry, eligible device count and IPA checksum. Run `xtool devices --no-wait` and `xtool install StillWatch.ipa` on the signing host with the authorized iPhone connected. Verify pairing, playback, profile restoration and notifications on the phone. [xtool on Windows or Linux](https://xtool.sh/documentation/xtool/installation-linux/)
 
 ## CUDA qualification
 
