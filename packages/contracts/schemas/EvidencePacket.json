@@ -282,6 +282,7 @@
     "EvidenceLimitation": {
       "type": "string",
       "enum": [
+        "source_lagging",
         "partial_visibility",
         "sparse_coverage",
         "source_changed",

@@ -170,6 +170,7 @@ class _EventTile extends StatelessWidget {
       'camera_frozen' => 'Visual changes unconfirmed',
       'camera_capacity_exceeded' => 'Camera exceeds capture capacity',
       'invalid_source_clock' => 'Camera timestamps stalled or invalid',
+      'source_lagging' => 'Camera stream is delayed',
       'host_clock_discontinuity' => 'Core system clock changed abruptly',
       'inference_unavailable' => 'Local analysis unavailable',
       'inference_below_target' => 'Local analysis below target rate',

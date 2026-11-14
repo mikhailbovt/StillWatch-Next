@@ -493,11 +493,16 @@ def verify_slow_source(args, root, model_options):
                 lag = runtime["relative_source_lag_ms"]
                 assert video["source_epoch"] == camera["source_epoch"] or int(video["source_epoch"]) == 1, video
                 assert runtime["state"] == "streaming" and not source["below_target"], runtime
+                assert runtime["source_lagging"] and runtime["analysis"]["state"] == "degraded", runtime
+                _, coverage = client.call("GET", "/api/v2/status")
+                row = next(row for row in coverage["camera_coverage"] if row["camera_id"] == camera_id)
+                assert row["source_lagging"] is True and row["analysis"]["state"] == "degraded", row
                 assert wall["window_seconds"] == 60 and 90 <= wall["pose_accepted"] <= 170, wall
                 assert 36 <= wall["fire_accepted"] <= 68, wall
                 assert 25_000 <= lag <= 36_000, runtime
                 print(json.dumps({"half_rate_native_rtsp": True, "source_cadence": source,
-                                  "wall_cadence": wall, "relative_source_lag_ms": lag}))
+                                  "wall_cadence": wall, "relative_source_lag_ms": lag,
+                                  "analysis_state": runtime["analysis"]["state"]}))
 
 
 def verify_capture_recovery(args, root, model_options):

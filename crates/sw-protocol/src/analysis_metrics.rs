@@ -20,7 +20,7 @@ pub struct TaskCounts {
     pub rejected_stale: Counter,
     pub rejected_scope: Counter,
     pub rejected_generation: Counter,
-    /// Nominal source-clock slots crossed without an accepted result between two accepted PTS.
+    /// Skipped base slots before a dispatch and rejected base claims within one source clock.
     pub missed_source_slots: Counter,
     /// Accepted results from intentionally early Fire dispatches.
     pub intentional_burst: Counter,
@@ -82,6 +82,8 @@ pub struct CameraCoverage {
     pub capture_state: crate::CaptureState,
     pub current_source_epoch: Option<Counter>,
     pub last_frame_age_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_lagging: Option<bool>,
     pub analysis: AnalysisCoverage,
 }
 

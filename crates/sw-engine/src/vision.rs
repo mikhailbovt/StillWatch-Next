@@ -15,11 +15,12 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
-    CameraFrame, CameraRegistry, MICROS_PER_SECOND, WorkerBinary, WorkerError,
+    CameraFrame, CameraRegistry, WorkerBinary, WorkerError,
     evidence::EvidenceSampler,
     hazards::{HazardPolicies, PendingHazards},
     inference_process::{CompletedInference, InferenceProcess},
-    telemetry::{CameraMetrics, Outcome, record_dispatch, record_outcome},
+    task_clock::{Claim, FrameKey, TaskClock},
+    telemetry::{CameraMetrics, Outcome, record_dispatch, record_misses, record_outcome},
 };
 
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
@@ -30,6 +31,8 @@ const PRIORITY_BONUS: Duration = Duration::from_millis(150);
 const FIRE_BURST_TIME: Duration = Duration::from_secs(2);
 const FIRE_BURST_COOLDOWN: Duration = Duration::from_secs(10);
 const FIRE_EXPLORATION_PERIOD: Duration = Duration::from_secs(10);
+const EXTRA_DISPATCH_RESERVE: Duration = Duration::from_millis(10);
+const MAX_COST_SHAPES: usize = 128;
 
 pub struct VisionScheduler {
     config: InferenceConfig,
@@ -45,6 +48,7 @@ struct Progress {
     per_camera: HashMap<Uuid, Analysis>,
     metrics: HashMap<Uuid, CameraMetrics>,
     totals: InferenceCounts,
+    costs: HashMap<(usize, u32, u32), RequestCost>,
 }
 
 #[derive(Clone, Copy)]
@@ -55,11 +59,13 @@ struct Lane {
 
 struct Analysis {
     scope: SourceScope,
+    clock: [TaskClock; 2],
     pose_time: Option<i64>,
     fire_time: Option<i64>,
     pose_at: Option<Instant>,
     fire_at: Option<Instant>,
     burst: Option<Instant>,
+    last_fire_claim: Option<(FrameKey, bool)>,
     last_exploration: Option<Instant>,
     extra_fire_frames: u64,
     pose_frames: u64,
@@ -80,6 +86,7 @@ struct Dispatch {
     tasks: Tasks,
     source_us: i64,
     extra_fire: bool,
+    claims: [Option<Claim>; 2],
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -87,13 +94,61 @@ enum DispatchRank {
     Explore,
     Burst,
     Due(Duration),
-    LateFire(Duration),
+    Overdue(Duration),
 }
 
 #[derive(Clone, Copy)]
 struct Job {
     tasks: Tasks,
     rank: DispatchRank,
+    claims: [Option<Claim>; 2],
+}
+
+#[derive(Default)]
+struct RequestCost {
+    samples: [u32; 3],
+    ewma: [u64; 3],
+    maximum_recent: [u64; 3],
+    last_observed: Option<Instant>,
+}
+
+impl RequestCost {
+    fn observe(&mut self, tasks: Tasks, elapsed: Duration, at: Instant) {
+        let i = task_index(tasks);
+        let us = elapsed.as_micros().min(u64::MAX as u128) as u64;
+        self.ewma[i] = if self.samples[i] == 0 {
+            us
+        } else {
+            (self.ewma[i].saturating_mul(7).saturating_add(us)) / 8
+        };
+        self.maximum_recent[i] = (self.maximum_recent[i].saturating_mul(31) / 32).max(us);
+        self.samples[i] = self.samples[i].saturating_add(1);
+        self.last_observed = Some(at);
+    }
+
+    fn estimate(&self, tasks: Tasks) -> Option<Duration> {
+        let i = task_index(tasks);
+        if self.samples[i] >= 3 {
+            Some(Duration::from_micros(
+                self.maximum_recent[i].max(self.ewma[i].saturating_mul(2)),
+            ))
+        } else if tasks == Tasks::Both {
+            Some(
+                self.estimate(Tasks::Pose)?
+                    .saturating_add(self.estimate(Tasks::Fire)?),
+            )
+        } else {
+            None
+        }
+    }
+}
+
+fn task_index(tasks: Tasks) -> usize {
+    match tasks {
+        Tasks::Pose => 0,
+        Tasks::Fire => 1,
+        Tasks::Both => 2,
+    }
 }
 
 impl VisionScheduler {
@@ -126,6 +181,7 @@ impl VisionScheduler {
                 per_camera: HashMap::new(),
                 metrics: HashMap::new(),
                 totals: InferenceCounts::default(),
+                costs: HashMap::new(),
             }),
         })
     }
@@ -233,6 +289,7 @@ impl VisionScheduler {
                 }
                 if response.state == AnalysisState::Ready {
                     response.cadence = latest
+                        .as_ref()
                         .filter(|frame| {
                             frame.scope == analysis.scope
                                 && frame.captured_at.elapsed() <= FRAME_MAX_AGE
@@ -240,6 +297,9 @@ impl VisionScheduler {
                         .and_then(|frame| {
                             analysis.cadence(frame.frame.header.source_micros?, frame.sampling)
                         });
+                    if latest.is_some_and(|frame| frame.source_lagging) {
+                        response.state = AnalysisState::Degraded;
+                    }
                 }
             } else if state == AnalysisState::Ready {
                 response.state = AnalysisState::Starting;
@@ -356,7 +416,9 @@ impl VisionScheduler {
                             }
                         };
                         let dispatched_at = Instant::now();
-                        self.record_dispatch(&job, dispatched_at);
+                        if !self.record_dispatch(&job, dispatched_at) {
+                            continue;
+                        }
                         last_camera = Some(job.frame.scope.camera_id);
                         let outcome = tokio::select! {
                             _ = shutdown.wait_for(|stop| *stop) => {
@@ -457,6 +519,7 @@ impl VisionScheduler {
         });
         let now = Instant::now();
         let mut selected = None;
+        let mut next_base_us = u64::MAX;
         for frame in frames[start..].iter().chain(&frames[..start]) {
             if frame.inference_lane != lane
                 || !frame.usable_for_analysis
@@ -471,13 +534,30 @@ impl VisionScheduler {
                 .per_camera
                 .get(&frame.scope.camera_id)
                 .filter(|state| state.scope == frame.scope);
+            let shape = (lane, frame.frame.header.width, frame.frame.header.height);
+            let key = FrameKey {
+                generation: frame.frame.generation,
+                ordinal: frame.frame.header.frame,
+                source_us,
+            };
+            let sampling = frame.sampling;
+            let cost = progress.costs.get(&shape);
+            if let Some(previous) = previous {
+                let pose = previous.clock[0].until_base_us(key, sampling.pose_fps);
+                let fire = previous.clock[1].until_base_us(key, sampling.fire_fps);
+                let elapsed = now.duration_since(frame.captured_at).as_micros() as u64;
+                next_base_us = next_base_us.min(pose.min(fire).saturating_sub(elapsed));
+            } else {
+                next_base_us = 0;
+            }
             let Some(job) = next_job(
                 previous,
-                source_us,
+                key,
                 now,
                 frame.sampling,
                 frame.priority,
                 frame.live,
+                cost.and_then(|cost| cost.estimate(Tasks::Both)),
             ) else {
                 continue;
             };
@@ -485,20 +565,57 @@ impl VisionScheduler {
                 .as_ref()
                 .is_none_or(|(rank, _, _, _)| job.rank > *rank)
             {
-                selected = Some((job.rank, frame, job.tasks, source_us));
+                selected = Some((job.rank, frame, job, cost));
             }
         }
-        selected.map(|(rank, frame, tasks, source_us)| Dispatch {
-            frame: frame.clone(),
-            tasks,
-            source_us,
-            extra_fire: matches!(rank, DispatchRank::Burst | DispatchRank::Explore),
+        selected.and_then(|(rank, frame, job, cost)| {
+            let extra_fire = matches!(rank, DispatchRank::Burst | DispatchRank::Explore);
+            if extra_fire
+                && !cost
+                    .and_then(|cost| cost.estimate(Tasks::Fire))
+                    .is_some_and(|estimate| {
+                        estimate + EXTRA_DISPATCH_RESERVE <= Duration::from_micros(next_base_us)
+                    })
+            {
+                return None;
+            }
+            Some(Dispatch {
+                frame: frame.clone(),
+                tasks: job.tasks,
+                source_us: frame.frame.header.source_micros?,
+                extra_fire,
+                claims: job.claims,
+            })
         })
     }
 
-    fn record_dispatch(&self, job: &Dispatch, at: Instant) {
+    fn record_dispatch(&self, job: &Dispatch, at: Instant) -> bool {
         let scope = job.frame.scope;
         if let Ok(mut progress) = self.progress.write() {
+            let analysis = progress
+                .per_camera
+                .entry(scope.camera_id)
+                .or_insert_with(|| Analysis::new(scope));
+            if analysis.scope != scope {
+                *analysis = Analysis::new(scope);
+            }
+            if !analysis
+                .clock
+                .iter()
+                .zip(job.claims)
+                .all(|(clock, claim)| claim.is_none_or(|claim| clock.eligible(claim.frame)))
+            {
+                return false;
+            }
+            let mut skipped = [0; 2];
+            for (index, (clock, claim)) in analysis.clock.iter_mut().zip(job.claims).enumerate() {
+                if let Some(claim) = claim {
+                    skipped[index] = clock.claim(claim).expect("validated claim");
+                }
+            }
+            if let Some(fire) = job.claims[1] {
+                analysis.last_fire_claim = Some((fire.frame, job.extra_fire));
+            }
             if !progress.metrics.contains_key(&scope.camera_id) {
                 progress
                     .metrics
@@ -508,9 +625,12 @@ impl VisionScheduler {
                 .metrics
                 .entry(scope.camera_id)
                 .or_insert_with(|| CameraMetrics::new(scope))
-                .dispatch(scope, job.tasks, at - job.frame.captured_at, at);
+                .dispatch(scope, job.tasks, skipped, at - job.frame.captured_at, at);
             record_dispatch(&mut progress.totals, job.tasks);
+            record_misses(&mut progress.totals, job.tasks, skipped);
+            return true;
         }
+        false
     }
 
     fn finish(
@@ -538,6 +658,66 @@ impl VisionScheduler {
         let Ok(mut progress) = self.progress.write() else {
             return false;
         };
+        if result.is_ok() || matches!(result, Err(Outcome::Timeout)) {
+            let shape = (
+                frame.inference_lane,
+                frame.frame.header.width,
+                frame.frame.header.height,
+            );
+            if !progress.costs.contains_key(&shape)
+                && progress.costs.len() >= MAX_COST_SHAPES
+                && let Some(oldest) = progress
+                    .costs
+                    .iter()
+                    .min_by_key(|(_, cost)| cost.last_observed)
+                    .map(|(&shape, _)| shape)
+            {
+                progress.costs.remove(&oldest);
+            }
+            progress.costs.entry(shape).or_default().observe(
+                job.tasks,
+                received_at - dispatched_at,
+                received_at,
+            );
+        }
+        let accepted_at = Instant::now();
+        let age = accepted_at - frame.captured_at;
+        let checked = checked.and_then(|result| {
+            if age > FRAME_MAX_AGE {
+                Err(Outcome::Stale)
+            } else {
+                Ok(result)
+            }
+        });
+        let accepted = checked.is_ok();
+        let mut missed = [0; 2];
+        let claims_match = progress
+            .per_camera
+            .get_mut(&id)
+            .filter(|analysis| analysis.scope == frame.scope)
+            .is_some_and(|analysis| {
+                if !analysis
+                    .clock
+                    .iter()
+                    .zip(job.claims)
+                    .all(|(clock, claim)| claim.is_none_or(|claim| clock.matches(claim)))
+                {
+                    return false;
+                }
+                for (index, (clock, claim)) in analysis.clock.iter_mut().zip(job.claims).enumerate()
+                {
+                    if let Some(claim) = claim {
+                        missed[index] = clock.finish(claim, accepted).expect("matching claim");
+                    }
+                }
+                true
+            });
+        let checked = if claims_match {
+            checked
+        } else {
+            Err(Outcome::Scope)
+        };
+        record_misses(&mut progress.totals, job.tasks, missed);
         let Some(metrics) = progress.metrics.get_mut(&id) else {
             record_outcome(&mut progress.totals, job.tasks, Outcome::Scope);
             return false;
@@ -549,24 +729,9 @@ impl VisionScheduler {
         if let Ok(result) = result {
             metrics.worker_reply(received_at - dispatched_at, result.worker_timing, job.tasks);
         }
-        let accepted_at = Instant::now();
-        let age = accepted_at - frame.captured_at;
-        let checked = checked.and_then(|result| {
-            if age > FRAME_MAX_AGE {
-                Err(Outcome::Stale)
-            } else {
-                Ok(result)
-            }
-        });
+        record_misses(&mut metrics.report.counts, job.tasks, missed);
         let outcome = match checked {
-            Ok(_) => metrics.accept(
-                job.tasks,
-                frame.sampling,
-                job.source_us,
-                age,
-                accepted_at,
-                job.extra_fire,
-            ),
+            Ok(_) => metrics.accept(job.tasks, age, accepted_at, job.extra_fire),
             Err(outcome) => outcome,
         };
         record_outcome(&mut metrics.report.counts, job.tasks, outcome);
@@ -624,11 +789,13 @@ impl Analysis {
     fn new(scope: SourceScope) -> Self {
         Self {
             scope,
+            clock: std::array::from_fn(|_| TaskClock::default()),
             pose_time: None,
             fire_time: None,
             pose_at: None,
             fire_at: None,
             burst: None,
+            last_fire_claim: None,
             last_exploration: None,
             extra_fire_frames: 0,
             pose_frames: 0,
@@ -731,58 +898,99 @@ impl Analysis {
 
 fn next_job(
     previous: Option<&Analysis>,
-    source_us: i64,
+    frame: FrameKey,
     now: Instant,
     sampling: CameraSampling,
     priority: CameraPriority,
     live: bool,
+    both_cost: Option<Duration>,
 ) -> Option<Job> {
-    let fire = due(
-        previous.and_then(|state| state.fire_time),
-        source_us,
-        sampling.fire_fps,
-    );
-    let pose = due(
-        previous.and_then(|state| state.pose_time),
-        source_us,
-        sampling.pose_fps,
-    );
+    let mut slots = previous.map_or([Some(0); 2], |state| {
+        [
+            state.clock[0].due(frame, sampling.pose_fps),
+            state.clock[1].due(frame, sampling.fire_fps),
+        ]
+    });
+    let burst = previous
+        .and_then(|state| state.burst)
+        .is_some_and(|at| now.duration_since(at) < FIRE_BURST_TIME);
+    let last_fire = previous
+        .and_then(|state| state.last_fire_claim)
+        .filter(|(last, _)| last.generation == frame.generation);
+    let fire_spacing = last_fire.is_none_or(|(last, _)| {
+        (i128::from(frame.source_us) - i128::from(last.source_us)) * i128::from(FIRE_BURST_FPS)
+            >= 1_000_000
+    });
+    if !fire_spacing && (burst || last_fire.is_some_and(|(_, extra)| extra)) {
+        slots[1] = None;
+    }
+    let [pose, fire] = slots.map(|slot| slot.is_some());
+    let job = |tasks: Tasks, rank| Job {
+        tasks,
+        rank,
+        claims: [
+            tasks.pose().then_some(Claim {
+                frame,
+                base_slot: slots[0],
+            }),
+            tasks.fire().then_some(Claim {
+                frame,
+                base_slot: slots[1],
+            }),
+        ],
+    };
     let pose_age = age(previous.and_then(|state| state.pose_at), now);
     let fire_age = age(previous.and_then(|state| state.fire_at), now);
+    let fire_limit = Duration::from_micros(1_333_333 / u64::from(sampling.fire_fps));
+    let pose_limit = Duration::from_micros(1_333_333 / u64::from(sampling.pose_fps));
+    let pose_debt = pose_age.saturating_sub(pose_limit);
+    let fire_debt = fire_age.saturating_sub(fire_limit);
     // Protect due fire work that has missed the configured operating target.
-    // Eligibility is based on this camera's source clock. Ordering is monotonic.
-    if fire && fire_age >= Duration::from_micros(1_333_333 / u64::from(sampling.fire_fps)) {
-        return Some(Job {
-            tasks: if pose { Tasks::Both } else { Tasks::Fire },
-            rank: DispatchRank::LateFire(fire_age),
-        });
+    // A camera with accumulated pose debt gets service after its Fire reply.
+    let very_late_pose = pose && pose_age >= pose_limit.saturating_mul(2);
+    let late_fire = fire && fire_age >= fire_limit;
+    if late_fire && (!very_late_pose || pose_debt <= fire_debt) {
+        return Some(job(Tasks::Fire, DispatchRank::Overdue(fire_debt)));
+    }
+    if very_late_pose {
+        return Some(job(Tasks::Pose, DispatchRank::Overdue(pose_debt)));
     }
     let (tasks, age) = match (pose, fire) {
-        (true, true) => (Tasks::Both, pose_age.max(fire_age)),
+        (true, true)
+            if both_cost.is_some_and(|cost| {
+                cost <= pose_limit.saturating_sub(pose_age)
+                    && cost <= fire_limit.saturating_sub(fire_age)
+            }) =>
+        {
+            (Tasks::Both, pose_age.max(fire_age))
+        }
+        // A conservative combined estimate can be learned only after
+        // isolated measurements. Retain single-task dispatch while cold.
+        (true, true)
+            if previous.is_some_and(|state| {
+                state.clock[0].remainder(frame, sampling.pose_fps)
+                    >= state.clock[1].remainder(frame, sampling.fire_fps)
+            }) =>
+        {
+            (Tasks::Pose, pose_age)
+        }
+        (true, true) => (Tasks::Fire, fire_age),
         (true, false) => (Tasks::Pose, pose_age),
         (false, true) => (Tasks::Fire, fire_age),
         (false, false) => {
             let state = previous?;
-            let burst = state
-                .burst
-                .is_some_and(|at| now.duration_since(at) < FIRE_BURST_TIME)
-                && due(state.fire_time, source_us, FIRE_BURST_FPS);
+            if !state.clock[1].eligible(frame) || !fire_spacing {
+                return None;
+            }
             let exploration = live
                 && state
                     .last_exploration
                     .is_some_and(|at| now.duration_since(at) >= FIRE_EXPLORATION_PERIOD)
                 && state.smoke == Some(0)
-                && state.fire == Some(0)
-                && due(state.fire_time, source_us, FIRE_BURST_FPS);
+                && state.fire == Some(0);
             return match (burst, exploration) {
-                (true, _) => Some(Job {
-                    tasks: Tasks::Fire,
-                    rank: DispatchRank::Burst,
-                }),
-                (false, true) => Some(Job {
-                    tasks: Tasks::Fire,
-                    rank: DispatchRank::Explore,
-                }),
+                (true, _) => Some(job(Tasks::Fire, DispatchRank::Burst)),
+                (false, true) => Some(job(Tasks::Fire, DispatchRank::Explore)),
                 _ => None,
             };
         }
@@ -792,24 +1000,33 @@ fn next_job(
     } else {
         Duration::ZERO
     };
-    Some(Job {
-        tasks,
-        rank: DispatchRank::Due(age + bonus),
-    })
+    Some(job(tasks, DispatchRank::Due(age + bonus)))
 }
 
 fn age(at: Option<Instant>, now: Instant) -> Duration {
     at.map_or(FRAME_MAX_AGE, |at| now.duration_since(at))
 }
 
-fn due(previous: Option<i64>, source_us: i64, fps: u8) -> bool {
-    let interval = MICROS_PER_SECOND / i64::from(fps);
-    previous.is_none_or(|old| source_us.saturating_sub(old) >= interval)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(source_us: i64) -> FrameKey {
+        FrameKey {
+            generation: Uuid::nil(),
+            ordinal: source_us.unsigned_abs(),
+            source_us,
+        }
+    }
+
+    fn account(clock: &mut TaskClock, source_us: i64) {
+        let claim = Claim {
+            frame: key(source_us),
+            base_slot: Some(0),
+        };
+        assert_eq!(clock.claim(claim), Some(0));
+        assert_eq!(clock.finish(claim, true), Some(0));
+    }
 
     fn analysis(at: Instant) -> Analysis {
         let mut state = Analysis::new(SourceScope {
@@ -819,8 +1036,12 @@ mod tests {
         });
         state.pose_time = Some(1_000_000);
         state.fire_time = Some(1_000_000);
+        for clock in &mut state.clock {
+            account(clock, 1_000_000);
+        }
         state.pose_at = Some(at);
         state.fire_at = Some(at);
+        state.last_fire_claim = Some((key(1_000_000), false));
         state
     }
 
@@ -832,7 +1053,16 @@ mod tests {
         let normal = analysis(now - Duration::from_millis(330));
         let older = analysis(now - Duration::from_millis(400));
         let rank = |camera: &Analysis, priority| {
-            let job = next_job(Some(camera), 1_300_000, now, sampling, priority, true).unwrap();
+            let job = next_job(
+                Some(camera),
+                key(1_300_000),
+                now,
+                sampling,
+                priority,
+                true,
+                None,
+            )
+            .unwrap();
             assert_eq!(job.tasks, Tasks::Pose);
             job.rank
         };
@@ -844,19 +1074,130 @@ mod tests {
     fn late_fire_precedes_priority_and_idle_fire_bursts() {
         let now = Instant::now();
         let mut state = analysis(now - Duration::from_millis(800));
-        state.pose_time = Some(1_750_000);
+        state.pose_at = Some(now - Duration::from_millis(200));
         let job = next_job(
             Some(&state),
-            1_800_000,
+            key(1_800_000),
             now,
             CameraSampling::default(),
             CameraPriority::Normal,
             true,
+            Some(Duration::from_millis(20)),
         )
         .unwrap();
         assert_eq!(job.tasks, Tasks::Fire);
         assert!(job.rank > DispatchRank::Due(Duration::MAX));
         assert!(job.rank > DispatchRank::Burst);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn overdue_fire_reply_surfaces_before_due_pose() {
+        async fn reply(tasks: Tasks) -> Tasks {
+            if tasks.pose() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            if tasks.fire() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tasks
+        }
+
+        let now = Instant::now();
+        let mut state = analysis(now - Duration::from_millis(800));
+        state.pose_at = Some(now - Duration::from_millis(250));
+        let frame = key(1_800_000);
+        let choose = |state: &Analysis, now| {
+            next_job(
+                Some(state),
+                frame,
+                now,
+                CameraSampling::default(),
+                CameraPriority::Normal,
+                true,
+                Some(Duration::from_millis(220)),
+            )
+            .unwrap()
+        };
+        assert!(state.clock[0].due(frame, 5).is_some());
+        assert!(state.clock[1].due(frame, 2).is_some());
+        let start = tokio::time::Instant::now();
+        let fire = choose(&state, now);
+        assert_eq!(reply(fire.tasks).await, Tasks::Fire);
+        assert_eq!(start.elapsed(), Duration::from_millis(20));
+        let claim = fire.claims[1].unwrap();
+        assert_eq!(state.clock[1].claim(claim), Some(0));
+        assert_eq!(state.clock[1].finish(claim, true), Some(0));
+        state.fire_at = Some(now);
+        let pose = choose(&state, now + start.elapsed());
+        assert_eq!(reply(pose.tasks).await, Tasks::Pose);
+        assert_eq!(start.elapsed(), Duration::from_millis(220));
+    }
+
+    #[test]
+    fn scheduler_services_each_camera_and_reports_both_deficits_under_overload() {
+        fn simulate(pose_ms: u64, fire_ms: u64) -> Vec<([u64; 2], [u64; 2])> {
+            let start = Instant::now();
+            let mut states: Vec<_> = (0..4).map(|_| analysis(start)).collect();
+            let mut counts = vec![([0; 2], [0; 2]); states.len()];
+            let mut time = 0;
+            let mut first = 0;
+            while time < 60_000 {
+                let now = start + Duration::from_millis(time);
+                let mut selected = None;
+                for offset in 0..states.len() {
+                    let i = (first + offset) % states.len();
+                    let pts = 1_000_000 + ((time * 15 / 1_000) * 1_000_000).div_ceil(15);
+                    let Some(job) = next_job(
+                        Some(&states[i]),
+                        key(pts as i64),
+                        now,
+                        CameraSampling::default(),
+                        if i == 0 {
+                            CameraPriority::High
+                        } else {
+                            CameraPriority::Normal
+                        },
+                        false,
+                        Some(Duration::from_millis(2 * (pose_ms + fire_ms))),
+                    ) else {
+                        continue;
+                    };
+                    if selected.is_none_or(|(_, best): (usize, Job)| job.rank > best.rank) {
+                        selected = Some((i, job));
+                    }
+                }
+                let Some((i, job)) = selected else {
+                    time += 1;
+                    continue;
+                };
+                let state = &mut states[i];
+                for (index, claim) in job.claims.into_iter().enumerate() {
+                    if let Some(claim) = claim {
+                        counts[i].0[index] += 1;
+                        counts[i].1[index] += state.clock[index].claim(claim).unwrap();
+                        state.clock[index].finish(claim, true).unwrap();
+                        if index == 0 {
+                            state.pose_at = Some(now);
+                        } else {
+                            state.fire_at = Some(now);
+                        }
+                    }
+                }
+                time += if job.tasks.pose() { pose_ms } else { 0 };
+                time += if job.tasks.fire() { fire_ms } else { 0 };
+                first = (i + 1) % states.len();
+            }
+            counts
+        }
+        for (accepted, missed) in simulate(7, 5) {
+            assert_eq!(accepted, [299, 119]);
+            assert_eq!(missed, [0, 0]);
+        }
+        for (accepted, missed) in simulate(200, 100) {
+            assert!(accepted[0] > 0 && accepted[0] < 240, "{accepted:?}");
+            assert!(accepted[1] > 0 && accepted[1] < 90, "{accepted:?}");
+            assert!(missed[0] > 0 && missed[1] > 0, "{missed:?}");
+        }
     }
 
     #[test]
@@ -865,14 +1206,17 @@ mod tests {
         let sampling = CameraSampling::default();
         let mut state = analysis(now);
         state.pose_time = Some(1_350_000);
+        state.clock[0] = TaskClock::default();
+        account(&mut state.clock[0], 1_350_000);
         let select = |state: &Analysis, source, at| {
             next_job(
                 Some(state),
-                source,
+                key(source),
                 at,
                 sampling,
                 CameraPriority::Normal,
                 true,
+                None,
             )
         };
         assert!(select(&state, 1_400_000, now).is_none());
@@ -881,6 +1225,19 @@ mod tests {
         let job = select(&state, 1_400_000, now + Duration::from_millis(400)).unwrap();
         assert_eq!(job.tasks, Tasks::Fire);
         assert_eq!(job.rank, DispatchRank::Burst);
+        let claim = job.claims[1].unwrap();
+        assert!(claim.base_slot.is_none());
+        assert_eq!(state.clock[1].claim(claim), Some(0));
+        assert_eq!(state.clock[1].finish(claim, true), Some(0));
+        state.last_fire_claim = Some((claim.frame, true));
+        let at = now + Duration::from_millis(500);
+        assert!(!select(&state, 1_500_000, at).is_some_and(|job| job.tasks.fire()));
+        assert_eq!(
+            select(&state, 1_750_000, at).unwrap().claims[1]
+                .unwrap()
+                .base_slot,
+            Some(1)
+        );
         state.update_burst(true, now + Duration::from_secs(1));
         assert!(select(&state, 1_400_000, now + FIRE_BURST_TIME).is_none());
         state.update_burst(true, now + FIRE_BURST_COOLDOWN);
@@ -892,17 +1249,20 @@ mod tests {
         let now = Instant::now();
         let mut state = analysis(now);
         state.pose_time = Some(1_350_000);
+        state.clock[0] = TaskClock::default();
+        account(&mut state.clock[0], 1_350_000);
         state.smoke = Some(0);
         state.fire = Some(0);
         state.last_exploration = Some(now - FIRE_EXPLORATION_PERIOD);
         let choose = |source, live| {
             next_job(
                 Some(&state),
-                source,
+                key(source),
                 now,
                 CameraSampling::default(),
                 CameraPriority::Normal,
                 live,
+                None,
             )
         };
         assert!(choose(1_400_000, false).is_none());

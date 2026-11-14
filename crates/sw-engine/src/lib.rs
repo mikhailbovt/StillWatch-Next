@@ -14,6 +14,7 @@ mod registry;
 mod replay_upload;
 mod scene;
 mod semantic;
+mod task_clock;
 mod telemetry;
 mod vision;
 

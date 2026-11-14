@@ -408,6 +408,9 @@ pub struct CameraRuntime {
     /// Signed change in source lag since the first usable native PTS of this live or paced epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_source_lag_ms: Option<i32>,
+    /// Sustained relative lag with hysteresis, omitted until measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_lagging: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

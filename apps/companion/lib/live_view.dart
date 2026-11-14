@@ -396,6 +396,8 @@ class _LiveViewState extends State<LiveView> {
                       const Text('Camera snapshots'),
                     if (_camera?.repeatedFrame == true)
                       const Text('Visual changes unconfirmed'),
+                    if (_camera?.sourceLagging == true)
+                      const Text('Camera stream is delayed'),
                   ],
                 ),
               ),

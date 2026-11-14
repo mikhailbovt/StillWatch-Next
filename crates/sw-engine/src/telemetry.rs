@@ -5,8 +5,8 @@ use std::{
 
 use sw_domain::SourceScope;
 use sw_protocol::{
-    AnalysisMetrics, CameraSampling, Counter, InferenceCounts, LatencyDistribution, TaskDurations,
-    WallCadence, WorkerDurations,
+    AnalysisMetrics, Counter, InferenceCounts, LatencyDistribution, TaskDurations, WallCadence,
+    WorkerDurations,
     worker::{ExecutionTiming, Tasks},
 };
 
@@ -20,7 +20,7 @@ const MAX_WALL_SAMPLES: usize = 1024;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Outcome {
-    Accepted { missed: [u64; 2], burst: bool },
+    Accepted { burst: bool },
     Timeout,
     WorkerFailed,
     Cancelled,
@@ -31,7 +31,6 @@ pub(crate) enum Outcome {
 
 pub(crate) struct CameraMetrics {
     scope: SourceScope,
-    slots: [SourceSlots; 2],
     pub wall: AcceptedWall,
     pub report: AnalysisMetrics,
 }
@@ -40,7 +39,6 @@ impl CameraMetrics {
     pub fn new(scope: SourceScope) -> Self {
         Self {
             scope,
-            slots: Default::default(),
             wall: AcceptedWall::default(),
             report: AnalysisMetrics {
                 source_epoch: Counter(scope.epoch),
@@ -54,15 +52,22 @@ impl CameraMetrics {
         }
     }
 
-    pub fn dispatch(&mut self, scope: SourceScope, tasks: Tasks, queue: Duration, at: Instant) {
+    pub fn dispatch(
+        &mut self,
+        scope: SourceScope,
+        tasks: Tasks,
+        skipped: [u64; 2],
+        queue: Duration,
+        at: Instant,
+    ) {
         if scope != self.scope {
             self.scope = scope;
-            self.slots = Default::default();
             self.report.source_epoch = Counter(scope.epoch);
             increment(&mut self.report.dispatched_epochs, 1);
         }
         self.wall.start(at);
         record_dispatch(&mut self.report.counts, tasks);
+        record_misses(&mut self.report.counts, tasks, skipped);
         let queue_us = micros(queue);
         for_task(
             tasks,
@@ -104,28 +109,23 @@ impl CameraMetrics {
     pub fn accept(
         &mut self,
         tasks: Tasks,
-        sampling: CameraSampling,
-        source_us: i64,
         age: Duration,
         accepted_at: Instant,
         burst: bool,
     ) -> Outcome {
-        let fps = [sampling.pose_fps, sampling.fire_fps];
         let age_us = micros(age);
-        let mut missed = [0; 2];
         for_task(
             tasks,
             &mut self.report.pose,
             &mut self.report.fire,
-            |task, timing| {
-                missed[task] = self.slots[task].accept(source_us, fps[task]);
+            |_, timing| {
                 measure(&mut timing.receive_to_accept_us, age_us);
                 timing.maximum_receive_to_accept_us =
                     Some(timing.maximum_receive_to_accept_us.unwrap_or(0).max(age_us));
             },
         );
         self.wall.record(tasks, accepted_at);
-        Outcome::Accepted { missed, burst }
+        Outcome::Accepted { burst }
     }
 }
 
@@ -135,11 +135,16 @@ pub(crate) fn record_dispatch(counts: &mut InferenceCounts, tasks: Tasks) {
     });
 }
 
+pub(crate) fn record_misses(counts: &mut InferenceCounts, tasks: Tasks, missed: [u64; 2]) {
+    for_task(tasks, &mut counts.pose, &mut counts.fire, |index, task| {
+        increment(&mut task.missed_source_slots, missed[index]);
+    });
+}
+
 pub(crate) fn record_outcome(counts: &mut InferenceCounts, tasks: Tasks, outcome: Outcome) {
     for_task(tasks, &mut counts.pose, &mut counts.fire, |index, task| {
         let field = match outcome {
-            Outcome::Accepted { missed, burst } => {
-                increment(&mut task.missed_source_slots, missed[index]);
+            Outcome::Accepted { burst } => {
                 if index == 1 && burst {
                     increment(&mut task.intentional_burst, 1);
                 }
@@ -176,23 +181,6 @@ fn micros(duration: Duration) -> u32 {
 fn measure(buckets: &mut LatencyDistribution, microseconds: u32) {
     let index = LATENCY_BOUNDS_US.partition_point(|&bound| bound < microseconds);
     increment(&mut buckets[index], 1);
-}
-
-#[derive(Default)]
-struct SourceSlots {
-    anchor_us: Option<i64>,
-    latest_slot: u64,
-}
-
-impl SourceSlots {
-    fn accept(&mut self, pts: i64, fps: u8) -> u64 {
-        let anchor = *self.anchor_us.get_or_insert(pts);
-        let elapsed = u64::try_from(pts.saturating_sub(anchor)).unwrap_or(0);
-        let slot = elapsed.saturating_mul(u64::from(fps)) / 1_000_000;
-        let previous = self.latest_slot;
-        self.latest_slot = previous.max(slot);
-        slot.saturating_sub(previous).saturating_sub(1)
-    }
 }
 
 #[derive(Default)]
@@ -299,17 +287,16 @@ mod tests {
             scene_revision: 1,
         };
         let mut metrics = CameraMetrics::new(scope);
-        let sampling = CameraSampling::default();
         let task = Tasks::Fire;
         let queue = Duration::from_millis(75);
         let age = Duration::from_millis(500);
-        for (scope, pts) in [
+        for (scope, missed) in [
             (scope, 0),
-            (scope, 1_500_000),
+            (scope, 2),
             (SourceScope { epoch: 2, ..scope }, 0),
         ] {
-            metrics.dispatch(scope, task, queue, start);
-            let outcome = metrics.accept(task, sampling, pts, age, start, false);
+            metrics.dispatch(scope, task, [0, missed], queue, start);
+            let outcome = metrics.accept(task, age, start, false);
             record_outcome(&mut metrics.report.counts, task, outcome);
         }
         metrics.worker_reply(
@@ -320,7 +307,8 @@ mod tests {
             }),
             task,
         );
-        metrics.dispatch(metrics.scope, task, queue, start);
+        metrics.dispatch(metrics.scope, task, [0; 2], queue, start);
+        record_misses(&mut metrics.report.counts, task, [0, 1]);
         record_outcome(&mut metrics.report.counts, task, Outcome::Timeout);
         let report = metrics.report;
         assert_eq!(report.dispatched_epochs, Counter(2));
@@ -328,7 +316,7 @@ mod tests {
         assert_eq!(report.counts.fire.dispatched, Counter(4));
         assert_eq!(report.counts.fire.accepted, Counter(3));
         assert_eq!(report.counts.fire.timeout, Counter(1));
-        assert_eq!(report.counts.fire.missed_source_slots, Counter(2));
+        assert_eq!(report.counts.fire.missed_source_slots, Counter(3));
         assert_eq!(report.counts.pose, Default::default());
         let threshold = LATENCY_BOUNDS_US
             .iter()

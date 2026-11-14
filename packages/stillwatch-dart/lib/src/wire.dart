@@ -165,6 +165,7 @@ final class Camera {
   bool get enabled => configuration['enabled'] == true;
   String get state => text(runtime, 'state');
   bool get repeatedFrame => runtime['repeated_frame'] == true;
+  bool get sourceLagging => runtime['source_lagging'] == true;
 }
 
 final class AnalysisOrigin {

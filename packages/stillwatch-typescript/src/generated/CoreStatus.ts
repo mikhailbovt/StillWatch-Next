@@ -44,6 +44,7 @@ export interface CameraCoverage {
   current_source_epoch?: Counter | null;
   last_frame_age_ms?: Counter | null;
   revision: Counter;
+  source_lagging?: boolean | null;
   [k: string]: unknown;
 }
 export interface AnalysisCoverage {

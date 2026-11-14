@@ -65,10 +65,14 @@ class CameraGrid extends StatelessWidget {
                 ? 'Core offline'
                 : camera.repeatedFrame
                 ? 'Visual changes unconfirmed'
+                : camera.sourceLagging
+                ? 'Camera stream is delayed'
                 : readable(camera.state);
             final analysis = camera.runtime['analysis'];
             final cadence = analysis is Map ? analysis['cadence'] : null;
             final analysisStatus = switch (analysis) {
+              {'state': 'degraded'} when camera.sourceLagging =>
+                'Analysis of delayed frames',
               {'state': 'degraded'} => 'Analysis unavailable',
               _ when cadence is Map && cadence['below_target'] == true =>
                 'Analysis below target rate',

@@ -128,6 +128,12 @@
         },
         "revision": {
           "$ref": "#/$defs/Counter"
+        },
+        "source_lagging": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -282,7 +288,7 @@
           "$ref": "#/$defs/Counter"
         },
         "missed_source_slots": {
-          "description": "Nominal source-clock slots crossed without an accepted result between two accepted PTS.",
+          "description": "Skipped base slots before a dispatch and rejected base claims within one source clock.",
           "$ref": "#/$defs/Counter"
         },
         "rejected_generation": {

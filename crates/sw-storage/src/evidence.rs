@@ -29,6 +29,7 @@ const WALL_CLOCK_ERROR_MS: u64 = 1_000;
 pub struct ObservationTime {
     pub observed_host_utc: UnixMillis,
     observed_at: Instant,
+    delayed_source: bool,
 }
 
 impl ObservationTime {
@@ -36,6 +37,14 @@ impl ObservationTime {
         Self {
             observed_host_utc,
             observed_at,
+            delayed_source: false,
+        }
+    }
+
+    pub fn from_delayed_source(observed_host_utc: UnixMillis, observed_at: Instant) -> Self {
+        Self {
+            delayed_source: true,
+            ..Self::new(observed_host_utc, observed_at)
         }
     }
 
@@ -56,7 +65,8 @@ impl ObservationTime {
             return false;
         };
         let wall_age_ms = now.saturating_sub(self.observed_host_utc);
-        age < max_age
+        !self.delayed_source
+            && age < max_age
             && now < self.expires_at()
             && wall_age_ms >= 0
             && wall_age_ms.abs_diff(age.as_millis() as i64) <= WALL_CLOCK_ERROR_MS

@@ -390,6 +390,10 @@ export interface CameraRuntime {
    */
   relative_source_lag_ms?: number | null;
   repeated_frame?: boolean;
+  /**
+   * Sustained relative lag with hysteresis, omitted until measured.
+   */
+  source_lagging?: boolean | null;
   state: CaptureState;
   [k: string]: unknown;
 }

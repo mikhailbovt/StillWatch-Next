@@ -2,6 +2,7 @@
 
 export type Category = "medical" | "fire" | "overview";
 export type EvidenceLimitation =
+  | "source_lagging"
   | "partial_visibility"
   | "sparse_coverage"
   | "source_changed"

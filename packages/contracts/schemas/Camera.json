@@ -337,6 +337,13 @@
         "repeated_frame": {
           "type": "boolean"
         },
+        "source_lagging": {
+          "description": "Sustained relative lag with hysteresis, omitted until measured.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "state": {
           "$ref": "#/$defs/CaptureState"
         }

@@ -107,9 +107,9 @@ pub(crate) async fn monitor(
                     && (vision.is_none()
                         || analysis_state.is_some_and(|(_, state)| state == AnalysisState::Ready));
                 observe_camera(&camera, covered, &mut observations);
-                if let Some((epoch, state)) =
-                    analysis_state.filter(|(_, state)| *state != AnalysisState::Ready)
-                {
+                if let Some((epoch, state)) = analysis_state.filter(|(_, state)| {
+                    *state != AnalysisState::Ready && camera.source_lagging != Some(true)
+                }) {
                     let (previous_epoch, since) = stale_analysis
                         .entry(camera.id)
                         .or_insert_with(|| (epoch, Instant::now()));
@@ -202,6 +202,11 @@ fn observe_camera(
     }
     if camera.clock_held || capture_status_known {
         observations.insert(for_camera(camera, InvalidSourceClock, camera.clock_held));
+    }
+    if let Some(lagging) = camera.source_lagging {
+        observations.insert(for_camera(camera, SourceLagging, lagging));
+    } else if capture_ended {
+        observations.insert(for_camera(camera, SourceLagging, false));
     }
 }
 

@@ -345,6 +345,7 @@ async fn core_status(
                                 capture_state: camera.phase,
                                 current_source_epoch: camera.usable_epoch.map(sw_protocol::Counter),
                                 last_frame_age_ms: camera.last_frame_age_ms,
+                                source_lagging: camera.source_lagging,
                                 analysis: sw_protocol::AnalysisCoverage {
                                     state: analysis.state,
                                     pose_frames: analysis.pose_frames,

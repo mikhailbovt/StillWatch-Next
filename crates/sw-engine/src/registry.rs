@@ -70,6 +70,7 @@ pub struct CameraFrame {
     pub(crate) observation_time: ObservationTime,
     pub usable_for_analysis: bool,
     pub(crate) transport_valid: bool,
+    pub(crate) source_lagging: bool,
     pub live: bool,
     pub(crate) sampling: CameraSampling,
     pub(crate) priority: CameraPriority,
@@ -88,6 +89,7 @@ struct State {
     last: Option<(u64, Instant)>,
     first_source: Option<(u64, i64)>,
     relative_lag: Option<(u64, i32)>,
+    lagging: Option<bool>,
     codec: Option<Arc<str>>,
     repeated_frame: bool,
     retrying: bool,
@@ -130,6 +132,7 @@ pub struct CameraHealth {
     pub retrying: bool,
     pub repeated_frame: bool,
     pub clock_held: bool,
+    pub source_lagging: Option<bool>,
     pub usable_epoch: Option<u64>,
     pub last_frame_age_ms: Option<Counter>,
 }
@@ -195,6 +198,7 @@ impl CameraRegistry {
             last: None,
             first_source: None,
             relative_lag: None,
+            lagging: None,
             codec: None,
             repeated_frame: false,
             retrying: false,
@@ -236,6 +240,7 @@ impl CameraRegistry {
                     .relative_lag
                     .filter(|(epoch, _)| *epoch == item.epoch)
                     .map(|(_, lag)| lag),
+                source_lagging: state.lagging,
                 codec: state.codec.as_deref().map(str::to_owned),
                 repeated_frame: state.repeated_frame,
                 analysis: None,
@@ -261,6 +266,7 @@ impl CameraRegistry {
                         retrying: current.retrying,
                         repeated_frame: current.repeated_frame,
                         clock_held: current.clock_held,
+                        source_lagging: current.lagging,
                         last_frame_age_ms: current
                             .last
                             .map(|(_, at)| Counter(at.elapsed().as_millis() as u64)),
@@ -795,6 +801,7 @@ impl CameraRegistry {
                 last: None,
                 first_source: None,
                 relative_lag: None,
+                lagging: None,
                 codec: None,
                 repeated_frame: false,
                 retrying: false,
@@ -997,11 +1004,13 @@ impl CameraRegistry {
             let frame = match read {
                 CaptureRead::Frame(frame) => frame,
                 CaptureRead::Dropped(_) => {
+                    source_progress.unobserved();
                     state.send_modify(|state| {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
                         state.repeated_frame = false;
                         state.relative_lag = None;
+                        state.lagging = None;
                         if state.codec.is_none() {
                             state.codec = process.codec().cloned();
                         }
@@ -1011,7 +1020,7 @@ impl CameraRegistry {
                 CaptureRead::End => return Ok(CaptureState::Completed),
             };
             let now = Instant::now();
-            let observation_time = ObservationTime::new(sw_storage::utc_ms(), now);
+            let observed_utc = sw_storage::utc_ms();
             let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
             let dimensions = (frame.header.width, frame.header.height);
             if dimensions != mask_dimensions {
@@ -1054,7 +1063,14 @@ impl CameraRegistry {
             let relative_lag = if paced && has_native_time {
                 source_progress.observe(camera.epoch, source_us, now)
             } else {
+                source_progress.unobserved();
                 None
+            };
+            let source_lagging = relative_lag.map(|_| source_progress.lagging);
+            let observation_time = if source_lagging == Some(true) {
+                ObservationTime::from_delayed_source(observed_utc, now)
+            } else {
+                ObservationTime::new(observed_utc, now)
             };
             let scope = SourceScope {
                 camera_id: camera.id,
@@ -1067,6 +1083,7 @@ impl CameraRegistry {
                 observation_time,
                 usable_for_analysis: usable,
                 transport_valid: has_native_time,
+                source_lagging: source_lagging == Some(true),
                 live,
                 sampling: camera.config.sampling,
                 priority: camera.config.priority,
@@ -1108,6 +1125,7 @@ impl CameraRegistry {
                 }
                 state.repeated_frame = content.holding;
                 state.relative_lag = relative_lag.map(|lag| (scope.epoch, lag));
+                state.lagging = source_lagging;
                 state.retrying = false;
                 state.clock_held = clock
                     .hold_started
@@ -1167,6 +1185,7 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
         state.repeated_frame = false;
         state.clock_held = false;
         state.relative_lag = None;
+        state.lagging = None;
         if phase != CaptureState::Completed {
             state.codec = None;
             state.first_source = None;
@@ -1266,16 +1285,21 @@ impl FrameClock {
 #[derive(Default)]
 struct SourceProgress {
     anchor: Option<(u64, i64, Instant)>,
+    pending: Option<Instant>,
+    lagging: bool,
 }
 
 impl SourceProgress {
     fn observe(&mut self, epoch: u64, pts: Option<i64>, at: Instant) -> Option<i32> {
         let pts = pts?;
-        let (old_epoch, first_pts, first_receive) = *self.anchor.get_or_insert((epoch, pts, at));
-        if old_epoch != epoch {
-            self.anchor = Some((epoch, pts, at));
+        if self.anchor.is_none_or(|(old_epoch, ..)| old_epoch != epoch) {
+            *self = Self {
+                anchor: Some((epoch, pts, at)),
+                ..Self::default()
+            };
             return None;
         }
+        let (_, first_pts, first_receive) = self.anchor?;
         let source_us = i128::from(pts) - i128::from(first_pts);
         let wall = at - first_receive;
         if source_us < 1_000_000 || wall < Duration::from_secs(2) {
@@ -1283,8 +1307,29 @@ impl SourceProgress {
         }
         // Relative to the first received frame of the scope. This never shifts the anchor
         // to a late frame, which would hide a growing capture backlog.
-        let lag_ms = (wall.as_micros() as i128 - source_us) / 1_000;
+        let wall_us = wall.as_micros() as i128;
+        let lag_ms = (wall_us - source_us) / 1_000;
+        // Allow up to 100 ppm of accumulated clock skew for the health decision.
+        // Keep the measured lag unadjusted for diagnostics and qualification.
+        let adjusted_lag_ms = lag_ms - wall_us / 10_000_000;
+        let (crossed, hold) = if self.lagging {
+            (adjusted_lag_ms <= 500, Duration::from_secs(3))
+        } else {
+            (adjusted_lag_ms >= 1_000, Duration::from_secs(2))
+        };
+        if crossed {
+            if at - *self.pending.get_or_insert(at) >= hold {
+                self.lagging = !self.lagging;
+                self.pending = None;
+            }
+        } else {
+            self.pending = None;
+        }
         Some(lag_ms.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32)
+    }
+
+    fn unobserved(&mut self) {
+        self.pending = None;
     }
 }
 
@@ -1309,8 +1354,10 @@ mod tests {
             progress.observe(1, Some(2_800_000), start + Duration::from_secs(6)),
             Some(3000)
         );
+        assert!(progress.lagging);
         let restarted = start + Duration::from_secs(8);
         assert_eq!(progress.observe(2, Some(200_000), restarted), None);
+        assert!(!progress.lagging);
         assert_eq!(
             progress.observe(2, Some(2_203_000), restarted + Duration::from_secs(2)),
             Some(-3)
@@ -1319,6 +1366,34 @@ mod tests {
             progress.observe(2, Some(2_700_000), restarted + Duration::from_millis(2550)),
             Some(50)
         );
+    }
+
+    #[test]
+    fn source_lag_tolerates_clock_drift_and_recovers_with_observed_progress() {
+        let mut progress = SourceProgress::default();
+        let start = Instant::now();
+        progress.observe(7, Some(0), start);
+        for second in [1_000, 90_000, 180_000] {
+            // 80 ppm of skew plus up to 150 ms of temporary jitter.
+            let pts = second * 999_920 - 150_000;
+            progress.observe(7, Some(pts), start + Duration::from_secs(second as u64));
+            assert!(!progress.lagging);
+        }
+        let observe = |progress: &mut SourceProgress, seconds: i64, extra_lag_us: i64| {
+            progress.observe(
+                7,
+                Some(seconds * 999_920 - extra_lag_us),
+                start + Duration::from_secs(seconds as u64),
+            );
+            progress.lagging
+        };
+        assert!(!observe(&mut progress, 180_002, 6_000_000));
+        progress.unobserved();
+        assert!(!observe(&mut progress, 180_003, 5_500_000));
+        assert!(observe(&mut progress, 180_005, 5_500_000));
+        assert!(observe(&mut progress, 180_006, 4_600_000));
+        assert!(observe(&mut progress, 180_008, 3_000_000));
+        assert!(!observe(&mut progress, 180_011, 3_000_000));
     }
 
     #[test]

@@ -1095,6 +1095,9 @@ async fn persist(
     if !frame.live {
         limitations.push(EvidenceLimitation::NonLive);
     }
+    if frame.source_lagging {
+        limitations.push(EvidenceLimitation::SourceLagging);
+    }
     if hazard.limited {
         limitations.push(EvidenceLimitation::PartialVisibility);
     }
