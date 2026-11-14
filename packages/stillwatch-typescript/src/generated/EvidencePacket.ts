@@ -41,9 +41,15 @@ export interface EvidencePacket {
   context?: EvidenceContext | null;
   evidence_version: Counter;
   expires_at: UtcTimestamp;
+  /**
+   * Freshness at persistence. Live semantic dispatch rechecks the current deadline.
+   */
+  fresh_when_persisted?: boolean | null;
   images: EvidenceImageMetadata[];
   incident_id: string;
+  observed_host_utc?: UtcTimestamp | null;
   packet_id: string;
+  persisted_at?: UtcTimestamp | null;
   scene_revision: Counter;
   schema_version: string;
   source_epoch: Counter;

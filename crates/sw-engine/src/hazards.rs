@@ -13,14 +13,13 @@ use sw_protocol::{
     Counter, Dimensions, EvidenceContext, EvidenceInterval, EvidenceLimitation, EvidenceVisibility,
     LocalFacts, worker::InferenceResult,
 };
-use sw_storage::{EvidenceWrite, Store, StoreError};
+use sw_storage::{EvidenceWrite, Store, StoreError, utc_ms};
 use uuid::Uuid;
 
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
 const POLICY_VERSION: &str = "local-policy-2";
-const PACKET_TTL_MS: i64 = 15_000;
 
 pub(crate) struct HazardPolicies {
     scope: SourceScope,
@@ -393,7 +392,12 @@ impl PendingHazards {
                         if batch.frame.captured_at.elapsed() <= Duration::from_secs(3) =>
                     {
                         self.store
-                            .record_recovery(*incident, batch.frame.scope, source_us, utc_ms())
+                            .record_fresh_recovery(
+                                *incident,
+                                batch.frame.scope,
+                                source_us,
+                                batch.frame.observation_time,
+                            )
                             .await
                     }
                     _ => Ok(()),
@@ -439,12 +443,15 @@ async fn persist(
         first_source_us: hazard.first_source_us.min(hazard.source_us),
         last_source_us: hazard.source_us,
         live: frame.live,
+        observed_host_utc: Some(frame.observation_time.observed_host_utc),
         assessment: hazard.assessment,
     };
     let incident = if hazard.update {
         store.observe_hazard(new, now).await?
     } else {
-        store.create_hazard(new, now).await?
+        store
+            .create_observed_hazard(new, frame.observation_time)
+            .await?
     };
     if incident.resolution.is_some()
         || (hazard.update && incident.last_source_us != hazard.source_us)
@@ -507,15 +514,12 @@ async fn persist(
                 .checked_add(1)
                 .ok_or(StoreError::Invalid)?,
             scope: frame.scope,
-            expires_at: time.saturating_add(PACKET_TTL_MS),
+            expires_at: frame.observation_time.expires_at(),
         },
+        observation_time: Some(frame.observation_time),
         context: Some(context),
         images: selected.images,
     };
     store.persist_evidence(packet, time).await?;
     Ok(())
-}
-
-fn utc_ms() -> i64 {
-    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
 }

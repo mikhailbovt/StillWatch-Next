@@ -74,6 +74,8 @@ pub fn incident(item: domain::Incident) -> Result<wire::Incident, ApiError> {
         live: item.live,
         created_at: timestamp(item.created_at)?,
         updated_at: timestamp(item.updated_at)?,
+        opening_observed_host_utc: item.opening_observed_host_utc.map(timestamp).transpose()?,
+        opening_delayed: item.opening_delayed,
     })
 }
 

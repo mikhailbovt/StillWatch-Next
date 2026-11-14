@@ -16,7 +16,8 @@ use sw_protocol::{
     worker::{CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality},
 };
 use sw_storage::{
-    CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult, Store, StoreError,
+    CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult, ObservationTime, Store,
+    StoreError,
 };
 use thiserror::Error;
 use tokio::{
@@ -63,6 +64,7 @@ pub enum RegistryError {
 pub struct CameraFrame {
     pub scope: SourceScope,
     pub captured_at: Instant,
+    pub(crate) observation_time: ObservationTime,
     pub usable_for_analysis: bool,
     pub live: bool,
     pub(crate) sampling: CameraSampling,
@@ -879,6 +881,7 @@ impl CameraRegistry {
                 CaptureRead::End => return Ok(CaptureState::Completed),
             };
             let now = Instant::now();
+            let observation_time = ObservationTime::new(sw_storage::utc_ms(), now);
             let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
             let sample = scene::measure(&frame);
             if reset {
@@ -927,6 +930,7 @@ impl CameraRegistry {
             latest.send_replace(Some(Arc::new(CameraFrame {
                 scope,
                 captured_at: now,
+                observation_time,
                 usable_for_analysis: usable,
                 live,
                 sampling: camera.config.sampling,

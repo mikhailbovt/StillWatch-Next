@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sw_domain::{
     Assessment, Clearance, DomainError, EvidenceStamp, EvidenceState, Incident, UnixMillis,
@@ -69,6 +71,16 @@ impl Store {
         }
         let day_start = now.div_euclid(86_400_000) * 86_400_000;
         self.call(move |db| {
+            let now = now.max(crate::utc_ms());
+            let day_start = day_start.max(now.div_euclid(86_400_000) * 86_400_000);
+            let monotonic = Instant::now();
+            db.evidence_monotonic.retain(|_, time| time.evidence_fresh(now, monotonic));
+            if db.evidence_monotonic.is_empty() {
+                return Ok(None);
+            }
+            let active = serde_json::to_string(
+                &db.evidence_monotonic.keys().map(|packet| packet.simple().to_string()).collect::<Vec<_>>()
+            )?;
             let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let used: u32 = tx.query_row("SELECT count(*) FROM semantic_attempts WHERE started_at >= ?", [day_start], |row| row.get(0))?;
             if used >= daily_limit {
@@ -76,10 +88,12 @@ impl Store {
             }
             let candidate = tx.query_row(
                 "SELECT p.id, p.incident_id, json_type(c.config, '$.cloud_consent') IS 'true'
-                 FROM evidence_packets p
+                 FROM json_each(?6) active
+                 JOIN evidence_packets p ON p.id = unhex(active.value)
                  JOIN incidents i ON i.id = p.incident_id
                  JOIN cameras c ON i.camera_id = c.id
-                 WHERE p.context IS NOT NULL AND p.expires_at > ?1 AND i.resolved = 0
+                 WHERE p.context IS NOT NULL AND p.expires_at > ?1 AND p.semantic_eligible = 1
+                   AND i.resolved = 0
                    AND i.camera_hazard = 1 AND c.deleted = 0 AND c.enabled = 1
                    AND c.source_epoch = json_extract(i.state, '$.scope.epoch')
                    AND c.scene_revision = json_extract(i.state, '$.scope.scene_revision')
@@ -90,10 +104,10 @@ impl Store {
                    AND (?4 = 'local_only' OR json_type(c.config, '$.cloud_consent') IS 'true'
                         OR (?4 = 'prefer_local' AND ?5))
                    AND NOT EXISTS (SELECT 1 FROM semantic_attempts a WHERE a.packet_id = p.id)
-                   AND NOT EXISTS (SELECT 1 FROM semantic_attempts a WHERE a.camera_id = c.id AND a.started_at >= ?3)
+                   AND NOT EXISTS (SELECT 1 FROM semantic_attempts a WHERE a.camera_id = c.id AND a.started_at > ?3)
                    AND (SELECT count(*) FROM semantic_attempts a WHERE a.incident_id = i.id) < 3
                  ORDER BY p.captured_at, p.id LIMIT 1",
-                params![now, include_replay, now.saturating_sub(minimum_interval_ms), route_name(route), local_ready],
+                params![now, include_replay, now.saturating_sub(minimum_interval_ms), route_name(route), local_ready, active],
                 |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, bool>(2)?)),
             ).optional()?;
             let Some((packet_id, incident_id, consent)) = candidate else { return Ok(None); };
@@ -118,8 +132,18 @@ impl Store {
         let incident = work.packet.incident_id;
         let stamp = work.stamp;
         let route = work.route;
-        self.call(move |db| Ok(current(&db.conn, incident, stamp, route, now)?.is_some()))
-            .await
+        self.call(move |db| {
+            let now = now.max(crate::utc_ms());
+            if !db
+                .evidence_monotonic
+                .get(&stamp.packet_id)
+                .is_some_and(|time| time.evidence_fresh(now, Instant::now()))
+            {
+                return Ok(false);
+            }
+            Ok(current(&db.conn, incident, stamp, route, now)?.is_some())
+        })
+        .await
     }
 
     pub async fn semantic_failed(
@@ -152,7 +176,17 @@ impl Store {
             let tx = db
                 .conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let transition = current(&tx, incident_id, stamp, route, now)?
+            let now = now.max(crate::utc_ms());
+            let fresh = db
+                .evidence_monotonic
+                .get(&stamp.packet_id)
+                .is_some_and(|time| time.evidence_fresh(now, Instant::now()));
+            let current = if fresh {
+                current(&tx, incident_id, stamp, route, now)?
+            } else {
+                None
+            };
+            let transition = current
                 .map(|incident| {
                     incident.record_semantic(stamp, assessment, Clearance::Unsubstantiated, now)
                 })
@@ -201,6 +235,13 @@ fn current(
     now: UnixMillis,
 ) -> Result<Option<Incident>, StoreError> {
     if stamp.expires_at <= now {
+        return Ok(None);
+    }
+    if !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM evidence_packets WHERE id = ? AND semantic_eligible = 1)",
+        [id(&stamp.packet_id)],
+        |row| row.get::<_, bool>(0),
+    )? {
         return Ok(None);
     }
     match verify_camera_scope(conn, stamp.scope) {

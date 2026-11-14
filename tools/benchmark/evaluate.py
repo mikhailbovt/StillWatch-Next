@@ -60,6 +60,8 @@ def opening_event(event, committed_at, origins):
         "scene_revision": str(scope["scene_revision"]), "opened_source_us": str(source_us),
         "opened_source_s": (source_us - (origin if origin is not None else 0)) / 1_000_000,
         "source_origin_verified": origin is not None, "opening_recorded_utc_ms": committed_at,
+        "opening_observed_host_utc_ms": event.get("opening_observed_host_utc"),
+        "opening_delayed": event.get("opening_delayed", False),
         "attention": event["attention"], "reason": event["detection_reason"],
     }
 

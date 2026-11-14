@@ -63,6 +63,7 @@ async fn operator_commands_return_committed_revisions_and_problem_details() {
                 first_source_us: 0,
                 last_source_us: 600_000,
                 live: true,
+                observed_host_utc: None,
                 assessment: Assessment::Concern,
             },
             1_000,

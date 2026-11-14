@@ -33,6 +33,8 @@ export interface Incident {
   lifecycle: Lifecycle;
   live: boolean;
   needs_reassessment?: boolean;
+  opening_delayed?: boolean;
+  opening_observed_host_utc?: UtcTimestamp | null;
   resolution?: Resolution | null;
   revision: Counter;
   scene_revision: Counter;

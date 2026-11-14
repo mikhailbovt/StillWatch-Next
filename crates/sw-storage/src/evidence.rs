@@ -2,7 +2,7 @@ use std::{
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -22,6 +22,46 @@ use crate::{
 
 pub(crate) const MAX_IMAGE: usize = 4 * 1024 * 1024;
 const MAX_PACKET: usize = 32 * 1024 * 1024;
+const LIVE_EVIDENCE_TTL_MS: i64 = 15_000;
+const WALL_CLOCK_ERROR_MS: u64 = 1_000;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ObservationTime {
+    pub observed_host_utc: UnixMillis,
+    observed_at: Instant,
+}
+
+impl ObservationTime {
+    pub fn new(observed_host_utc: UnixMillis, observed_at: Instant) -> Self {
+        Self {
+            observed_host_utc,
+            observed_at,
+        }
+    }
+
+    pub fn expires_at(self) -> UnixMillis {
+        self.observed_host_utc.saturating_add(LIVE_EVIDENCE_TTL_MS)
+    }
+
+    pub fn evidence_fresh(self, now: UnixMillis, monotonic: Instant) -> bool {
+        self.fresh(
+            now,
+            monotonic,
+            Duration::from_millis(LIVE_EVIDENCE_TTL_MS as u64),
+        )
+    }
+
+    pub fn fresh(self, now: UnixMillis, monotonic: Instant, max_age: Duration) -> bool {
+        let Some(age) = monotonic.checked_duration_since(self.observed_at) else {
+            return false;
+        };
+        let wall_age_ms = now.saturating_sub(self.observed_host_utc);
+        age < max_age
+            && now < self.expires_at()
+            && wall_age_ms >= 0
+            && wall_age_ms.abs_diff(age.as_millis() as i64) <= WALL_CLOCK_ERROR_MS
+    }
+}
 
 pub struct EvidenceImage {
     pub source_us: i64,
@@ -33,6 +73,7 @@ pub struct EvidenceWrite {
     pub incident_id: Uuid,
     pub expected_revision: u64,
     pub stamp: EvidenceStamp,
+    pub observation_time: Option<ObservationTime>,
     pub context: Option<EvidenceContext>,
     pub images: Vec<EvidenceImage>,
 }
@@ -86,6 +127,12 @@ impl EvidenceWrite {
             if !valid {
                 return Err(StoreError::Invalid);
             }
+        }
+        if self
+            .observation_time
+            .is_some_and(|time| time.expires_at() != self.stamp.expires_at)
+        {
+            return Err(StoreError::Invalid);
         }
         let mut bytes = 0;
         for image in &self.images {
@@ -153,6 +200,8 @@ impl Database {
         now: UnixMillis,
     ) -> Result<EvidenceOutcome, StoreError> {
         self.require_evidence_recovery()?;
+        let monotonic = Instant::now();
+        let now = write.observation_time.map_or(now, |_| crate::utc_ms());
         let image_hashes: Vec<_> = write
             .images
             .iter()
@@ -164,13 +213,23 @@ impl Database {
             .zip(&image_hashes)
             .map(|(image, digest)| (image.source_us, image.kind, digest))
             .collect();
-        let request_hash = Sha256::digest(serde_json::to_vec(&(
+        let (incident_id, revision, stamp, context) = (
             write.incident_id,
             write.expected_revision,
             write.stamp,
             &write.context,
-            signature,
-        ))?);
+        );
+        let request_hash = Sha256::digest(match write.observation_time {
+            Some(time) => serde_json::to_vec(&(
+                incident_id,
+                revision,
+                stamp,
+                context,
+                signature,
+                time.observed_host_utc,
+            ))?,
+            None => serde_json::to_vec(&(incident_id, revision, stamp, context, signature))?,
+        });
         let packet = id(&write.stamp.packet_id);
         let tx = self
             .conn
@@ -189,6 +248,9 @@ impl Database {
             return packet_result(&tx, write.stamp.packet_id, incident_revision);
         }
         let incident = get_incident(&tx, write.incident_id)?;
+        if write.observation_time.is_some() {
+            crate::db::verify_camera_scope(&tx, write.stamp.scope)?;
+        }
         if incident.revision != write.expected_revision {
             return Err(StoreError::Revision {
                 current: incident.revision,
@@ -203,13 +265,18 @@ impl Database {
         }) {
             return Err(StoreError::Invalid);
         }
-        let mut transition =
-            incident.attach_evidence(write.stamp, EvidenceState::Persisted, now)?;
+        let observed = write.observation_time.map(|time| time.observed_host_utc);
+        let mut transition = if write.observation_time.is_some() {
+            incident.attach_observed_evidence(write.stamp, EvidenceState::Persisted, now)?
+        } else {
+            incident.attach_evidence(write.stamp, EvidenceState::Persisted, now)?
+        };
         let incident_revision = transition.incident.revision;
         tx.execute(
-            "INSERT INTO evidence_packets(id, incident_id, version, incident_revision, captured_at, expires_at, request_hash, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![packet, id(&incident.id), sql_counter(write.stamp.version)?, sql_counter(incident_revision)?, now,
-                write.stamp.expires_at, request_hash.as_slice(), write.context.as_ref().map(serde_json::to_string).transpose()?],
+            "INSERT INTO evidence_packets(id, incident_id, version, incident_revision, captured_at, expires_at, request_hash, context, observed_host_utc, semantic_eligible)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            params![packet, id(&incident.id), sql_counter(write.stamp.version)?, sql_counter(incident_revision)?, observed.unwrap_or(now),
+                write.stamp.expires_at, request_hash.as_slice(), write.context.as_ref().map(serde_json::to_string).transpose()?, observed],
         )?;
 
         if self.blob_bytes.is_none() {
@@ -272,7 +339,39 @@ impl Database {
             EvidenceOutcome::Failed(_) => EvidenceState::Unavailable,
         };
         update_incident(&tx, &transition)?;
+        // A storage stall can cross the deadline while preparing the transaction.
+        let committed_at = if write.observation_time.is_some() {
+            crate::utc_ms()
+        } else {
+            now
+        };
+        let eligible = write.observation_time.is_some_and(|time| {
+            time.evidence_fresh(now, monotonic) && time.evidence_fresh(committed_at, Instant::now())
+        });
+        tx.execute(
+            "UPDATE evidence_packets SET persisted_at = ?, semantic_eligible = ? WHERE id = ?",
+            params![committed_at, eligible, packet],
+        )?;
         tx.commit()?;
+        if eligible
+            && matches!(outcome, EvidenceOutcome::Persisted(_))
+            && let Some(time) = write.observation_time
+        {
+            let now = Instant::now();
+            self.evidence_monotonic
+                .retain(|_, registered| registered.evidence_fresh(committed_at, now));
+            const MAX_FRESH_EVIDENCE: usize = 2_048;
+            if self.evidence_monotonic.len() >= MAX_FRESH_EVIDENCE
+                && let Some(oldest) = self
+                    .evidence_monotonic
+                    .iter()
+                    .min_by_key(|(_, time)| time.observed_at)
+                    .map(|(&packet, _)| packet)
+            {
+                self.evidence_monotonic.remove(&oldest);
+            }
+            self.evidence_monotonic.insert(write.stamp.packet_id, time);
+        }
         self.notify.send_replace(());
         Ok(outcome)
     }
@@ -301,9 +400,9 @@ impl Database {
         packet: Uuid,
     ) -> Result<EvidencePacket, StoreError> {
         let item = get_incident(&self.conn, incident)?;
-        let (version, expires, context) = self.conn.query_row(
-            "SELECT version, expires_at, context FROM evidence_packets WHERE incident_id = ? AND id = ?",
-            params![id(&incident), id(&packet)], |r| Ok((row_counter(r, 0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?)),
+        let (version, expires, context, observed, persisted, eligible) = self.conn.query_row(
+            "SELECT version, expires_at, context, observed_host_utc, persisted_at, semantic_eligible FROM evidence_packets WHERE incident_id = ? AND id = ?",
+            params![id(&incident), id(&packet)], |r| Ok((row_counter(r, 0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, bool>(5)?)),
         ).optional()?.ok_or(StoreError::NotFound)?;
         let mut statement = self.conn.prepare(
             "SELECT e.ordinal, e.source_us, e.digest, e.kind, e.retired = 0 AND coalesce(a.available, 0)
@@ -350,6 +449,15 @@ impl Database {
             context: context.as_deref().map(serde_json::from_str).transpose()?,
             images,
             expires_at: UtcTimestamp::from_unix_millis(expires).map_err(|_| StoreError::Schema)?,
+            observed_host_utc: observed
+                .map(UtcTimestamp::from_unix_millis)
+                .transpose()
+                .map_err(|_| StoreError::Schema)?,
+            persisted_at: persisted
+                .map(UtcTimestamp::from_unix_millis)
+                .transpose()
+                .map_err(|_| StoreError::Schema)?,
+            fresh_when_persisted: observed.map(|_| eligible),
         })
     }
 

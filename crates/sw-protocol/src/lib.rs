@@ -138,6 +138,10 @@ pub struct Incident {
     pub live: bool,
     pub created_at: UtcTimestamp,
     pub updated_at: UtcTimestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_observed_host_utc: Option<UtcTimestamp>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opening_delayed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

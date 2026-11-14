@@ -102,6 +102,11 @@ pub struct Incident {
     pub first_source_us: i64,
     pub last_source_us: i64,
     pub live: bool,
+    /// Host receipt of the frame that opened this incident. Retained across updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_observed_host_utc: Option<UnixMillis>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opening_delayed: bool,
     pub created_at: UnixMillis,
     pub updated_at: UnixMillis,
     pub assessment: Assessment,
@@ -127,6 +132,8 @@ pub struct NewIncident {
     pub first_source_us: i64,
     pub last_source_us: i64,
     pub live: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_host_utc: Option<UnixMillis>,
     pub assessment: Assessment,
 }
 
@@ -215,6 +222,8 @@ impl Incident {
             first_source_us: new.first_source_us,
             last_source_us: new.last_source_us,
             live: new.live,
+            opening_observed_host_utc: new.observed_host_utc,
+            opening_delayed: false,
             created_at: now,
             updated_at: now,
             assessment: Assessment::Unknown,
@@ -248,10 +257,22 @@ impl Incident {
         if self.resolution.is_some() {
             return Err(DomainError::Resolved);
         }
-        if stamp.scope != self.scope
-            || stamp.version != increment(self.evidence_version())?
-            || stamp.expires_at <= now
-        {
+        if stamp.expires_at <= now {
+            return Err(DomainError::Stale);
+        }
+        self.attach_observed_evidence(stamp, state, now)
+    }
+
+    pub fn attach_observed_evidence(
+        &self,
+        stamp: EvidenceStamp,
+        state: EvidenceState,
+        now: UnixMillis,
+    ) -> Result<Transition, DomainError> {
+        if self.resolution.is_some() {
+            return Err(DomainError::Resolved);
+        }
+        if stamp.scope != self.scope || stamp.version != increment(self.evidence_version())? {
             return Err(DomainError::Stale);
         }
         if state == EvidenceState::Pending {
@@ -507,6 +528,7 @@ mod tests {
                 first_source_us: 0,
                 last_source_us: 50_000,
                 live,
+                observed_host_utc: None,
                 assessment: Assessment::Concern,
             },
             1_000,

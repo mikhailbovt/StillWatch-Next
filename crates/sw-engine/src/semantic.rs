@@ -364,8 +364,12 @@ impl<P: SemanticProvider> SemanticSupervisor<P> {
                 });
                 bodies.push(jpeg);
             }
+            let mut packet = work.packet.clone();
+            packet.observed_host_utc = None;
+            packet.persisted_at = None;
+            packet.fresh_when_persisted = None;
             let wire = WirePacket {
-                packet: &work.packet,
+                packet: &packet,
                 attachments,
                 timeout_ms: duration.as_millis() as u64,
                 route: work.route,

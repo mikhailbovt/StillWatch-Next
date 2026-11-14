@@ -26,6 +26,13 @@
     "expires_at": {
       "$ref": "#/$defs/UtcTimestamp"
     },
+    "fresh_when_persisted": {
+      "description": "Freshness at persistence. Live semantic dispatch rechecks the current deadline.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "images": {
       "type": "array",
       "items": {
@@ -36,9 +43,29 @@
       "type": "string",
       "format": "uuid"
     },
+    "observed_host_utc": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "packet_id": {
       "type": "string",
       "format": "uuid"
+    },
+    "persisted_at": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "scene_revision": {
       "$ref": "#/$defs/Counter"

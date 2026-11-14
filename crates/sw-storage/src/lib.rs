@@ -22,7 +22,7 @@ use std::{
         mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use sw_domain::{
@@ -39,7 +39,7 @@ pub use backup::{BackupLimits, restore_backup, restore_backup_with_limits};
 pub use budget::DEFAULT_DATABASE_QUOTA_BYTES;
 pub use cameras::{CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult};
 pub use evidence::{
-    EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceResult, EvidenceWrite,
+    EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceResult, EvidenceWrite, ObservationTime,
 };
 pub use health::{HealthIssue, HealthObservation};
 pub use legacy::{LegacyImport, LegacyManifest, import_legacy};
@@ -50,6 +50,13 @@ const MAX_PAGE: usize = 200;
 const MAX_CHANGES: usize = 100_000;
 const MAX_SNAPSHOT: usize = 2_000;
 const WRITE_WINDOW: Duration = Duration::from_secs(10);
+
+pub fn utc_ms() -> UnixMillis {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(time) => time.as_millis() as UnixMillis,
+        Err(time) => -(time.duration().as_millis() as UnixMillis),
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -302,6 +309,15 @@ impl Store {
         self.call(move |db| db.create_hazard(new, now)).await
     }
 
+    pub async fn create_observed_hazard(
+        &self,
+        new: NewIncident,
+        observed: ObservationTime,
+    ) -> Result<Incident, StoreError> {
+        self.call(move |db| db.create_observed_hazard(new, observed))
+            .await
+    }
+
     pub async fn observe_hazard(
         &self,
         new: NewIncident,
@@ -318,6 +334,17 @@ impl Store {
         now: UnixMillis,
     ) -> Result<(), StoreError> {
         self.call(move |db| db.record_recovery(incident, scope, source_us, now))
+            .await
+    }
+
+    pub async fn record_fresh_recovery(
+        &self,
+        incident: Uuid,
+        scope: SourceScope,
+        source_us: i64,
+        observed: ObservationTime,
+    ) -> Result<(), StoreError> {
+        self.call(move |db| db.record_observed_recovery(incident, scope, source_us, observed))
             .await
     }
 

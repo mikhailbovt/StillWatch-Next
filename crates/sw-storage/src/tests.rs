@@ -150,6 +150,7 @@ fn incident() -> NewIncident {
         analysis_origin: None,
         first_source_us: 0,
         last_source_us: 50_000,
+        observed_host_utc: None,
         live: true,
         assessment: Assessment::Concern,
     }
@@ -250,6 +251,8 @@ async fn history_retention_preserves_open_incidents_and_advances_the_sse_floor()
 
 #[tokio::test]
 async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
+    use std::time::{Duration, Instant};
+
     use sw_protocol::{
         CameraConfig, CameraPatch, CameraSource, Dimensions, EvidenceContext, EvidenceCoverage,
         EvidenceInterval, LocalFacts, SemanticRoute,
@@ -289,16 +292,32 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
         .camera;
     assert!(matches!(camera.config.source, CameraSource::Usb { .. }));
 
-    let evidence = async |epoch, at| {
+    let evidence = async |epoch, at, stale: bool| {
         let mut new = incident();
         new.scope.camera_id = camera.id;
         new.scope.epoch = epoch;
-        let saved = store.create_hazard(new, at).await.unwrap();
+        let monotonic = Instant::now();
+        let utc = crate::utc_ms();
+        // Keep UTC within the apparent TTL while the real frame is a minute old.
+        let captured_at = if stale {
+            monotonic - Duration::from_secs(60)
+        } else {
+            monotonic
+        };
+        let saved = if stale {
+            let time = crate::ObservationTime::new(utc, captured_at);
+            new.observed_host_utc = Some(utc);
+            new.assessment = Assessment::ImmediateVisibleConcern;
+            store.create_observed_hazard(new, time).await.unwrap()
+        } else {
+            store.create_hazard(new, at).await.unwrap()
+        };
+        let observation_time = crate::ObservationTime::new(utc, captured_at);
         let stamp = EvidenceStamp {
             packet_id: Uuid::new_v4(),
             version: 1,
             scope: saved.scope,
-            expires_at: 50_000,
+            expires_at: observation_time.expires_at(),
         };
         store
             .persist_evidence(
@@ -306,6 +325,7 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
                     incident_id: saved.id,
                     expected_revision: saved.revision,
                     stamp,
+                    observation_time: Some(observation_time),
                     context: Some(EvidenceContext {
                         observed_interval: EvidenceInterval {
                             start_source_s: 0.0,
@@ -335,10 +355,38 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
                         jpeg: BLACK.to_vec(),
                     }],
                 },
-                at + 1,
+                crate::utc_ms(),
             )
             .await
             .unwrap();
+        let packet = store
+            .evidence_packet(saved.id, stamp.packet_id)
+            .await
+            .unwrap();
+        assert_eq!(packet.fresh_when_persisted, Some(!stale));
+        assert_eq!(packet.observed_host_utc.unwrap().unix_millis(), utc);
+        assert!(packet.persisted_at.is_some());
+        assert_eq!(
+            packet.expires_at.unix_millis(),
+            observation_time.expires_at()
+        );
+        if stale {
+            assert!(saved.opening_delayed);
+            assert_eq!(saved.attention, sw_domain::Attention::Review);
+            assert!(saved.live);
+            assert_eq!(store.get(saved.id).await.unwrap().evidence, Some(stamp));
+            assert!(matches!(
+                store
+                    .record_fresh_recovery(
+                        saved.id,
+                        stamp.scope,
+                        saved.last_source_us + 1,
+                        observation_time
+                    )
+                    .await,
+                Err(StoreError::Domain(sw_domain::DomainError::Stale))
+            ));
+        }
         stamp
     };
     let patch = async |revision, consent, key: &'static str, at| {
@@ -365,41 +413,34 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
             .unwrap()
             .camera
     };
-    let claim = async |route, ready, at| {
+    let claim = async |route, ready| {
         store
-            .claim_semantic(route, ready, at, 5, 100, false)
+            .claim_semantic(route, ready, crate::utc_ms() + 100, 5, 0, false)
             .await
             .unwrap()
     };
 
     let default_epoch = store.bump_camera_epoch(camera.id, 1).await.unwrap().epoch;
-    let local = evidence(default_epoch, 2_000).await;
-    assert!(claim(SemanticRoute::CloudOnly, true, 3_000).await.is_none());
-    assert!(
-        claim(SemanticRoute::PreferLocal, false, 3_000)
-            .await
-            .is_none()
-    );
-    assert!(
-        claim(SemanticRoute::LocalOnly, false, 3_000)
-            .await
-            .is_none()
-    );
-    let local_work = claim(SemanticRoute::PreferLocal, true, 3_000)
-        .await
-        .unwrap();
+    evidence(default_epoch, 1_500, true).await;
+    assert!(claim(SemanticRoute::LocalOnly, true).await.is_none());
+    let observed = Instant::now();
+    let before_step = crate::ObservationTime::new(10_000, observed);
+    assert!(before_step.evidence_fresh(10_500, observed + Duration::from_millis(500)));
+    assert!(!before_step.evidence_fresh(10_100, observed + Duration::from_secs(3)));
+    assert!(!before_step.evidence_fresh(15_000, observed + Duration::from_millis(500)));
+    let local = evidence(default_epoch, 2_000, false).await;
+    assert!(claim(SemanticRoute::CloudOnly, true).await.is_none());
+    assert!(claim(SemanticRoute::PreferLocal, false).await.is_none());
+    assert!(claim(SemanticRoute::LocalOnly, false).await.is_none());
+    let local_work = claim(SemanticRoute::PreferLocal, true).await.unwrap();
     assert_eq!(local_work.route, SemanticRoute::LocalOnly);
     assert_eq!(local_work.stamp, local);
 
     let opted_in = patch(1, true, "allow-cloud", 4_000).await;
     assert!(!store.semantic_current(&local_work, 4_000).await.unwrap());
-    assert!(
-        claim(SemanticRoute::CloudOnly, false, 4_000)
-            .await
-            .is_none()
-    );
-    let cloud = evidence(opted_in.epoch, 5_000).await;
-    let cloud_work = claim(SemanticRoute::CloudOnly, false, 6_000).await.unwrap();
+    assert!(claim(SemanticRoute::CloudOnly, false).await.is_none());
+    let cloud = evidence(opted_in.epoch, 5_000, false).await;
+    let cloud_work = claim(SemanticRoute::CloudOnly, false).await.unwrap();
     assert_eq!(cloud_work.stamp, cloud);
     assert_eq!(cloud_work.route, SemanticRoute::CloudOnly);
     assert!(store.semantic_current(&cloud_work, 6_000).await.unwrap());
@@ -409,6 +450,26 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
     assert!(!store.semantic_current(&cloud_work, 7_000).await.unwrap());
     patch(3, true, "allow-cloud-again", 8_000).await;
     assert!(!store.semantic_current(&cloud_work, 8_000).await.unwrap());
+
+    let current = store.camera(camera.id).await.unwrap();
+    let fresh_before_restart = evidence(current.epoch, 9_000, false).await;
+    assert_ne!(fresh_before_restart.packet_id, cloud_work.stamp.packet_id);
+    drop(store);
+    let restarted = Store::open(root.path(), StoreConfig::default()).unwrap();
+    assert!(
+        restarted
+            .claim_semantic(
+                SemanticRoute::CloudOnly,
+                false,
+                crate::utc_ms() + 200,
+                5,
+                0,
+                false
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -429,6 +490,7 @@ fn evidence_retention_tracks_references_across_restarts() {
                 incident_id: saved.id,
                 expected_revision: saved.revision,
                 stamp,
+                observation_time: None,
                 context: None,
                 images: vec![EvidenceImage {
                     source_us: 50_000,
@@ -913,6 +975,7 @@ fn evidence_write(
         incident_id: incident.id,
         expected_revision: incident.revision,
         stamp,
+        observation_time: None,
         context: None,
         images: images
             .iter()

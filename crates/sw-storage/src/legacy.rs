@@ -289,6 +289,7 @@ fn import_incidents(
                 first_source_us: scaled(old.first_ts, 1_000_000.0)?,
                 last_source_us: scaled(old.last_ts, 1_000_000.0)?,
                 live: false,
+                observed_host_utc: None,
                 assessment: Assessment::Unknown,
             },
             created_at,

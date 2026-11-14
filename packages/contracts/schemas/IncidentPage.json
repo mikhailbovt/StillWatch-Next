@@ -161,6 +161,19 @@
         "needs_reassessment": {
           "type": "boolean"
         },
+        "opening_delayed": {
+          "type": "boolean"
+        },
+        "opening_observed_host_utc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "resolution": {
           "anyOf": [
             {

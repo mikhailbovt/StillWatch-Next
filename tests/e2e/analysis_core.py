@@ -94,6 +94,9 @@ def run(args):
             assert status == 200, (status, packet)
             assert packet["camera_id"] == incident["camera_id"]
             assert packet["source_epoch"] == incident["source_epoch"]
+            assert packet["observed_host_utc"] <= packet["persisted_at"] < packet["expires_at"]
+            assert packet["fresh_when_persisted"]
+            assert incident["opening_observed_host_utc"] <= incident["created_at"]
             assert packet["context"]["local_facts"]["type"] == "fire"
             assert packet["context"]["policy_version"] == origin["policy_version"]
             assert "non_live" in packet["context"]["limitations"]

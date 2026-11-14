@@ -120,4 +120,11 @@ pub struct EvidencePacket {
     pub context: Option<EvidenceContext>,
     pub images: Vec<EvidenceImageMetadata>,
     pub expires_at: UtcTimestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_host_utc: Option<UtcTimestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persisted_at: Option<UtcTimestamp>,
+    /// Freshness at persistence. Live semantic dispatch rechecks the current deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_when_persisted: Option<bool>,
 }
