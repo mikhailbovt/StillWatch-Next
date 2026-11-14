@@ -234,6 +234,21 @@ impl CameraSampling {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CameraPriority {
+    #[default]
+    Normal,
+    High,
+}
+
+impl CameraPriority {
+    fn is_normal(&self) -> bool {
+        *self == Self::Normal
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -244,6 +259,8 @@ pub struct CameraConfig {
     /// Omit to use 5 pose, 2 fire and 5 evidence frames per second.
     #[serde(default, skip_serializing_if = "CameraSampling::is_default")]
     pub sampling: CameraSampling,
+    #[serde(default, skip_serializing_if = "CameraPriority::is_normal")]
+    pub priority: CameraPriority,
     /// Allows semantic evidence from this camera to be sent to Firebase AI Logic.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cloud_consent: bool,
@@ -281,6 +298,8 @@ pub struct CameraPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<CameraSampling>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<CameraPriority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_consent: Option<bool>,
     pub privacy_masks: Option<Vec<MaskRect>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,6 +313,7 @@ impl CameraPatch {
             enabled: self.enabled.unwrap_or(current.enabled),
             source: self.source.clone().unwrap_or(current.source),
             sampling: self.sampling.unwrap_or(current.sampling),
+            priority: self.priority.unwrap_or(current.priority),
             cloud_consent: self.cloud_consent.unwrap_or(current.cloud_consent),
             privacy_masks: self.privacy_masks.clone().unwrap_or(current.privacy_masks),
             controlled_fire_regions: self
@@ -432,6 +452,12 @@ pub struct AnalysisStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadence: Option<AnalysisCadence>,
     pub last_analysis_age_ms: Option<Counter>,
+    /// Time between receiving the last accepted frame and dispatching it to a worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_queue_age_ms: Option<u32>,
+    /// Accepted fire inferences dispatched ahead of the configured base interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_fire_frames: Option<Counter>,
     pub last_worker_ms: Option<u32>,
     pub people: Option<u16>,
     pub smoke_regions: Option<u16>,
@@ -447,6 +473,8 @@ impl AnalysisStatus {
             fire_frames: Counter(0),
             cadence: None,
             last_analysis_age_ms: None,
+            last_queue_age_ms: None,
+            extra_fire_frames: None,
             last_worker_ms: None,
             people: None,
             smoke_regions: None,

@@ -204,6 +204,14 @@ def verify_camera_sampling(args, root, model_options):
             return current["runtime"]["analysis"].get("cadence")
 
         reduced = until(cadence, 25)
+        before_priority = client.camera(camera["id"])
+        assert "priority" not in before_priority["config"]
+        assert client.call("GET", "/bootstrap/info", authorized=False)[1]["camera_priority"]
+        assert before_priority["runtime"]["analysis"]["extra_fire_frames"] == "0"
+        assert 0 <= before_priority["runtime"]["analysis"]["last_queue_age_ms"] <= 3_000
+        status, _ = client.call("PATCH", path, {"priority": "highest"},
+                                key="invalid-priority", revision=before_priority["revision"])
+        assert status == 400
         assert 144 <= reduced["pose_frames_per_minute"] <= 180, reduced
         assert 45 <= reduced["fire_frames_per_minute"] <= 60, reduced
         assert reduced["pose_target_per_minute"] == 144 and reduced["fire_target_per_minute"] == 45, reduced
@@ -220,20 +228,26 @@ def verify_camera_sampling(args, root, model_options):
         coverage = packet["context"]["coverage"]
         assert 3 <= coverage["received_samples"] <= coverage["expected_samples"] <= 17, coverage
         assert coverage["max_gap_ms"] >= 400, coverage
+        status, prioritized = client.call("PATCH", path, {"priority": "high"},
+                                          key="camera-priority", revision=before_priority["revision"])
+        assert status == 200 and prioritized["config"]["priority"] == "high", prioritized
+        assert int(prioritized["source_epoch"]) > int(before_priority["source_epoch"]), prioritized
 
     with run_core(args.core, args.worker, data, root, root / "sampling-restart.log", *model_options) as (_, client):
         current = client.camera(camera["id"])
         assert current["config"]["sampling"] == config["sampling"]
+        assert current["config"]["priority"] == "high"
         status, updated = client.call("PATCH", path, {
             "sampling": {"pose_fps": 5, "fire_fps": 2, "evidence_fps": 5},
+            "priority": "normal",
         }, key="sampling-default", revision=current["revision"])
-        assert status == 200 and "sampling" not in updated["config"], updated
+        assert status == 200 and not {"sampling", "priority"} & updated["config"].keys(), updated
         assert int(updated["source_epoch"]) > int(current["source_epoch"]), updated
         restored = until(cadence, 25)
         assert restored["pose_target_per_minute"] == 240 and restored["fire_target_per_minute"] == 90, restored
         assert restored["pose_frames_per_minute"] > reduced["pose_frames_per_minute"], restored
         assert restored["fire_frames_per_minute"] > reduced["fire_frames_per_minute"], restored
-    print(json.dumps({"camera_sampling_persisted": True, "configured_cadence": reduced,
+    print(json.dumps({"camera_sampling_persisted": True, "camera_priority_persisted": True, "configured_cadence": reduced,
                       "configured_evidence_coverage": coverage, "restored_default_cadence": restored}))
 
 

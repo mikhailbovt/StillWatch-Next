@@ -2,6 +2,7 @@
 
 export type ControlledMode = "steady" | "intermittent";
 export type ControlledSource = "burner" | "candle" | "fireplace" | "grill";
+export type CameraPriority = "normal" | "high";
 export type CameraSource =
   | {
       file: string;
@@ -28,6 +29,7 @@ export interface CameraPatch {
   controlled_fire_regions?: ControlledFireRegion[] | null;
   enabled?: boolean | null;
   name?: string | null;
+  priority?: CameraPriority | null;
   privacy_masks?: MaskRect[] | null;
   sampling?: CameraSampling | null;
   source?: CameraSource | null;

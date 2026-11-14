@@ -46,6 +46,8 @@ On Ubuntu, `whep_core.py --crash-restart` killed the foreground Core after live 
 
 `analysis_core.py --camera-sampling` exercised per-camera pose, fire and evidence rates through the API on Windows and Ubuntu. It rejected an out-of-range setting, measured the lower inference cadence, checked persisted evidence coverage and restored the defaults after restarting the Core and reloading the saved configuration.
 
+The same test verified camera priority persistence on Windows and Ubuntu. Deterministic jobs test aging past the priority bonus, selection of overdue fire work, and source-time spacing and cooldown for extra fire work. The current 16-camera benchmark stays below the operating cadence target and exposes this in the analysis status.
+
 The iOS workflow retains the unsigned arm64 device archive, its SHA-256 checksum and source commit. The WSL test used a disposable certificate on the same bundle and verified the Mach-O signatures of Runner, Flutter AOT, Flutter, WebRTC and Objective-C before checking the IPA archive. xtool's unsigned validation passed with the expected provisioning warning after replacing the default Flutter assets. Apple-issued device signing and installation remain open.
 
 `replay_core.py` and `rtsp_core.py` observed the decoded H.264 codec in the probe and camera runtime on Windows and Ubuntu. At the four-camera limit a new source failed preflight while an edit fit using its own reservation. Two drafts each passed preflight for one vacant slot, then only one concurrent save committed. A raw-frame limit smaller than one frame still returned the estimate and rejected activation. The Companion widget test verified that the save waits for confirmation when capture resources are available.

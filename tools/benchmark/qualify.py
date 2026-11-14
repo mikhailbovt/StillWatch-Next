@@ -160,6 +160,7 @@ def measure(args, root, fixture, count, samples):
                     item["pose_frames"], item["fire_frames"], item["last_analysis_age_ms"],
                     item["last_worker_ms"], resident, threads, processes, disks[-1], round(latency, 4),
                     *[cadence.get(field) if cadence is not None else None for field in CADENCE_FIELDS],
+                    item.get("last_queue_age_ms"),
                 ])
             if args.repeat:
                 heartbeat_temp.write_text(json.dumps({
@@ -196,11 +197,18 @@ def measure(args, root, fixture, count, samples):
         api = timing_percentiles(timings)
         inference = timing_percentiles(worker_times)
         age = timing_percentiles(frame_ages)
+        queue_age = timing_percentiles([
+            item["last_queue_age_ms"] for rows in observations.values() for _, item in rows
+            if item.get("last_queue_age_ms") is not None
+        ])
         return {
             "cameras": count, "seconds": round(elapsed, 3), "api_p95_ms": api["p95"],
             "inference_worker_p95_ms_sampled": inference["p95"],
             "analysis_age_p95_ms_sampled": age["p95"],
-            "timing_percentiles_ms": {"api": api, "inference_worker_sampled": inference, "analysis_age_sampled": age},
+            "timing_percentiles_ms": {
+                "api": api, "inference_worker_sampled": inference,
+                "analysis_age_sampled": age, "queue_age_sampled": queue_age,
+            },
             "rss_median_mib": round(statistics.median(rss) / 2**20, 2),
             "rss_max_mib": round(max(rss) / 2**20, 2),
             "rss_start_mib": round(rss[0] / 2**20, 2), "rss_end_mib": round(rss[-1] / 2**20, 2),
@@ -229,6 +237,7 @@ def run(args):
             "cameras", "seconds", "camera_id", "analysis_state", "epoch", "pose_frames", "fire_frames",
             "analysis_age_ms", "worker_ms", "tree_rss_bytes", "tree_threads", "tree_processes", "data_bytes", "api_ms",
             *CADENCE_FIELDS,
+            "queue_age_ms",
         ]
         report = {
             "platform": platform.platform(), "processor": platform.processor(),

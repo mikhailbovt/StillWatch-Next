@@ -2,6 +2,7 @@
 
 export type ControlledMode = "steady" | "intermittent";
 export type ControlledSource = "burner" | "candle" | "fireplace" | "grill";
+export type CameraPriority = "normal" | "high";
 export type CameraSource =
   | {
       file: string;
@@ -183,6 +184,7 @@ export interface CameraConfig {
       ];
   enabled: boolean;
   name: string;
+  priority?: CameraPriority;
   privacy_masks?: MaskRect[];
   sampling?: CameraSampling;
   source: CameraSource;

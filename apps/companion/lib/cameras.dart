@@ -212,6 +212,7 @@ class _CameraEditorState extends State<_CameraEditor> {
   late bool _enabled = _initial['enabled'] == true;
   late bool _repeat = _initialSource['repeat'] == true;
   late bool _secure = _initialSource['secure'] == true;
+  late bool _highPriority = _initial['priority'] == 'high';
   late bool _cloudConsent = _initial['cloud_consent'] == true;
   late String _transport = _initialSource['transport'] as String? ?? 'tcp';
   bool _busy = false;
@@ -323,6 +324,9 @@ class _CameraEditorState extends State<_CameraEditor> {
           (_initial['sampling'] != null ||
               _sampling.entries.any((e) => e.value != _defaultSampling[e.key])))
         'sampling': _sampling,
+      if (widget.console.coreInfo?.cameraPriority == true &&
+          (_highPriority || _initial['priority'] == 'high'))
+        'priority': _highPriority ? 'high' : 'normal',
       if (_cloudConsent || _initial['cloud_consent'] == true)
         'cloud_consent': _cloudConsent,
       'privacy_masks': List<Json>.of(_masks),
@@ -680,6 +684,15 @@ class _CameraEditorState extends State<_CameraEditor> {
                     ],
                     const SizedBox(height: 8),
                   ],
+                ),
+              if (widget.console.coreInfo?.cameraPriority == true)
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Prioritize this camera'),
+                  value: _highPriority,
+                  onChanged: _busy
+                      ? null
+                      : (value) => setState(() => _highPriority = value),
                 ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

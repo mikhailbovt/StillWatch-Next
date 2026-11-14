@@ -108,6 +108,17 @@
             }
           ]
         },
+        "extra_fire_frames": {
+          "description": "Accepted fire inferences dispatched ahead of the configured base interval.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "fire_frames": {
           "$ref": "#/$defs/Counter"
         },
@@ -129,6 +140,15 @@
               "type": "null"
             }
           ]
+        },
+        "last_queue_age_ms": {
+          "description": "Time between receiving the last accepted frame and dispatching it to a worker.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         },
         "last_worker_ms": {
           "type": [
@@ -199,6 +219,9 @@
         "name": {
           "type": "string"
         },
+        "priority": {
+          "$ref": "#/$defs/CameraPriority"
+        },
         "privacy_masks": {
           "type": "array",
           "default": [],
@@ -219,6 +242,13 @@
         "name",
         "enabled",
         "source"
+      ]
+    },
+    "CameraPriority": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "high"
       ]
     },
     "CameraRuntime": {

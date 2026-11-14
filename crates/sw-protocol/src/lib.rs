@@ -275,6 +275,8 @@ pub struct Bootstrap {
     pub camera_sampling: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_probe_capacity: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub camera_priority: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -42,6 +42,7 @@ async fn health_intervals_survive_restart_and_respect_camera_revision_and_scope(
                     },
                     enabled: true,
                     sampling: Default::default(),
+                    priority: Default::default(),
                     cloud_consent: false,
                     privacy_masks: Vec::new(),
                     controlled_fire_regions: Vec::new(),

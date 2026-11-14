@@ -9,9 +9,9 @@ use std::{
 
 use sw_domain::{SourceScope, UnixMillis, Visibility};
 use sw_protocol::{
-    Camera, CameraRuntime, CameraSampling, CameraSource, CaptureState, ControlledFireRegion,
-    Counter, Dimensions, MaskRect, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
-    OnvifStreamRequest, SceneReview, SourceProbe,
+    Camera, CameraPriority, CameraRuntime, CameraSampling, CameraSource, CaptureState,
+    ControlledFireRegion, Counter, Dimensions, MaskRect, OnvifDevice, OnvifProfile,
+    OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, SceneReview, SourceProbe,
     worker::{CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality},
 };
 use sw_storage::{
@@ -63,6 +63,7 @@ pub struct CameraFrame {
     pub usable_for_analysis: bool,
     pub live: bool,
     pub(crate) sampling: CameraSampling,
+    pub(crate) priority: CameraPriority,
     pub(crate) inference_lane: usize,
     pub(crate) visibility: Visibility,
     pub(crate) controlled: Arc<[ControlledFireRegion]>,
@@ -845,6 +846,7 @@ impl CameraRegistry {
                 usable_for_analysis: usable,
                 live,
                 sampling: camera.config.sampling,
+                priority: camera.config.priority,
                 inference_lane,
                 visibility: sample.visibility,
                 controlled: if camera.reviewed_scene.is_some()

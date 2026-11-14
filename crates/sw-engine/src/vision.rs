@@ -6,8 +6,8 @@ use std::{
 
 use sw_domain::{ObservationLabel, SourceScope};
 use sw_protocol::{
-    AnalysisCadence, AnalysisState, AnalysisStatus, CameraSampling, Counter, InferenceBackend,
-    InferenceFailure, InferenceStatus,
+    AnalysisCadence, AnalysisState, AnalysisStatus, CameraPriority, CameraSampling, Counter,
+    InferenceBackend, InferenceFailure, InferenceStatus,
     worker::{InferenceConfig, InferenceResult, Tasks},
 };
 use sw_storage::Store;
@@ -24,6 +24,10 @@ use crate::{
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
 const CADENCE_WINDOW_US: i64 = 10_000_000;
 const SOURCE_MINUTE_US: i64 = 60_000_000;
+const FIRE_BURST_FPS: u8 = 3;
+const PRIORITY_BONUS: Duration = Duration::from_millis(150);
+const FIRE_BURST_TIME: Duration = Duration::from_secs(2);
+const FIRE_BURST_COOLDOWN: Duration = Duration::from_secs(10);
 
 pub struct VisionScheduler {
     config: InferenceConfig,
@@ -51,16 +55,39 @@ struct Analysis {
     fire_time: Option<i64>,
     pose_at: Option<Instant>,
     fire_at: Option<Instant>,
+    burst: Option<Instant>,
+    extra_fire_frames: u64,
     pose_frames: u64,
     fire_frames: u64,
     first_source_us: Option<i64>,
     pose_window: VecDeque<i64>,
     fire_window: VecDeque<i64>,
     last_at: Instant,
+    queue_ms: u32,
     worker_ms: u32,
     people: Option<u16>,
     smoke: Option<u16>,
     fire: Option<u16>,
+}
+
+struct Dispatch {
+    frame: Arc<CameraFrame>,
+    tasks: Tasks,
+    source_us: i64,
+    extra_fire: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum DispatchRank {
+    Burst,
+    Due(Duration),
+    LateFire(Duration),
+}
+
+#[derive(Clone, Copy)]
+struct Job {
+    tasks: Tasks,
+    rank: DispatchRank,
 }
 
 impl VisionScheduler {
@@ -161,6 +188,8 @@ impl VisionScheduler {
                 response.fire_frames = Counter(analysis.fire_frames);
                 response.last_analysis_age_ms =
                     Some(Counter(u64::try_from(age.as_millis()).unwrap_or(u64::MAX)));
+                response.last_queue_age_ms = Some(analysis.queue_ms);
+                response.extra_fire_frames = Some(Counter(analysis.extra_fire_frames));
                 response.last_worker_ms = Some(analysis.worker_ms);
                 let pose_fresh = analysis
                     .pose_at
@@ -266,28 +295,51 @@ impl VisionScheduler {
                             }
                         }
                         self.phase(lane, AnalysisState::Ready, None);
-                        let Some((frame, tasks, source_us)) = self.next(lane, last_camera) else {
+                        let Some(job) = self.next(lane, last_camera) else {
                             tokio::select! {
                                 _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
                                 _ = shutdown.wait_for(|stop| *stop) => break None,
                             }
                         };
+                        let dispatched_at = Instant::now();
+                        let Dispatch {
+                            frame,
+                            tasks,
+                            source_us,
+                            extra_fire,
+                        } = job;
                         last_camera = Some(frame.scope.camera_id);
                         let outcome = tokio::select! {
                             _ = shutdown.wait_for(|stop| *stop) => break None,
                             outcome = process.infer(&frame.frame, tasks) => outcome,
                         };
                         match outcome {
-                            Ok(result) if self.accept(&frame, source_us, &result) => {
+                            Ok(result) => {
+                                if !self.accept(
+                                    &frame,
+                                    source_us,
+                                    &result,
+                                    dispatched_at,
+                                    extra_fire,
+                                ) {
+                                    continue;
+                                }
                                 policies
                                     .retain(|id, _| self.cameras.inference_lane(*id) == Some(lane));
                                 let policy = policies
                                     .entry(frame.scope.camera_id)
                                     .or_insert_with(|| HazardPolicies::new(frame.scope));
+                                let fire_executed = result.fire.is_some();
                                 let hazards = policy.update(&frame, source_us, result);
+                                if fire_executed && frame.live {
+                                    self.update_burst(
+                                        frame.scope,
+                                        hazards.fire_candidate,
+                                        dispatched_at,
+                                    );
+                                }
                                 pending.push(frame, hazards);
                             }
-                            Ok(_) => {}
                             Err(error) => break Some(inference_failure(&error)),
                         }
                     };
@@ -324,11 +376,7 @@ impl VisionScheduler {
         }
     }
 
-    fn next(
-        &self,
-        lane: usize,
-        last_camera: Option<Uuid>,
-    ) -> Option<(Arc<CameraFrame>, Tasks, i64)> {
+    fn next(&self, lane: usize, last_camera: Option<Uuid>) -> Option<Dispatch> {
         let mut frames = self.cameras.frames();
         frames.sort_unstable_by_key(|frame| frame.scope.camera_id);
         let mut progress = self.progress.write().ok()?;
@@ -340,42 +388,49 @@ impl VisionScheduler {
         let start = last_camera.map_or(0, |id| {
             frames.partition_point(|frame| frame.scope.camera_id <= id)
         });
-        frames[start..]
-            .iter()
-            .chain(&frames[..start])
-            .find_map(|frame| {
-                if frame.inference_lane != lane
-                    || !frame.usable_for_analysis
-                    || frame.captured_at.elapsed() > FRAME_MAX_AGE
-                {
-                    return None;
-                }
-                let source_us = frame.frame.header.source_micros?;
-                let previous = progress
-                    .per_camera
-                    .get(&frame.scope.camera_id)
-                    .filter(|state| state.scope == frame.scope);
-                let pose = due(
-                    previous.and_then(|state| state.pose_time),
-                    source_us,
-                    frame.sampling.pose_fps,
-                );
-                let fire = due(
-                    previous.and_then(|state| state.fire_time),
-                    source_us,
-                    frame.sampling.fire_fps,
-                );
-                let tasks = match (pose, fire) {
-                    (true, true) => Tasks::Both,
-                    (true, false) => Tasks::Pose,
-                    (false, true) => Tasks::Fire,
-                    _ => return None,
-                };
-                Some((frame.clone(), tasks, source_us))
-            })
+        let now = Instant::now();
+        let mut selected = None;
+        for frame in frames[start..].iter().chain(&frames[..start]) {
+            if frame.inference_lane != lane
+                || !frame.usable_for_analysis
+                || now.duration_since(frame.captured_at) > FRAME_MAX_AGE
+            {
+                continue;
+            }
+            let Some(source_us) = frame.frame.header.source_micros else {
+                continue;
+            };
+            let previous = progress
+                .per_camera
+                .get(&frame.scope.camera_id)
+                .filter(|state| state.scope == frame.scope);
+            let Some(job) = next_job(previous, source_us, now, frame.sampling, frame.priority)
+            else {
+                continue;
+            };
+            if selected
+                .as_ref()
+                .is_none_or(|(rank, _, _, _)| job.rank > *rank)
+            {
+                selected = Some((job.rank, frame, job.tasks, source_us));
+            }
+        }
+        selected.map(|(rank, frame, tasks, source_us)| Dispatch {
+            frame: frame.clone(),
+            tasks,
+            source_us,
+            extra_fire: rank == DispatchRank::Burst,
+        })
     }
 
-    fn accept(&self, frame: &CameraFrame, source_us: i64, result: &InferenceResult) -> bool {
+    fn accept(
+        &self,
+        frame: &CameraFrame,
+        source_us: i64,
+        result: &InferenceResult,
+        dispatched_at: Instant,
+        extra_fire: bool,
+    ) -> bool {
         if frame.captured_at.elapsed() > FRAME_MAX_AGE
             || !self
                 .cameras
@@ -421,12 +476,25 @@ impl VisionScheduler {
             current.fire_time = Some(source_us);
             current.fire_window.push_back(source_us);
             current.fire_at = Some(frame.captured_at);
+            if extra_fire {
+                current.extra_fire_frames = current.extra_fire_frames.saturating_add(1);
+            }
             current.smoke = Some(smoke as u16);
             current.fire = Some((regions.len() - smoke) as u16);
         }
         current.last_at = frame.captured_at;
+        current.queue_ms = dispatched_at.duration_since(frame.captured_at).as_millis() as u32;
         current.worker_ms = result.elapsed_ms;
         true
+    }
+
+    fn update_burst(&self, scope: SourceScope, candidate: bool, at: Instant) {
+        if let Ok(mut progress) = self.progress.write()
+            && let Some(analysis) = progress.per_camera.get_mut(&scope.camera_id)
+            && analysis.scope == scope
+        {
+            analysis.update_burst(candidate, at);
+        }
     }
 
     fn phase(&self, lane: usize, state: AnalysisState, failure: Option<InferenceFailure>) {
@@ -436,6 +504,7 @@ impl VisionScheduler {
                     if self.cameras.inference_lane(*camera) == Some(lane) {
                         analysis.pose_at = None;
                         analysis.fire_at = None;
+                        analysis.burst = None;
                         analysis.first_source_us = None;
                         analysis.pose_window.clear();
                         analysis.fire_window.clear();
@@ -463,16 +532,29 @@ impl Analysis {
             fire_time: None,
             pose_at: None,
             fire_at: None,
+            burst: None,
+            extra_fire_frames: 0,
             pose_frames: 0,
             fire_frames: 0,
             first_source_us: None,
             pose_window: VecDeque::new(),
             fire_window: VecDeque::new(),
             last_at: Instant::now(),
+            queue_ms: 0,
             worker_ms: 0,
             people: None,
             smoke: None,
             fire: None,
+        }
+    }
+
+    fn update_burst(&mut self, candidate: bool, now: Instant) {
+        if candidate
+            && self
+                .burst
+                .is_none_or(|at| now.duration_since(at) >= FIRE_BURST_COOLDOWN)
+        {
+            self.burst = Some(now);
         }
     }
 
@@ -507,7 +589,138 @@ impl Analysis {
     }
 }
 
+fn next_job(
+    previous: Option<&Analysis>,
+    source_us: i64,
+    now: Instant,
+    sampling: CameraSampling,
+    priority: CameraPriority,
+) -> Option<Job> {
+    let fire = due(
+        previous.and_then(|state| state.fire_time),
+        source_us,
+        sampling.fire_fps,
+    );
+    let pose = due(
+        previous.and_then(|state| state.pose_time),
+        source_us,
+        sampling.pose_fps,
+    );
+    let pose_age = age(previous.and_then(|state| state.pose_at), now);
+    let fire_age = age(previous.and_then(|state| state.fire_at), now);
+    // Protect due fire work that has missed the configured operating target.
+    // Eligibility is based on this camera's source clock. Ordering is monotonic.
+    if fire && fire_age >= Duration::from_micros(1_333_333 / u64::from(sampling.fire_fps)) {
+        return Some(Job {
+            tasks: if pose { Tasks::Both } else { Tasks::Fire },
+            rank: DispatchRank::LateFire(fire_age),
+        });
+    }
+    let (tasks, age) = match (pose, fire) {
+        (true, true) => (Tasks::Both, pose_age.max(fire_age)),
+        (true, false) => (Tasks::Pose, pose_age),
+        (false, true) => (Tasks::Fire, fire_age),
+        (false, false) => {
+            let state = previous?;
+            return (state
+                .burst
+                .is_some_and(|at| now.duration_since(at) < FIRE_BURST_TIME)
+                && due(state.fire_time, source_us, FIRE_BURST_FPS))
+            .then_some(Job {
+                tasks: Tasks::Fire,
+                rank: DispatchRank::Burst,
+            });
+        }
+    };
+    let bonus = if priority == CameraPriority::High {
+        PRIORITY_BONUS
+    } else {
+        Duration::ZERO
+    };
+    Some(Job {
+        tasks,
+        rank: DispatchRank::Due(age + bonus),
+    })
+}
+
+fn age(at: Option<Instant>, now: Instant) -> Duration {
+    at.map_or(FRAME_MAX_AGE, |at| now.duration_since(at))
+}
+
 fn due(previous: Option<i64>, source_us: i64, fps: u8) -> bool {
     let interval = MICROS_PER_SECOND / i64::from(fps);
     previous.is_none_or(|old| source_us.saturating_sub(old) >= interval)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analysis(at: Instant) -> Analysis {
+        let mut state = Analysis::new(SourceScope {
+            camera_id: Uuid::nil(),
+            epoch: 1,
+            scene_revision: 1,
+        });
+        state.pose_time = Some(1_000_000);
+        state.fire_time = Some(1_000_000);
+        state.pose_at = Some(at);
+        state.fire_at = Some(at);
+        state
+    }
+
+    #[test]
+    fn camera_priority_has_a_bounded_head_start() {
+        let now = Instant::now();
+        let sampling = CameraSampling::default();
+        let high = analysis(now - Duration::from_millis(220));
+        let normal = analysis(now - Duration::from_millis(330));
+        let older = analysis(now - Duration::from_millis(400));
+        let rank = |camera: &Analysis, priority| {
+            let job = next_job(Some(camera), 1_300_000, now, sampling, priority).unwrap();
+            assert_eq!(job.tasks, Tasks::Pose);
+            job.rank
+        };
+        assert!(rank(&high, CameraPriority::High) > rank(&normal, CameraPriority::Normal));
+        assert!(rank(&older, CameraPriority::Normal) > rank(&high, CameraPriority::High));
+    }
+
+    #[test]
+    fn late_fire_precedes_priority_and_idle_fire_bursts() {
+        let now = Instant::now();
+        let mut state = analysis(now - Duration::from_millis(800));
+        state.pose_time = Some(1_750_000);
+        let job = next_job(
+            Some(&state),
+            1_800_000,
+            now,
+            CameraSampling::default(),
+            CameraPriority::Normal,
+        )
+        .unwrap();
+        assert_eq!(job.tasks, Tasks::Fire);
+        assert!(job.rank > DispatchRank::Due(Duration::MAX));
+        assert!(job.rank > DispatchRank::Burst);
+    }
+
+    #[test]
+    fn fire_burst_preserves_source_intervals_and_has_a_cooldown() {
+        let now = Instant::now();
+        let sampling = CameraSampling::default();
+        let mut state = analysis(now);
+        state.pose_time = Some(1_350_000);
+        let select = |state: &Analysis, source, at| {
+            next_job(Some(state), source, at, sampling, CameraPriority::Normal)
+        };
+        assert!(select(&state, 1_400_000, now).is_none());
+        state.update_burst(true, now);
+        assert!(select(&state, 1_300_000, now).is_none());
+        let job = select(&state, 1_400_000, now + Duration::from_millis(400)).unwrap();
+        assert_eq!(job.tasks, Tasks::Fire);
+        assert_eq!(job.rank, DispatchRank::Burst);
+        state.update_burst(true, now + Duration::from_secs(1));
+        assert!(select(&state, 1_400_000, now + FIRE_BURST_TIME).is_none());
+        state.update_burst(true, now + FIRE_BURST_COOLDOWN);
+        assert_eq!(state.burst, Some(now + FIRE_BURST_COOLDOWN));
+    }
 }

@@ -20,6 +20,9 @@
     "name": {
       "type": "string"
     },
+    "priority": {
+      "$ref": "#/$defs/CameraPriority"
+    },
     "privacy_masks": {
       "type": "array",
       "default": [],
@@ -42,6 +45,13 @@
     "source"
   ],
   "$defs": {
+    "CameraPriority": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "high"
+      ]
+    },
     "CameraSampling": {
       "type": "object",
       "properties": {

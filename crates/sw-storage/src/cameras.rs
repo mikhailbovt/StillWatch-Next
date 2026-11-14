@@ -204,6 +204,7 @@ impl Store {
                     // The commit precedes the capture worker's restart.
                     let epoch = if config.cloud_consent != previous.config.cloud_consent
                         || config.sampling != previous.config.sampling
+                        || config.priority != previous.config.priority
                         || (!config.enabled && previous.config.enabled) {
                         next(previous.epoch)?
                     } else {

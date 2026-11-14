@@ -2,6 +2,7 @@
 
 export type ControlledMode = "steady" | "intermittent";
 export type ControlledSource = "burner" | "candle" | "fireplace" | "grill";
+export type CameraPriority = "normal" | "high";
 export type CameraSource =
   | {
       file: string;
@@ -211,6 +212,7 @@ export interface CameraConfig {
       ];
   enabled: boolean;
   name: string;
+  priority?: CameraPriority;
   privacy_masks?: MaskRect[];
   sampling?: CameraSampling;
   source: CameraSource;
@@ -381,9 +383,17 @@ export interface CameraRuntime {
 }
 export interface AnalysisStatus {
   cadence?: AnalysisCadence | null;
+  /**
+   * Accepted fire inferences dispatched ahead of the configured base interval.
+   */
+  extra_fire_frames?: Counter | null;
   fire_frames: Counter;
   fire_regions?: number | null;
   last_analysis_age_ms?: Counter | null;
+  /**
+   * Time between receiving the last accepted frame and dispatching it to a worker.
+   */
+  last_queue_age_ms?: number | null;
   last_worker_ms?: number | null;
   people?: number | null;
   pose_frames: Counter;

@@ -30,6 +30,16 @@
         "null"
       ]
     },
+    "priority": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CameraPriority"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "privacy_masks": {
       "type": [
         "array",
@@ -62,6 +72,13 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "CameraPriority": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "high"
+      ]
+    },
     "CameraSampling": {
       "type": "object",
       "properties": {

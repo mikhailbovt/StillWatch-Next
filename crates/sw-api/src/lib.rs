@@ -275,6 +275,7 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
         version: ApiVersion::CURRENT,
         camera_sampling: state.cameras.is_some(),
         camera_probe_capacity: state.cameras.is_some(),
+        camera_priority: state.cameras.is_some(),
     })
 }
 

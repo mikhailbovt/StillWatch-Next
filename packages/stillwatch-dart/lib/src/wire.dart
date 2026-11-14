@@ -121,6 +121,7 @@ final class CoreInfo {
     : id = uuid(value['instance_id']),
       cameraSampling = value['camera_sampling'] == true,
       cameraProbeCapacity = value['camera_probe_capacity'] == true,
+      cameraPriority = value['camera_priority'] == true,
       version = object(value['version']) {
     if (version['major'] != 2 || version['minor'] is! int) {
       throw const StillWatchException('identity');
@@ -130,6 +131,7 @@ final class CoreInfo {
   final String id;
   final bool cameraSampling;
   final bool cameraProbeCapacity;
+  final bool cameraPriority;
   final Json version;
 }
 

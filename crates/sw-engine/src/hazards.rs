@@ -52,6 +52,7 @@ struct Published {
 pub(crate) struct HazardUpdates {
     hazards: Vec<Hazard>,
     recoveries: Vec<Uuid>,
+    pub fire_candidate: bool,
 }
 
 impl HazardPolicies {
@@ -76,6 +77,7 @@ impl HazardPolicies {
         }
         let mut hazards = Vec::new();
         let mut recoveries = Vec::new();
+        let mut fire_candidate = false;
         if let Some(people) = result.pose {
             if self
                 .last_pose
@@ -133,6 +135,13 @@ impl HazardPolicies {
                 controlled_overlap: &|region| scene::overlap(region, dimensions, &frame.controlled),
             });
             for report in reports {
+                fire_candidate |= report.decision == FireDecision::Observing
+                    && report.facts.visibility != Visibility::Poor
+                    && (report.facts.smoke_visible
+                        || report
+                            .facts
+                            .controlled_region_overlap
+                            .is_none_or(|overlap| overlap < 0.98));
                 if report.decision == FireDecision::Review {
                     hazards.push(Hazard::fire(report));
                 }
@@ -175,6 +184,7 @@ impl HazardPolicies {
         HazardUpdates {
             hazards,
             recoveries,
+            fire_candidate,
         }
     }
 }
