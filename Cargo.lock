@@ -2293,6 +2293,7 @@ dependencies = [
  "reqwest",
  "ring",
  "roxmltree",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

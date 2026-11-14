@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
+use process_wrap::tokio::ChildWrapper;
 use sw_protocol::CaptureDevice;
 use sw_protocol::worker::{
     CAPTURE_SOURCE_EXIT, CONFIG_MAX_BYTES, CaptureRequest, FrameHeader, HEADER_LEN,
@@ -19,6 +19,8 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
 };
 use uuid::Uuid;
+
+use crate::child_process::command;
 
 const CONFIG_DEADLINE: Duration = Duration::from_secs(2);
 const EXIT_DEADLINE: Duration = Duration::from_secs(3);
@@ -130,12 +132,11 @@ impl WorkerBinary {
     }
 
     pub(crate) fn spawn(&self, subcommand: &str) -> Result<Box<dyn ChildWrapper>, WorkerError> {
-        let mut command = CommandWrap::with_new(&self.0, |command| {
+        Ok(command(&self.0, |command| {
             command
                 .arg(subcommand)
                 .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null());
+                .stdout(Stdio::piped());
             // These local workers never use an HTTP proxy. RTSPS must connect
             // directly to the configured camera peer.
             for key in [
@@ -148,15 +149,8 @@ impl WorkerBinary {
             ] {
                 command.env_remove(key);
             }
-            #[cfg(windows)]
-            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        });
-        command.wrap(KillOnDrop);
-        #[cfg(windows)]
-        command.wrap(process_wrap::tokio::JobObject);
-        #[cfg(unix)]
-        command.wrap(process_wrap::tokio::ProcessGroup::leader());
-        Ok(command.spawn()?)
+        })
+        .spawn()?)
     }
 }
 

@@ -2,6 +2,7 @@
 
 mod camera_credentials;
 mod capture_process;
+mod child_process;
 mod evidence;
 mod hazards;
 mod inference_process;

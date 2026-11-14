@@ -10,7 +10,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use process_wrap::tokio::{CommandWrap, KillOnDrop};
 use ring::hmac;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -29,7 +28,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::{CameraFrame, CameraRegistry, capture_process::reap};
+use crate::{CameraFrame, CameraRegistry, capture_process::reap, child_process::command};
 
 const SDP_LIMIT: usize = 48 * 1024;
 const MAX_SESSIONS: usize = 32;
@@ -929,24 +928,6 @@ impl H264Encoder {
             ],
         }
     }
-}
-
-fn command(path: &Path, configure: impl FnOnce(&mut tokio::process::Command)) -> CommandWrap {
-    let mut wrapped = CommandWrap::with_new(path, |command| {
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        command.creation_flags(0x0800_0000);
-        configure(command);
-    });
-    wrapped.wrap(KillOnDrop);
-    #[cfg(windows)]
-    wrapped.wrap(process_wrap::tokio::JobObject);
-    #[cfg(unix)]
-    wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());
-    wrapped
 }
 
 fn verified(path: &Path, expected: &str) -> Result<PathBuf, MediaError> {

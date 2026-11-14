@@ -4,6 +4,8 @@ StillWatch compiles bundled Rust adapters with the selected Core release. The so
 
 Use the v1 process wire contract to implement a compatible worker. The shipped Core comes with the reviewed worker binary. Schemas are under `packages/contracts/workers/v1` in source and `docs/worker-protocol/v1` in native packages. The contract carries sensitive source information to the capture worker over an inherited pipe on the Core host. Treat the capture and perception executables as trusted local code. An operating-system process restriction, if required by the deployment, belongs to the service administrator. Companion has no plugin installation interface.
 
+Core starts its workers, MediaMTX and media encoder in Windows job objects or Linux process groups. On Linux the direct child also exits when its Core parent dies, including when the foreground Core is killed. Keep the packaged service supervisor in control of the whole process tree. A Linux wrapper for a worker should use `exec` to replace itself with the worker. [Linux parent-death signals](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html)
+
 ## Capture
 
 Core launches `stillwatch-worker capture`, sends one UTF-8 `CaptureRequest` from `packages/contracts/workers/v1/CaptureRequest.json`, and closes stdin. The limit is 16,384 bytes. Stdout is binary. An orderly exit closes stdout. Exit code 4 signals that the configured source could not be opened or decoded. Keep diagnostics on stderr and redact credentials. Core runs `capture-doctor` and requires `rtsp_peer_confined=true` before enabling the network capture adapter. This flag describes a decoder that rejects redirects and confines negotiated media to the authorized peer.

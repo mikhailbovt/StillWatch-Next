@@ -12,9 +12,11 @@ import ipaddress
 import json
 import os
 import secrets
+import signal
 import socket
 import ssl
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 import uuid
@@ -27,7 +29,7 @@ from aioice import TransportPolicy
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 
 from lan_core import Client as TlsClient, encode_uuid, sign
-from replay_core import run_core, until
+from replay_core import capture_children, run_core, until, workers_alive
 from rtsp_core import launch
 from sdk_core import issue
 
@@ -244,12 +246,14 @@ def run(args):
                 proxy = stack.enter_context(proxy_profile(args.nginx, args.openssl, root))
                 flags.extend(proxy.flags)
             stack.enter_context(patch.dict(os.environ, {"MTX_WEBRTC": "false", "RTSP_CONFKEY": "fixture"}))
-            _, local = stack.enter_context(run_core(
-                args.core, args.worker, data, sources, root / "core.log",
+            media_flags = [
                 *flags, "--mediamtx", str(args.mediamtx),
                 "--mediamtx-sha256", sha(args.mediamtx), "--media-encoder", str(encoder),
                 "--media-encoder-sha256", sha(encoder), "--media-ice-udp", f"{args.address}:{ice_port}",
                 *turn_flags,
+            ]
+            process, local = stack.enter_context(run_core(
+                args.core, args.worker, data, sources, root / "core.log", *media_flags,
             ))
             config_file, = data.glob(".stillwatch-media-*/mediamtx.json")
             config = json.loads(config_file.read_text(encoding="utf-8"))
@@ -278,11 +282,36 @@ def run(args):
             assert status == 201
             until(lambda: local.camera(camera_id)["runtime"]["state"] == "replaying")
             asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
+            if args.crash_restart:
+                old_epoch = int(local.camera(camera_id)["source_epoch"])
+                children = capture_children(process.pid)
+                assert len(children) >= 2, children
+                descriptors = []
+                try:
+                    for pid in children:
+                        descriptors.append(os.pidfd_open(pid))
+                    process.kill()
+                    process.wait(timeout=6)
+                    until(lambda: not workers_alive(children), 8)
+                finally:
+                    for descriptor in descriptors:
+                        try:
+                            signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        finally:
+                            os.close(descriptor)
+                assert config_file.is_file()
+                with run_core(args.core, args.worker, data, sources, root / "restart.log", *media_flags) as (_, restored):
+                    until(lambda: restored.call("GET", "/api/v2/status")[1]["media"]["router_ready"])
+                    until(lambda: restored.camera(camera_id)["runtime"]["state"] == "replaying")
+                    assert int(restored.camera(camera_id)["source_epoch"]) > old_epoch
+                    assert not config_file.exists()
         print(json.dumps({"native_mediamtx": True, "input_codec": args.input_codec, "whep_h264": True, "viewers": 2,
                           "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": True,
                           "router_config_has_no_cleartext_credentials": True, "ignores_inherited_router_settings": True,
                           "viewer_turn_over_tcp": bool(turn_url), "turn_tls": bool(turn_certificate),
-                          "https_proxy": bool(args.nginx)}))
+                          "https_proxy": bool(args.nginx), "foreground_crash_restart": args.crash_restart}))
 
 
 if __name__ == "__main__":
@@ -297,9 +326,12 @@ if __name__ == "__main__":
                         help="Run an isolated coturn and require a nominated TURN/TCP candidate")
     parser.add_argument("--turn-tls-openssl", type=lambda path: Path(path).resolve(strict=True),
                         help="Create and trust a temporary TURN certificate and require TURN/TLS")
+    parser.add_argument("--crash-restart", action="store_true", help="Kill foreground Core and reuse its ICE address on Linux.")
     from proxy_core import proxy_arguments
 
     args = proxy_arguments(parser)
     if args.turn_tls_openssl and not args.turnserver:
         parser.error("--turn-tls-openssl requires --turnserver")
+    if args.crash_restart and sys.platform != "linux":
+        parser.error("--crash-restart requires Linux")
     run(args)
