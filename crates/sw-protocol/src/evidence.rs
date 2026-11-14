@@ -64,6 +64,37 @@ pub enum EvidenceLimitation {
     SourceChanged,
     PreEventUnavailable,
     NonLive,
+    ObservationGap,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EpisodeAssociation {
+    New,
+    Continuous,
+    Reobserved,
+    Split,
+    Uncertain,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceRecovery {
+    UprightActivity,
+    PriorSupportedPosture,
+    ControlledActivity,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceLineage {
+    pub episode_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_track_id: Option<Uuid>,
+    pub association: EpisodeAssociation,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -73,6 +104,10 @@ pub struct EvidenceContext {
     pub observed_interval: EvidenceInterval,
     pub coverage: EvidenceCoverage,
     pub local_facts: LocalFacts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lineage: Option<EvidenceLineage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<EvidenceRecovery>,
     pub limitations: Vec<EvidenceLimitation>,
     pub policy_version: String,
     pub prompt_version: String,

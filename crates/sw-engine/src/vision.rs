@@ -324,7 +324,15 @@ impl VisionScheduler {
                         if let Some(commit) = pending.flush().await
                             && let Some(policy) = policies.get_mut(&commit.scope.camera_id)
                         {
-                            policy.packet_committed(commit.scope, commit.incident, commit.result);
+                            if let Some(packet) = commit.packet {
+                                policy.packet_committed(commit.scope, commit.incident, packet);
+                            }
+                            if let Some((intent, outcome)) = commit.recovery {
+                                policy.recovery_committed(intent, outcome);
+                            }
+                            if commit.resolved {
+                                policy.record_resolution(commit.scope, commit.incident);
+                            }
                         }
                         if pending.blocked() {
                             self.phase(
@@ -369,6 +377,13 @@ impl VisionScheduler {
                                     .entry(frame.scope.camera_id)
                                     .or_insert_with(|| HazardPolicies::new(frame.scope));
                                 let fire_executed = result.fire.is_some();
+                                if fire_executed {
+                                    policy.refresh_resolutions(
+                                        &self.store,
+                                        frame.scope,
+                                        Instant::now(),
+                                    );
+                                }
                                 let hazards = policy.update(&frame, source_us, result);
                                 if fire_executed && frame.live {
                                     self.update_burst(

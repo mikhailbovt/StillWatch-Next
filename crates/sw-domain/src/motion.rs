@@ -178,6 +178,13 @@ impl MotionClassifier {
         self.tracks.values().map(|track| &track.evidence)
     }
 
+    pub fn visible(&self, ts: f64) -> impl Iterator<Item = (&MotionEvidence, Box2d)> {
+        self.tracks.values().filter_map(move |track| {
+            let latest = track.history.back().filter(|pose| pose.ts() == ts)?;
+            Some((&track.evidence, latest.observation.region))
+        })
+    }
+
     pub fn update(
         &mut self,
         observations: &[Pose],

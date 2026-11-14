@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::Deserialize;
 
 use crate::{
-    HazardPolicy, MedicalCandidate, MedicalReason, MotionEvidence, Observation, PoseTracker,
+    Box2d, HazardPolicy, MedicalCandidate, MedicalReason, MotionEvidence, Observation, PoseTracker,
     Posture, TrackingError,
     motion::{MAX_TRACKS, MotionClassifier},
     pose::{Pose, cropped_translation, displacement, standing_bend},
@@ -91,6 +91,10 @@ impl MedicalRules {
 
     pub fn snapshot(&self) -> impl Iterator<Item = &MotionEvidence> {
         self.motion.snapshot()
+    }
+
+    pub fn visible_motion(&self, ts: f64) -> impl Iterator<Item = (&MotionEvidence, Box2d)> {
+        self.motion.visible(ts)
     }
 
     pub fn update(

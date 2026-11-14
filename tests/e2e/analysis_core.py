@@ -570,6 +570,10 @@ def verify_capture_recovery(args, root, model_options):
                                  and event["category"] == "fire" and event["evidence_state"] == "persisted"), None)
 
                 event = until(recovered_evidence, 20)
+                lineage = client.call(
+                    "GET", f"/api/v2/incidents/{event['id']}/evidence/{event['evidence_packet_id']}",
+                )[1]["context"]["lineage"]
+                assert len({event["id"], lineage["episode_id"], lineage["fire_track_id"]}) == 3
                 with closing(sqlite3.connect(data / "stillwatch.sqlite3")) as db:
                     assert db.execute("SELECT count(*) FROM notification_outbox WHERE incident_id = ?",
                                       (uuid.UUID(event["id"]).bytes,)).fetchone() == (1,)

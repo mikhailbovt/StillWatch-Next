@@ -84,6 +84,16 @@
         }
       ]
     },
+    "possible_continuation_of": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UncertainIncidentLink"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "resolution": {
       "anyOf": [
         {
@@ -223,6 +233,22 @@
       "required": [
         "resolved_at",
         "reason"
+      ]
+    },
+    "UncertainIncidentLink": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_epoch": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "incident_id",
+        "source_epoch"
       ]
     },
     "UtcTimestamp": {

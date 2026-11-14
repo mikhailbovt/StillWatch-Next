@@ -1,4 +1,4 @@
-use sw_domain::{Box2d, Visibility};
+use sw_domain::{Box2d, SCENE_SIGNATURE_BYTES, SceneSignature, Visibility};
 use sw_protocol::{ControlledFireRegion, Dimensions, REGION_UNITS};
 
 use crate::Frame;
@@ -6,7 +6,7 @@ use crate::Frame;
 const COLS: usize = 8;
 const ROWS: usize = 5;
 const CELLS: usize = COLS * ROWS;
-pub(crate) const FINGERPRINT_BYTES: usize = 8 + CELLS;
+pub(crate) const FINGERPRINT_BYTES: usize = SCENE_SIGNATURE_BYTES;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SceneSample {
@@ -77,21 +77,9 @@ pub(crate) fn measure_rgb(width: u32, height: u32, image: &[u8]) -> SceneSample 
 }
 
 pub(crate) fn different(reference: &[u8], current: &[u8; FINGERPRINT_BYTES]) -> bool {
-    if reference.len() != FINGERPRINT_BYTES || reference[..8] != current[..8] {
-        return true;
-    }
     // Remove global exposure offset. A dark frame by itself suspends use of
     // the context; a spatial change observed with good visibility invalidates it.
-    let average = |fingerprint: &[u8]| {
-        fingerprint[8..].iter().map(|&v| i32::from(v)).sum::<i32>() / CELLS as i32
-    };
-    let exposure = average(current) - average(reference);
-    let shifted = reference[8..]
-        .iter()
-        .zip(&current[8..])
-        .filter(|(a, b)| (i32::from(**b) - i32::from(**a) - exposure).abs() > 35)
-        .count();
-    shifted >= CELLS * 2 / 5
+    !SceneSignature(*current).matches(reference)
 }
 
 pub(crate) fn overlap(

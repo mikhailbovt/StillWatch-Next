@@ -35,6 +35,7 @@ export interface Incident {
   needs_reassessment?: boolean;
   opening_delayed?: boolean;
   opening_observed_host_utc?: UtcTimestamp | null;
+  possible_continuation_of?: UncertainIncidentLink | null;
   resolution?: Resolution | null;
   revision: Counter;
   scene_revision: Counter;
@@ -50,6 +51,11 @@ export interface Acknowledgement {
 export interface AnalysisOrigin {
   model_manifest_sha256: string;
   policy_version: string;
+  [k: string]: unknown;
+}
+export interface UncertainIncidentLink {
+  incident_id: string;
+  source_epoch: Counter;
   [k: string]: unknown;
 }
 export interface Resolution {

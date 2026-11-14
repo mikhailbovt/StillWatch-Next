@@ -103,6 +103,16 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,19})$"
     },
+    "EpisodeAssociation": {
+      "type": "string",
+      "enum": [
+        "new",
+        "continuous",
+        "reobserved",
+        "split",
+        "uncertain"
+      ]
+    },
     "EvidenceContext": {
       "type": "object",
       "properties": {
@@ -115,6 +125,16 @@
             "$ref": "#/$defs/EvidenceLimitation"
           }
         },
+        "lineage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceLineage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "local_facts": {
           "$ref": "#/$defs/LocalFacts"
         },
@@ -126,6 +146,16 @@
         },
         "prompt_version": {
           "type": "string"
+        },
+        "recovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidenceRecovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -246,7 +276,40 @@
         "sparse_coverage",
         "source_changed",
         "pre_event_unavailable",
-        "non_live"
+        "non_live",
+        "observation_gap"
+      ]
+    },
+    "EvidenceLineage": {
+      "type": "object",
+      "properties": {
+        "association": {
+          "$ref": "#/$defs/EpisodeAssociation"
+        },
+        "episode_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "fire_track_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "episode_id",
+        "association"
+      ]
+    },
+    "EvidenceRecovery": {
+      "type": "string",
+      "enum": [
+        "upright_activity",
+        "prior_supported_posture",
+        "controlled_activity"
       ]
     },
     "EvidenceVisibility": {

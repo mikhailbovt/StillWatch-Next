@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{Box2d, HazardPolicy, Observation, ObservationLabel, SourceScope};
 
 const MAX_REGIONS: usize = 64;
-const CONTINUITY_US: i64 = 1_500_000;
+pub(crate) const CONTINUITY_US: i64 = 1_500_000;
 const HISTORY_US: i64 = 5_000_000;
 const HISTORY_SAMPLES: usize = 24;
 const MAX_QUIET_US: i64 = 8_000_000;
@@ -68,11 +68,24 @@ pub struct FireSample<'a> {
 
 pub struct FireEpisode {
     pub id: Uuid,
+    pub track_id: Uuid,
     pub first_source_us: i64,
+    pub segment_start_source_us: i64,
     pub source_us: i64,
     pub region: Box2d,
     pub decision: FireDecision,
     pub facts: FireFacts,
+    pub association: FireAssociation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FireAssociation {
+    New,
+    Continuous,
+    Reobserved,
+    Split,
+    Ambiguous,
 }
 
 pub struct FirePolicy {
@@ -81,11 +94,13 @@ pub struct FirePolicy {
     last_us: Option<i64>,
     dimensions: (u32, u32),
     regions: Vec<Region>,
+    episodes: crate::fire_episode::FireEpisodeManager,
 }
 
 struct Region {
     id: Uuid,
-    started_us: i64,
+    episode_id: Option<Uuid>,
+    segment_start: i64,
     last_us: i64,
     region: Box2d,
     history: VecDeque<Measurement>,
@@ -116,7 +131,11 @@ impl<'a> HazardPolicy<FireSample<'a>> for FirePolicy {
 
 impl FirePolicy {
     pub fn contains_episode(&self, id: Uuid) -> bool {
-        self.regions.iter().any(|region| region.id == id)
+        self.episodes.contains(id)
+    }
+
+    pub fn record_resolution(&mut self, id: Uuid) {
+        self.episodes.record_resolution(id);
     }
 
     pub fn new(settings: FireSettings) -> Option<Self> {
@@ -131,6 +150,7 @@ impl FirePolicy {
             last_us: None,
             dimensions: (0, 0),
             regions: Vec::new(),
+            episodes: crate::fire_episode::FireEpisodeManager::default(),
         })
     }
 
@@ -147,6 +167,7 @@ impl FirePolicy {
             self.scope = Some(sample.scope);
             self.dimensions = sample.dimensions;
             self.regions.clear();
+            self.episodes = crate::fire_episode::FireEpisodeManager::default();
         }
         let gap = !same_scene
             || self
@@ -160,6 +181,13 @@ impl FirePolicy {
                 old.history.clear();
                 old.was_contained = false;
             }
+        }
+        if sample.visibility == Visibility::Poor {
+            // A box inferred under an unusable view must not become the
+            // geometry used to associate the next clear observation.
+            self.episodes
+                .update(sample.source_us, sample.visibility, &mut []);
+            return Vec::new();
         }
         let frame_area = f64::from(width) * f64::from(height);
         let mut clusters = Vec::<Cluster>::new();
@@ -213,18 +241,19 @@ impl FirePolicy {
                 .map(|(index, _)| index);
             let track = if let Some(index) = matched {
                 used[index] = true;
-                &mut self.regions[index]
+                index
             } else if self.regions.len() < MAX_REGIONS {
                 self.regions.push(Region {
                     id: Uuid::new_v4(),
-                    started_us: sample.source_us,
+                    episode_id: None,
+                    segment_start: sample.source_us,
                     last_us: sample.source_us,
                     region: cluster.combined,
                     history: VecDeque::new(),
                     was_contained: false,
                 });
                 used.push(true);
-                self.regions.last_mut().expect("new fire region")
+                self.regions.len() - 1
             } else {
                 // Existing corroborated episodes retain their slots. Reclaim a stale unmatched slot.
                 let Some((index, _)) = self
@@ -241,17 +270,40 @@ impl FirePolicy {
                 used[index] = true;
                 self.regions[index] = Region {
                     id: Uuid::new_v4(),
-                    started_us: sample.source_us,
+                    episode_id: None,
+                    segment_start: sample.source_us,
                     last_us: sample.source_us,
                     region: cluster.combined,
                     history: VecDeque::new(),
                     was_contained: false,
                 };
-                &mut self.regions[index]
+                index
             };
-            reports.push(track.observe(&sample, cluster, frame_area, self.settings));
+            let region = &mut self.regions[track];
+            let report = region.observe(&sample, cluster, frame_area, self.settings);
+            reports.push((track, region.episode_id, report));
         }
+        self.episodes
+            .update(sample.source_us, sample.visibility, &mut reports);
         reports
+            .into_iter()
+            .map(|(track, prior, report)| {
+                let region = &mut self.regions[track];
+                if report.association == FireAssociation::Ambiguous {
+                    region.history.clear();
+                    region.was_contained = false;
+                    region.episode_id = prior;
+                } else {
+                    if prior.is_some_and(|prior| prior != report.id) {
+                        // A reused track must not seed continuity in a new episode.
+                        region.history.clear();
+                        region.was_contained = false;
+                    }
+                    region.episode_id = Some(report.id);
+                }
+                report
+            })
+            .collect()
     }
 }
 
@@ -299,6 +351,9 @@ impl Region {
             self.history.pop_front();
         }
         if sample.visibility != Visibility::Poor {
+            if self.history.is_empty() {
+                self.segment_start = at;
+            }
             self.history.push_back(Measurement {
                 at,
                 flame_area: cluster.flame.map(|region| region.area() / frame_area),
@@ -342,11 +397,14 @@ impl Region {
         };
         FireEpisode {
             id: self.id,
-            first_source_us: self.started_us,
+            track_id: self.id,
+            first_source_us: self.segment_start,
+            segment_start_source_us: self.segment_start,
             source_us: at,
             region: cluster.combined,
             decision,
             facts,
+            association: FireAssociation::New,
         }
     }
 }
@@ -476,6 +534,103 @@ mod tests {
     }
 
     #[test]
+    fn split_merge_and_dropout_keep_a_review_episode_with_fresh_segments() {
+        let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
+        let scope = scope();
+        let wide = observation(ObservationLabel::Fire, 0.95, 100.0);
+        let left = observation(ObservationLabel::Fire, 0.95, 40.0);
+        let mut right = left.clone();
+        right.region.x1 = 65.0;
+        right.region.x2 = 100.0;
+        let mut assess = |at, regions: &[Observation]| {
+            policy.update(FireSample {
+                scope,
+                source_us: at,
+                dimensions: (200, 150),
+                regions,
+                visibility: Visibility::Good,
+                controlled_overlap: &|_| None,
+            })
+        };
+        let original = assess(0, std::slice::from_ref(&wide)).pop().unwrap();
+        assert_ne!(original.id, original.track_id);
+        assert_eq!(original.decision, FireDecision::Review);
+        let split = assess(500_000, &[left, right]);
+        assert_eq!(split.len(), 2);
+        assert_ne!(split[0].track_id, split[1].track_id);
+        assert!(split.iter().all(|part| part.id == original.id));
+        assert!(
+            split
+                .iter()
+                .any(|part| part.association == FireAssociation::Split)
+        );
+        let merged = assess(1_000_000, std::slice::from_ref(&wide))
+            .pop()
+            .unwrap();
+        assert_eq!(merged.id, original.id);
+        for at in (2..=9).map(|at| at * 1_000_000) {
+            assert!(assess(at, &[]).is_empty());
+        }
+        let mut smoke = wide;
+        smoke.label = ObservationLabel::Smoke;
+        let reobserved = assess(9_100_000, &[smoke]).pop().unwrap();
+        assert_eq!(reobserved.id, original.id);
+        assert_ne!(reobserved.track_id, original.track_id);
+        assert_eq!(reobserved.association, FireAssociation::Reobserved);
+        assert_eq!(reobserved.first_source_us, 0);
+        assert_eq!(reobserved.segment_start_source_us, 9_100_000);
+        assert_eq!(reobserved.facts.continuity_samples, 1);
+    }
+
+    #[test]
+    fn nearby_merge_preserves_independent_fires_and_resolution_needs_a_new_onset() {
+        let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
+        let scope = scope();
+        let left = observation(ObservationLabel::Fire, 0.95, 30.0);
+        let mut right = left.clone();
+        right.region.x1 = 80.0;
+        right.region.x2 = 100.0;
+        let mut merged = left.clone();
+        merged.region.x2 = 100.0;
+        let assess = |policy: &mut FirePolicy, at, regions: &[Observation]| {
+            policy.update(FireSample {
+                scope,
+                source_us: at,
+                dimensions: (200, 150),
+                regions,
+                visibility: Visibility::Good,
+                controlled_overlap: &|_| None,
+            })
+        };
+        let separate = assess(&mut policy, 0, &[left.clone(), right.clone()]);
+        assert_eq!(separate.len(), 2);
+        assert_ne!(separate[0].id, separate[1].id);
+        let merged = assess(&mut policy, 500_000, &[merged]).pop().unwrap();
+        assert_eq!(merged.association, FireAssociation::Ambiguous);
+        assert_eq!(merged.decision, FireDecision::Observing);
+        let separated = assess(&mut policy, 1_000_000, &[left.clone(), right]);
+        assert_eq!(separated[0].id, separate[0].id);
+        assert_eq!(separated[1].id, separate[1].id);
+
+        policy.record_resolution(separate[0].id);
+        let stationary = assess(&mut policy, 1_500_000, std::slice::from_ref(&left))
+            .pop()
+            .unwrap();
+        assert_eq!(stationary.id, separate[0].id);
+        assert_eq!(stationary.decision, FireDecision::Observing);
+        for at in (2..=5).map(|at| at * 1_000_000) {
+            assess(&mut policy, at, &[]);
+        }
+        let reignition = assess(&mut policy, 5_500_000, std::slice::from_ref(&left))
+            .pop()
+            .unwrap();
+        assert_ne!(reignition.id, separate[0].id);
+        assert_eq!(reignition.decision, FireDecision::Review);
+        let continued = assess(&mut policy, 6_000_000, &[left]).pop().unwrap();
+        assert_eq!(continued.id, reignition.id);
+    }
+
+    #[test]
     fn controlled_context_holds_attention_until_the_flame_expands() {
         let mut policy = FirePolicy::new(FireSettings::default()).unwrap();
         let scope = scope();
@@ -509,16 +664,15 @@ mod tests {
         assert_eq!(escaped.id, second.id);
         assert_eq!(escaped.decision, FireDecision::Review);
         assert!(escaped.facts.escaped_controlled_region);
-        let obscured = sample(
-            &mut policy,
+        let obscured = policy.update(FireSample {
             scope,
-            1_500_000,
-            flame,
-            Visibility::Poor,
-            Some(1.0),
-        );
-        assert_eq!(obscured.decision, FireDecision::Observing);
-        assert_eq!(obscured.facts.continuity_samples, 0);
+            source_us: 1_500_000,
+            dimensions: (200, 150),
+            regions: &[flame],
+            visibility: Visibility::Poor,
+            controlled_overlap: &|_| Some(1.0),
+        });
+        assert!(obscured.is_empty());
     }
 
     #[test]

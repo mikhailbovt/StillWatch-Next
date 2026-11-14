@@ -190,6 +190,9 @@ final class Incident {
       analysisOrigin = value['analysis_origin'] == null
           ? null
           : AnalysisOrigin.fromJson(object(value['analysis_origin'])),
+      possibleContinuationOf = value['possible_continuation_of'] == null
+          ? null
+          : uuid(object(value['possible_continuation_of'])['incident_id']),
       assessment = text(value, 'assessment'),
       attention = text(value, 'attention'),
       attentionCycle = counter(value['attention_cycle']),
@@ -207,6 +210,7 @@ final class Incident {
   final String category;
   final String reason;
   final AnalysisOrigin? analysisOrigin;
+  final String? possibleContinuationOf;
   final String assessment;
   final String attention;
   final String attentionCycle;

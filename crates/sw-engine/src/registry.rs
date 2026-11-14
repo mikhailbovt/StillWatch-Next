@@ -73,6 +73,7 @@ pub struct CameraFrame {
     pub(crate) priority: CameraPriority,
     pub(crate) inference_lane: usize,
     pub(crate) visibility: Visibility,
+    pub(crate) scene_signature: sw_domain::SceneSignature,
     pub(crate) controlled: Arc<[ControlledFireRegion]>,
     pub frame: Frame,
 }
@@ -1049,6 +1050,7 @@ impl CameraRegistry {
                 priority: camera.config.priority,
                 inference_lane,
                 visibility: sample.visibility,
+                scene_signature: sw_domain::SceneSignature(sample.fingerprint),
                 controlled: if camera.reviewed_scene.is_some()
                     && !moved
                     && sample.visibility == Visibility::Good

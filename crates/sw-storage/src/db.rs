@@ -10,8 +10,8 @@ use rusqlite::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sw_domain::{
-    Assessment, Attention, Clearance, EvidenceStamp, Incident, NewIncident, SourceScope,
-    Transition, UnixMillis,
+    Assessment, Attention, Box2d, Clearance, EvidenceStamp, Incident, NewIncident, SceneSignature,
+    SourceScope, Transition, UncertainIncidentLink, UnixMillis,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -25,7 +25,7 @@ use crate::{
 
 pub const DATABASE_FILE: &str = "stillwatch.sqlite3";
 pub const APPLICATION_ID: i64 = 0x53574e32;
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
@@ -41,6 +41,12 @@ pub(crate) struct Database {
     evidence_recovery_pending: bool,
     pub(crate) notify: watch::Sender<()>,
     _lock: File,
+}
+
+struct HazardObservation {
+    time: crate::ObservationTime,
+    facts: Option<String>,
+    geometry: Option<(SceneSignature, Box2d, bool)>,
 }
 
 impl Database {
@@ -164,7 +170,39 @@ impl Database {
         if new.observed_host_utc != Some(observed.observed_host_utc) {
             return Err(StoreError::Invalid);
         }
-        self.create_checked(new, crate::utc_ms(), true, Some((observed, facts)))
+        self.create_checked(
+            new,
+            crate::utc_ms(),
+            true,
+            Some(HazardObservation {
+                time: observed,
+                facts,
+                geometry: None,
+            }),
+        )
+    }
+
+    pub fn create_observed_hazard_with_geometry(
+        &mut self,
+        new: NewIncident,
+        observed: crate::ObservationTime,
+        facts: String,
+        geometry: Option<(SceneSignature, Box2d, bool)>,
+    ) -> Result<Incident, StoreError> {
+        self.require_evidence_recovery()?;
+        if new.observed_host_utc != Some(observed.observed_host_utc) {
+            return Err(StoreError::Invalid);
+        }
+        self.create_checked(
+            new,
+            crate::utc_ms(),
+            true,
+            Some(HazardObservation {
+                time: observed,
+                facts: Some(facts),
+                geometry,
+            }),
+        )
     }
 
     pub(crate) fn require_evidence_recovery(&self) -> Result<(), StoreError> {
@@ -179,7 +217,7 @@ impl Database {
         new: NewIncident,
         now: UnixMillis,
         verify_camera: bool,
-        observed: Option<(crate::ObservationTime, Option<String>)>,
+        observed: Option<HazardObservation>,
     ) -> Result<Incident, StoreError> {
         let hash = digest(&new)?;
         let tx = self
@@ -201,9 +239,14 @@ impl Database {
         if verify_camera {
             verify_camera_scope(&tx, new.scope)?;
         }
-        let (now, delayed) = observed.as_ref().map_or((now, false), |(time, _)| {
+        let (now, delayed) = observed.as_ref().map_or((now, false), |observation| {
             let now = crate::utc_ms();
-            (now, !time.evidence_fresh(now, std::time::Instant::now()))
+            (
+                now,
+                !observation
+                    .time
+                    .evidence_fresh(now, std::time::Instant::now()),
+            )
         });
         let mut new = new;
         if delayed && new.assessment == Assessment::ImmediateVisibleConcern {
@@ -211,6 +254,18 @@ impl Database {
         }
         let mut transition = Incident::create(new, now)?;
         transition.incident.opening_delayed = delayed;
+        if !delayed
+            && transition.incident.live
+            && let Some(observation) = observed.as_ref()
+            && let Some((scene, region, true)) = observation.geometry
+        {
+            transition.incident.possible_continuation_of = recent_compatible_hazard(
+                &tx,
+                &transition.incident,
+                (scene, region),
+                observation.time.observed_host_utc,
+            )?;
+        }
         let incident = &transition.incident;
         let state = serde_json::to_string(incident)?;
         tx.execute(
@@ -219,8 +274,19 @@ impl Database {
             params![id(&incident.id), id(&incident.scope.camera_id), sql_counter(incident.revision)?, incident.created_at,
                 incident.updated_at, incident.resolution.is_some(), attention(incident.attention), hash.as_slice(), state, verify_camera],
         )?;
-        if let Some((time, Some(facts))) = observed {
-            append_hazard_observation(&tx, incident, time, facts)?;
+        if let Some(HazardObservation {
+            time,
+            facts: Some(facts),
+            geometry,
+        }) = observed
+        {
+            append_hazard_observation(
+                &tx,
+                incident,
+                time,
+                facts,
+                geometry.map(|(signature, _, _)| signature),
+            )?;
         }
         append_change(&tx, &transition, true, &state)?;
         tx.commit()?;
@@ -230,6 +296,26 @@ impl Database {
 
     pub fn get(&self, incident: Uuid) -> Result<Incident, StoreError> {
         get_incident(&self.conn, incident)
+    }
+
+    pub(crate) fn resolved_hazards(&self, incidents: &[Uuid]) -> Result<Vec<Uuid>, StoreError> {
+        if incidents.len() > 256 {
+            return Err(StoreError::Invalid);
+        }
+        let mut find = self
+            .conn
+            .prepare("SELECT resolved FROM incidents WHERE id = ? AND camera_hazard = 1")?;
+        let mut resolved = Vec::new();
+        for &incident in incidents {
+            if find
+                .query_row([id(&incident)], |row| row.get::<_, bool>(0))
+                .optional()?
+                .unwrap_or(false)
+            {
+                resolved.push(incident);
+            }
+        }
+        Ok(resolved)
     }
 
     pub fn history(
@@ -443,18 +529,23 @@ impl Database {
         new: NewIncident,
         observed: crate::ObservationTime,
         facts: String,
+        scene_signature: Option<SceneSignature>,
     ) -> Result<Incident, StoreError> {
         if new.observed_host_utc != Some(observed.observed_host_utc) {
             return Err(StoreError::Invalid);
         }
-        self.observe_hazard_checked(new, crate::utc_ms(), Some((observed, facts)))
+        self.observe_hazard_checked(
+            new,
+            crate::utc_ms(),
+            Some((observed, facts, scene_signature)),
+        )
     }
 
     fn observe_hazard_checked(
         &mut self,
         mut new: NewIncident,
         supplied: UnixMillis,
-        observed: Option<(crate::ObservationTime, String)>,
+        observed: Option<(crate::ObservationTime, String, Option<SceneSignature>)>,
     ) -> Result<Incident, StoreError> {
         self.require_evidence_recovery()?;
         let tx = self
@@ -471,7 +562,7 @@ impl Database {
             return Ok(current);
         }
         verify_camera_scope(&tx, new.scope)?;
-        let now = observed.as_ref().map_or(supplied, |(time, _)| {
+        let now = observed.as_ref().map_or(supplied, |(time, _, _)| {
             let now = crate::utc_ms();
             if new.assessment == Assessment::ImmediateVisibleConcern
                 && !time.evidence_fresh(now, std::time::Instant::now())
@@ -483,8 +574,8 @@ impl Database {
         let transition =
             current.record_observation(new.scope, new.last_source_us, new.assessment, now)?;
         update_incident(&tx, &transition)?;
-        if let Some((time, facts)) = observed {
-            append_hazard_observation(&tx, &transition.incident, time, facts)?;
+        if let Some((time, facts, scene_signature)) = observed {
+            append_hazard_observation(&tx, &transition.incident, time, facts, scene_signature)?;
         }
         tx.commit()?;
         self.notify.send_replace(());
@@ -605,20 +696,86 @@ pub(crate) fn verify_camera_scope(conn: &Connection, scope: SourceScope) -> Resu
     }
 }
 
+fn recent_compatible_hazard(
+    conn: &Connection,
+    incident: &Incident,
+    (signature, region): (SceneSignature, Box2d),
+    now: UnixMillis,
+) -> Result<Option<UncertainIncidentLink>, StoreError> {
+    const ASSOCIATION_WINDOW_MS: i64 = 60_000;
+    const MAX_CANDIDATES: i64 = 256;
+    let scope = incident.scope;
+    let oldest = now.saturating_sub(ASSOCIATION_WINDOW_MS);
+    let mut query = conn.prepare(
+        "SELECT i.id, json_extract(i.state, '$.scope.epoch'), h.facts, h.scene_signature
+         FROM incidents i
+         JOIN hazard_observations h ON h.incident_id = i.id
+           AND h.source_us = (SELECT max(o.source_us) FROM hazard_observations o
+                              WHERE o.incident_id = i.id AND o.scene_signature IS NOT NULL)
+         WHERE i.camera_id = ?1 AND i.resolved = 0 AND i.camera_hazard = 1
+           AND i.updated_at >= ?2 AND h.observed_host_utc BETWEEN ?2 AND ?3
+           AND json_extract(i.state, '$.scope.scene_revision') = ?4
+           AND json_extract(i.state, '$.scope.epoch') < ?5
+           AND json_extract(i.state, '$.category') = ?6 AND json_extract(i.state, '$.live') = 1
+         ORDER BY i.updated_at DESC, i.id LIMIT ?7",
+    )?;
+    let category = match incident.category {
+        sw_domain::Category::Fire => "fire",
+        sw_domain::Category::Medical => "medical",
+        sw_domain::Category::Overview => return Ok(None),
+    };
+    let mut candidates = query.query(params![
+        id(&scope.camera_id),
+        oldest,
+        now,
+        sql_counter(scope.scene_revision)?,
+        sql_counter(scope.epoch)?,
+        category,
+        MAX_CANDIDATES + 1
+    ])?;
+    let mut possible = None;
+    let mut checked = 0;
+    while let Some(row) = candidates.next()? {
+        checked += 1;
+        if checked > MAX_CANDIDATES {
+            return Ok(None);
+        }
+        if !signature.matches(&row.get::<_, Vec<u8>>(3)?) {
+            continue;
+        }
+        let (_, previous): (sw_protocol::LocalFacts, Box2d) =
+            serde_json::from_str(&row.get::<_, String>(2)?)?;
+        if region.iou(previous) < 0.35 {
+            continue;
+        }
+        if possible.is_some() {
+            return Ok(None);
+        }
+        let bytes = row.get::<_, Vec<u8>>(0)?;
+        possible = Some(UncertainIncidentLink {
+            incident_id: Uuid::from_slice(&bytes).map_err(|_| StoreError::Schema)?,
+            source_epoch: row_counter(row, 1)?,
+        });
+    }
+    Ok(possible)
+}
+
 fn append_hazard_observation(
     conn: &Connection,
     incident: &Incident,
     observed: crate::ObservationTime,
     facts: String,
+    signature: Option<SceneSignature>,
 ) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO hazard_observations(incident_id, source_us, observed_host_utc, facts)
-         VALUES (?, ?, ?, ?)",
+        "INSERT INTO hazard_observations(incident_id, source_us, observed_host_utc, facts, scene_signature)
+         VALUES (?, ?, ?, ?, ?)",
         params![
             id(&incident.id),
             incident.last_source_us,
             observed.observed_host_utc,
-            facts
+            facts,
+            signature.as_ref().map(|signature| signature.0.as_slice())
         ],
     )?;
     conn.execute(
@@ -635,7 +792,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     match (application_id, version) {
         (APPLICATION_ID, SCHEMA_VERSION) => Ok(()),
-        (APPLICATION_ID, 1..=11) => {
+        (APPLICATION_ID, 1..=12) => {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version == 1 {
                 tx.execute_batch(include_str!("migrations/002.sql"))?;
@@ -667,7 +824,10 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             if version <= 10 {
                 tx.execute_batch(include_str!("migrations/011.sql"))?;
             }
-            tx.execute_batch(include_str!("migrations/012.sql"))?;
+            if version <= 11 {
+                tx.execute_batch(include_str!("migrations/012.sql"))?;
+            }
+            tx.execute_batch(include_str!("migrations/013.sql"))?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             Ok(())
@@ -694,6 +854,7 @@ pub(crate) fn migrate(conn: &mut Connection) -> Result<(), StoreError> {
             tx.execute_batch(include_str!("migrations/010.sql"))?;
             tx.execute_batch(include_str!("migrations/011.sql"))?;
             tx.execute_batch(include_str!("migrations/012.sql"))?;
+            tx.execute_batch(include_str!("migrations/013.sql"))?;
             tx.execute(
                 "INSERT INTO core_identity (singleton, instance_id, stream_generation) VALUES (1, ?, ?)",
                 params![id(&Uuid::new_v4()), id(&Uuid::new_v4())],

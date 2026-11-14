@@ -8,6 +8,7 @@ mod db;
 mod evidence;
 mod health;
 mod legacy;
+mod recovery;
 mod retention;
 mod semantic;
 #[cfg(test)]
@@ -43,6 +44,7 @@ pub use evidence::{
 };
 pub use health::{HealthIssue, HealthObservation};
 pub use legacy::{LegacyImport, LegacyManifest, import_legacy};
+pub use recovery::{RecoveryIntent, RecoveryOutcome};
 pub use semantic::{
     SemanticClaim, SemanticCompleted, SemanticOutcome, SemanticSchedule, SemanticWork,
 };
@@ -266,6 +268,10 @@ impl Store {
         self.wake.clone()
     }
 
+    pub async fn resolved_hazards(&self, incidents: Vec<Uuid>) -> Result<Vec<Uuid>, StoreError> {
+        self.call(move |db| db.resolved_hazards(&incidents)).await
+    }
+
     pub fn writer_status(&self) -> Option<sw_protocol::WriterStatus> {
         let progress = self.progress.lock().ok()?;
         Some(sw_protocol::WriterStatus {
@@ -430,6 +436,7 @@ impl Store {
         observed: ObservationTime,
         facts: sw_protocol::LocalFacts,
         region: sw_domain::Box2d,
+        scene_signature: Option<sw_domain::SceneSignature>,
         opening: bool,
     ) -> Result<Incident, StoreError> {
         if !region.valid()
@@ -446,12 +453,20 @@ impl Store {
         {
             return Err(StoreError::Invalid);
         }
+        let relate = !matches!(
+            facts,
+            sw_protocol::LocalFacts::Medical {
+                onset_observed: true,
+                ..
+            }
+        );
         let facts = serde_json::to_string(&(facts, region))?;
         self.call(move |db| {
+            let geometry = scene_signature.map(|signature| (signature, region, relate));
             if opening {
-                db.create_observed_hazard(new, observed, Some(facts))
+                db.create_observed_hazard_with_geometry(new, observed, facts, geometry)
             } else {
-                db.observe_hazard_with_facts(new, observed, facts)
+                db.observe_hazard_with_facts(new, observed, facts, scene_signature)
             }
         })
         .await

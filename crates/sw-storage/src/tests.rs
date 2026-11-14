@@ -254,7 +254,7 @@ async fn material_observations_are_durable_and_bounded_without_image_packets() {
             y2: 80.0,
         };
         let saved = store
-            .record_hazard_observation(observed.clone(), time, facts, region, index == 0)
+            .record_hazard_observation(observed.clone(), time, facts, region, None, index == 0)
             .await
             .unwrap();
         assert_eq!(saved.last_source_us, observed.last_source_us);
@@ -268,6 +268,373 @@ async fn material_observations_are_durable_and_bounded_without_image_packets() {
         ).map_err(Into::into)
     }).await.unwrap();
     assert_eq!((count, oldest, latest), (64, 3_000_000, 34_500_000));
+}
+
+#[tokio::test]
+async fn new_source_epoch_can_link_but_never_inherits_prior_evidence_and_alerts() {
+    use std::time::Instant;
+    use sw_domain::SceneSignature;
+    use sw_protocol::{EvidenceVisibility, LocalFacts};
+
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let camera = store.mutate_camera(
+        CameraCommand {
+            actor: Uuid::new_v4(),
+            key: "scene-lineage-camera".parse().unwrap(),
+            action: CameraAction::Create(serde_json::from_value(serde_json::json!({
+                "name": "Camera", "enabled": true, "source": {"type": "usb", "device_id": "sample"}
+            })).unwrap()),
+        },
+        Some(Dimensions { width: 160, height: 120 }),
+        None,
+        CameraLimits { active: 1, raw_bytes: 1_048_576 },
+        crate::utc_ms(),
+    ).await.unwrap().camera;
+    let initial_scope = SourceScope {
+        camera_id: camera.id,
+        epoch: camera.epoch,
+        scene_revision: camera.scene_revision,
+    };
+    let signature = SceneSignature([12; 48]);
+    let mut different = signature;
+    for (i, pixel) in different.0[8..].iter_mut().enumerate() {
+        *pixel = if i % 2 == 0 { 100 } else { 0 };
+    }
+    let open = async |store: &Store, scope, signature| {
+        let observed = crate::ObservationTime::new(crate::utc_ms(), Instant::now());
+        store
+            .record_hazard_observation(
+                NewIncident {
+                    scope,
+                    category: Category::Fire,
+                    observed_host_utc: Some(observed.observed_host_utc),
+                    ..incident()
+                },
+                observed,
+                LocalFacts::Fire {
+                    flame_visible: true,
+                    smoke_visible: false,
+                    apparent_growth: false,
+                    smoke_growth: false,
+                    escaped_controlled_region: false,
+                    controlled_region_overlap: None,
+                    continuity_samples: 1,
+                    detector_confidence: 0.9,
+                    visibility: EvidenceVisibility::Good,
+                },
+                sw_domain::Box2d {
+                    x1: 20.0,
+                    y1: 20.0,
+                    x2: 80.0,
+                    y2: 80.0,
+                },
+                Some(signature),
+                true,
+            )
+            .await
+            .unwrap()
+    };
+    let first = open(&store, initial_scope, signature).await;
+    let same_view = store
+        .bump_camera_epoch(camera.id, camera.revision)
+        .await
+        .unwrap();
+    let next = SourceScope {
+        epoch: same_view.epoch,
+        ..initial_scope
+    };
+    drop(store);
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let reobserved = open(&store, next, signature).await;
+    assert_eq!(
+        reobserved.possible_continuation_of,
+        Some(sw_domain::UncertainIncidentLink {
+            incident_id: first.id,
+            source_epoch: first.scope.epoch,
+        })
+    );
+    assert_ne!(reobserved.id, first.id);
+    assert_eq!(reobserved.evidence_version(), 0);
+    assert!(store.get(first.id).await.unwrap().resolution.is_none());
+    let different_view = store
+        .bump_camera_epoch(camera.id, camera.revision)
+        .await
+        .unwrap();
+    let other = open(
+        &store,
+        SourceScope {
+            epoch: different_view.epoch,
+            ..initial_scope
+        },
+        different,
+    )
+    .await;
+    assert!(other.possible_continuation_of.is_none());
+    let last = store
+        .bump_camera_epoch(camera.id, camera.revision)
+        .await
+        .unwrap();
+    let ambiguous = open(
+        &store,
+        SourceScope {
+            epoch: last.epoch,
+            ..initial_scope
+        },
+        signature,
+    )
+    .await;
+    assert!(ambiguous.possible_continuation_of.is_none());
+    assert_eq!(
+        store.call(|db| Ok(counts(&db.conn))).await.unwrap(),
+        (4, 5, 4)
+    );
+}
+
+#[tokio::test]
+async fn medical_recovery_retries_after_partial_evidence_and_checks_the_current_course() {
+    use std::time::{Duration, Instant};
+
+    use sw_domain::{Attention, RecoveryCourse};
+    use sw_protocol::{EvidenceContext, EvidenceCoverage, EvidenceInterval, LocalFacts};
+
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(
+        root.path(),
+        StoreConfig {
+            evidence_quota_bytes: BLACK.len() as u64,
+            ..StoreConfig::default()
+        },
+    )
+    .unwrap();
+    let camera = store.mutate_camera(
+        CameraCommand {
+            actor: Uuid::new_v4(),
+            key: "recovery-camera".parse().unwrap(),
+            action: CameraAction::Create(serde_json::from_value(serde_json::json!({
+                "name": "Camera", "enabled": true, "source": {"type": "usb", "device_id": "sample"}
+            })).unwrap()),
+        },
+        Some(Dimensions { width: 160, height: 120 }),
+        None,
+        CameraLimits { active: 1, raw_bytes: 1_048_576 },
+        crate::utc_ms(),
+    ).await.unwrap().camera;
+    let scope = SourceScope {
+        camera_id: camera.id,
+        epoch: camera.epoch,
+        scene_revision: camera.scene_revision,
+    };
+    let course = RecoveryCourse::ControlledActivity;
+    let open = |assessment| NewIncident {
+        scope,
+        category: Category::Medical,
+        assessment,
+        ..incident()
+    };
+    let save = async |new: &NewIncident,
+                      saved: &sw_domain::Incident,
+                      source_us,
+                      images: &[&[u8]],
+                      onset_observed,
+                      identity_uncertain| {
+        let time = crate::ObservationTime::new(crate::utc_ms(), Instant::now());
+        let intent = crate::RecoveryIntent {
+            incident_id: saved.id,
+            scope,
+            episode_id: Uuid::new_v4(),
+            course,
+            source_us,
+        };
+        let facts = LocalFacts::Medical {
+            track_id: Counter(1),
+            episode_id: intent.episode_id,
+            previous_episode_id: None,
+            onset_observed,
+            identity_uncertain,
+            recovery_seconds: 3.0,
+            clear_eligible: true,
+        };
+        let saved = store
+            .record_hazard_observation(
+                NewIncident {
+                    last_source_us: source_us,
+                    observed_host_utc: Some(time.observed_host_utc),
+                    ..new.clone()
+                },
+                time,
+                facts,
+                sw_domain::Box2d {
+                    x1: 10.0,
+                    y1: 10.0,
+                    x2: 60.0,
+                    y2: 40.0,
+                },
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let mut write = evidence_write(
+            &saved,
+            EvidenceStamp {
+                packet_id: Uuid::new_v4(),
+                version: saved.evidence_version() + 1,
+                scope,
+                expires_at: time.expires_at(),
+            },
+            images,
+        );
+        write.observation_time = Some(time);
+        write.context = Some(EvidenceContext {
+            observed_interval: EvidenceInterval {
+                start_source_s: 0.0,
+                end_source_s: source_us as f64 / 1_000_000.0,
+            },
+            coverage: EvidenceCoverage {
+                expected_samples: 6,
+                received_samples: 6,
+                max_gap_ms: 500,
+            },
+            local_facts: facts,
+            lineage: None,
+            recovery: Some(intent.observation()),
+            limitations: vec![],
+            policy_version: "qa".into(),
+            prompt_version: "qa".into(),
+        });
+        for image in &mut write.images {
+            image.source_us = source_us;
+        }
+        let outcome = store
+            .persist_evidence(write, crate::utc_ms())
+            .await
+            .unwrap();
+        (intent, time, outcome)
+    };
+    let new = open(Assessment::Concern);
+    let saved = store
+        .create_hazard(new.clone(), crate::utc_ms())
+        .await
+        .unwrap();
+    let (intent, time, evidence) =
+        save(&new, &saved, 1_000_000, &[BLACK, WHITE], true, false).await;
+    assert!(matches!(evidence, EvidenceOutcome::Partial(_)));
+    assert_eq!(
+        store.apply_recovery(intent, time).await.unwrap(),
+        crate::RecoveryOutcome::NeedsEvidence
+    );
+    assert!(store.get(saved.id).await.unwrap().resolution.is_none());
+
+    let (intent, time, evidence) = save(&new, &saved, 2_000_000, &[BLACK], true, false).await;
+    assert!(matches!(evidence, EvidenceOutcome::Persisted(_)));
+    assert_eq!(
+        store
+            .apply_recovery(
+                crate::RecoveryIntent {
+                    scope: SourceScope {
+                        epoch: scope.epoch + 1,
+                        ..scope
+                    },
+                    ..intent
+                },
+                time
+            )
+            .await
+            .unwrap(),
+        crate::RecoveryOutcome::Superseded
+    );
+    let stale = crate::ObservationTime::new(
+        time.observed_host_utc,
+        Instant::now() - Duration::from_secs(6),
+    );
+    assert_eq!(
+        store.apply_recovery(intent, stale).await.unwrap(),
+        crate::RecoveryOutcome::Superseded
+    );
+    assert_eq!(
+        store.apply_recovery(intent, time).await.unwrap(),
+        crate::RecoveryOutcome::Applied
+    );
+    let resolved = store.get(saved.id).await.unwrap();
+    assert_eq!(
+        resolved.resolution.as_ref().unwrap().reason,
+        course.resolution_reason()
+    );
+    assert_eq!(
+        store.apply_recovery(intent, time).await.unwrap(),
+        crate::RecoveryOutcome::Applied
+    );
+    assert_eq!(store.get(saved.id).await.unwrap(), resolved);
+
+    for (assessment, acknowledge, onset, uncertain, expected) in [
+        (
+            Assessment::Concern,
+            true,
+            true,
+            false,
+            crate::RecoveryOutcome::Inapplicable,
+        ),
+        (
+            Assessment::ImmediateVisibleConcern,
+            false,
+            true,
+            false,
+            crate::RecoveryOutcome::Inapplicable,
+        ),
+        (
+            Assessment::Concern,
+            false,
+            false,
+            false,
+            crate::RecoveryOutcome::Superseded,
+        ),
+        (
+            Assessment::Concern,
+            false,
+            true,
+            true,
+            crate::RecoveryOutcome::Superseded,
+        ),
+    ] {
+        let new = open(assessment);
+        let saved = store
+            .create_hazard(new.clone(), crate::utc_ms())
+            .await
+            .unwrap();
+        let (intent, time, _) = save(&new, &saved, 2_500_000, &[BLACK], onset, uncertain).await;
+        let before = if acknowledge {
+            let current = store.get(saved.id).await.unwrap();
+            store
+                .apply(
+                    OperatorCommand {
+                        incident_id: saved.id,
+                        actor_id: Uuid::new_v4(),
+                        idempotency_key: "ack-before-recovery".into(),
+                        expected_revision: current.revision,
+                        action: OperatorAction::Acknowledge,
+                    },
+                    crate::utc_ms(),
+                )
+                .await
+                .unwrap()
+                .incident
+        } else {
+            store.get(saved.id).await.unwrap()
+        };
+        assert_eq!(store.apply_recovery(intent, time).await.unwrap(), expected);
+        let after = store.get(saved.id).await.unwrap();
+        assert_eq!(after, before);
+        assert_eq!(
+            after.attention,
+            if assessment == Assessment::Concern {
+                Attention::Review
+            } else {
+                Attention::Urgent
+            }
+        );
+        assert!(after.resolution.is_none());
+    }
 }
 
 #[tokio::test]
@@ -598,6 +965,8 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
                             recovery_seconds: 0.0,
                             clear_eligible: false,
                         },
+                        lineage: None,
+                        recovery: None,
                         limitations: vec![],
                         policy_version: "qa".into(),
                         prompt_version: "qa".into(),

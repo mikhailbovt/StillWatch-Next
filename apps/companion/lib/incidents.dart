@@ -310,6 +310,14 @@ class _IncidentDetailState extends State<_IncidentDetail> {
               ),
               const SizedBox(height: 4),
               Text(readable(item.reason), style: theme.textTheme.bodySmall),
+              if (item.possibleContinuationOf case final previous?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'Possible continuation of incident ${previous.substring(0, 8)}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
               if (!_online)
                 const Padding(
                   padding: EdgeInsets.only(top: 12),

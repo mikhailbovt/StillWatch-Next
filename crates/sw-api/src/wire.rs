@@ -53,6 +53,12 @@ pub fn incident(item: domain::Incident) -> Result<wire::Incident, ApiError> {
             model_manifest_sha256: origin.model_manifest_sha256,
             policy_version: origin.policy_version,
         }),
+        possible_continuation_of: item.possible_continuation_of.map(|link| {
+            wire::UncertainIncidentLink {
+                incident_id: link.incident_id,
+                source_epoch: wire::Counter(link.source_epoch),
+            }
+        }),
         assessment: match item.assessment {
             domain::Assessment::Unknown => wire::Assessment::Unknown,
             domain::Assessment::NoVisibleConcern => wire::Assessment::NoVisibleConcern,

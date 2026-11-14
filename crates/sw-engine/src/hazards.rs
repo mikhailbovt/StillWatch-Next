@@ -6,25 +6,30 @@ use std::{
 
 use sw_domain::{
     AnalysisOrigin, Assessment, Box2d, Category, DomainError, EvidenceStamp, EvidenceState,
-    FireDecision, FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy,
+    FireAssociation, FireDecision, FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy,
     MedicalCandidate, MedicalReason, MedicalRules, MedicalSample, MotionPhase, NewIncident,
-    SourceScope, Visibility,
+    RecoveryBasis, RecoveryCourse, SourceScope, TransitionKind, Visibility,
 };
 use sw_protocol::{
-    Counter, Dimensions, EvidenceContext, EvidenceInterval, EvidenceLimitation, EvidenceVisibility,
-    LocalFacts, worker::InferenceResult,
+    Counter, Dimensions, EpisodeAssociation, EvidenceContext, EvidenceInterval, EvidenceLimitation,
+    EvidenceLineage, EvidenceVisibility, LocalFacts, worker::InferenceResult,
 };
-use sw_storage::{EvidenceOutcome, EvidenceWrite, Store, StoreError, utc_ms};
+use sw_storage::{
+    EvidenceOutcome, EvidenceWrite, RecoveryIntent, RecoveryOutcome, Store, StoreError, utc_ms,
+};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
-const POLICY_VERSION: &str = "local-policy-3";
+const POLICY_VERSION: &str = "local-policy-4";
 const PACKET_PERIOD: Duration = Duration::from_secs(4);
 const PACKET_REFRESH: Duration = Duration::from_secs(10);
 const PACKET_RETRY: Duration = Duration::from_secs(2);
 const PACKET_BURST: u8 = 3;
+const MEDICAL_REOBSERVATION_US: i64 = 30_000_000;
+const MAX_PUBLISHED: usize = 256;
 
 pub(crate) struct HazardPolicies {
     scope: SourceScope,
@@ -33,6 +38,8 @@ pub(crate) struct HazardPolicies {
     published: HashMap<Uuid, Published>,
     packets: PacketBudget,
     last_pose: Option<i64>,
+    resolution_check_at: Option<Instant>,
+    resolutions: Option<oneshot::Receiver<Vec<Uuid>>>,
 }
 
 pub(crate) struct Hazard {
@@ -44,15 +51,37 @@ pub(crate) struct Hazard {
     pub region: Box2d,
     pub facts: LocalFacts,
     pub limited: bool,
+    segment_start_us: i64,
+    lineage: EvidenceLineage,
+    recovery: Option<RecoveryIntent>,
+    directly_visible: bool,
     write: HazardWrite,
 }
 
 struct Published {
     observed_at: i64,
+    first_source_us: i64,
+    segment_start_us: i64,
     facts: LocalFacts,
     packet: Option<(Instant, LocalFacts, Box2d)>,
     retry_packet: Option<Instant>,
-    recovery_queued: bool,
+    recovery: RecoveryProgress,
+    resolved: bool,
+    episode_id: Uuid,
+    region: Box2d,
+    last_visible_us: i64,
+    association: EpisodeAssociation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum RecoveryProgress {
+    #[default]
+    Available,
+    Pending {
+        source_us: i64,
+        course: RecoveryCourse,
+    },
+    Completed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,7 +122,7 @@ impl PacketBudget {
 
 pub(crate) struct HazardUpdates {
     hazards: Vec<Hazard>,
-    recoveries: Vec<Uuid>,
+    recovery_courses: Option<Vec<(Uuid, RecoveryCourse)>>,
     pub fire_candidate: bool,
 }
 
@@ -106,6 +135,8 @@ impl HazardPolicies {
             published: HashMap::new(),
             packets: PacketBudget::default(),
             last_pose: None,
+            resolution_check_at: None,
+            resolutions: None,
         }
     }
 
@@ -121,8 +152,8 @@ impl HazardPolicies {
             *self = new;
         }
         let mut hazards = Vec::new();
-        let mut recoveries = Vec::new();
         let mut fire_candidate = false;
+        let pose_executed = result.pose.is_some();
         if let Some(people) = result.pose {
             if self
                 .last_pose
@@ -147,20 +178,15 @@ impl HazardPolicies {
                         hazards.push(hazard);
                     }
                 }
-                if frame.visibility == Visibility::Good {
-                    for motion in self.medical.snapshot() {
-                        if motion.phase == MotionPhase::RecoveredActivity
-                            && motion.clear_eligible
-                            && motion.onset_observed
-                            && !motion.identity_uncertain
-                            && motion.recovery_basis.is_some()
-                            && motion.last_seen_ts == at as f64 / 1_000_000.0
-                            && let Some(published) = self.published.get_mut(&motion.episode_id)
-                            && !published.recovery_queued
-                        {
-                            published.recovery_queued = true;
-                            recoveries.push(motion.episode_id);
-                        }
+                let ts = at as f64 / 1_000_000.0;
+                for (motion, region) in self.medical.visible_motion(ts) {
+                    if let Some(published) = self
+                        .published
+                        .values_mut()
+                        .find(|published| published.episode_id == motion.episode_id)
+                    {
+                        published.last_visible_us = at;
+                        published.region = region;
                     }
                 }
             }
@@ -192,26 +218,23 @@ impl HazardPolicies {
                 }
             }
         }
-        // Bounded policies reuse an episode identity throughout its current evidence window.
-        self.published.retain(|id, _| {
-            self.fire.contains_episode(*id)
-                || self
-                    .medical
-                    .snapshot()
-                    .any(|episode| episode.episode_id == *id)
+        self.published.retain(|_, state| {
+            self.fire.contains_episode(state.episode_id)
+                || matches!(state.facts, LocalFacts::Medical { .. })
+                    && at.saturating_sub(state.last_visible_us) <= MEDICAL_REOBSERVATION_US
         });
+        if !hazards.is_empty() {
+            self.associate_incidents(&mut hazards, at);
+            // A split contour can yield two reports for one episode at the same PTS.
+            // Keep one commit and cover both regions with its overview and crop.
+            coalesce_observations(&mut hazards);
+        }
         let now = Instant::now();
         let capture = frame.captured_at;
         hazards.retain_mut(|hazard| match self.published.entry(hazard.id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let packet = self.packets.take(now, true);
-                entry.insert(Published {
-                    observed_at: at,
-                    facts: hazard.facts,
-                    packet: packet.then_some((capture, hazard.facts, hazard.region)),
-                    retry_packet: None,
-                    recovery_queued: false,
-                });
+                entry.insert(Published::new(hazard, capture, packet));
                 hazard.write = HazardWrite::Open { packet };
                 true
             }
@@ -221,11 +244,148 @@ impl HazardPolicies {
                     .update(hazard, &mut self.packets, now, capture)
             }
         });
+        if self.published.len() > MAX_PUBLISHED {
+            let mut oldest = self
+                .published
+                .iter()
+                .map(|(&id, state)| (state.last_visible_us, id))
+                .collect::<Vec<_>>();
+            oldest.sort_unstable();
+            let remove = self.published.len() - MAX_PUBLISHED;
+            for (_, id) in oldest.into_iter().take(remove) {
+                self.published.remove(&id);
+            }
+        }
+        let mut recovery_courses = pose_executed.then(Vec::new);
+        if frame.visibility == Visibility::Good
+            && let Some(courses) = recovery_courses.as_mut()
+        {
+            let ts = at as f64 / 1_000_000.0;
+            for (motion, region) in self.medical.visible_motion(ts) {
+                let Some(course) = recovery_course(motion) else {
+                    continue;
+                };
+                courses.push((motion.episode_id, course));
+                let Some((&incident_id, published)) = self
+                    .published
+                    .iter_mut()
+                    .find(|(_, state)| state.episode_id == motion.episode_id)
+                else {
+                    continue;
+                };
+                if published.resolved
+                    || hazards.iter().any(|hazard| {
+                        hazard.id == incident_id && matches!(hazard.write, HazardWrite::Open { .. })
+                    })
+                    || published.association == EpisodeAssociation::Uncertain
+                    || published.recovery != RecoveryProgress::Available
+                    || published.retry_packet.is_some_and(|retry| now < retry)
+                    || !self.packets.take(now, true)
+                {
+                    continue;
+                }
+                published.recovery = RecoveryProgress::Pending {
+                    source_us: at,
+                    course,
+                };
+                published.packet = Some((capture, medical_facts(motion, true), region));
+                hazards.retain(|hazard| hazard.id != incident_id);
+                let intent = RecoveryIntent {
+                    incident_id,
+                    episode_id: motion.episode_id,
+                    scope: frame.scope,
+                    course,
+                    source_us: at,
+                };
+                hazards.push(Hazard::recovery(motion, region, intent));
+            }
+        }
+        if let Some(courses) = &recovery_courses {
+            for published in self.published.values_mut() {
+                if let RecoveryProgress::Pending { course, .. } = published.recovery
+                    && !courses.contains(&(published.episode_id, course))
+                {
+                    published.recovery = RecoveryProgress::Available;
+                }
+            }
+        }
         HazardUpdates {
             hazards,
-            recoveries,
+            recovery_courses,
             fire_candidate,
         }
+    }
+
+    fn associate_incidents(&self, hazards: &mut [Hazard], at: i64) {
+        let matches = hazards
+            .iter()
+            .map(|hazard| {
+                self.published
+                    .iter()
+                    .find(|(_, state)| state.episode_id == hazard.lineage.episode_id)
+                    .map(|(&id, _)| (id, true))
+                    .or_else(|| self.medical_continuation(hazard, at).map(|id| (id, false)))
+            })
+            .collect::<Vec<_>>();
+        let mut starting = HashMap::new();
+        for (index, hazard) in hazards.iter_mut().enumerate() {
+            if let Some((id, tracked)) = matches[index]
+                && (tracked
+                    || matches
+                        .iter()
+                        .filter(|matched| matched.is_some_and(|(other, _)| other == id))
+                        .count()
+                        == 1)
+            {
+                let state = &self.published[&id];
+                hazard.id = id;
+                hazard.first_source_us = state.first_source_us;
+                if matches!(hazard.facts, LocalFacts::Medical { .. })
+                    && (!tracked || state.association == EpisodeAssociation::Uncertain)
+                {
+                    if tracked {
+                        hazard.segment_start_us = state.segment_start_us;
+                    }
+                    hazard.lineage.association = EpisodeAssociation::Uncertain;
+                    if let LocalFacts::Medical {
+                        ref mut identity_uncertain,
+                        ..
+                    } = hazard.facts
+                    {
+                        *identity_uncertain = true;
+                    }
+                    hazard.limited = true;
+                }
+            } else {
+                hazard.id = *starting
+                    .entry(hazard.lineage.episode_id)
+                    .or_insert_with(Uuid::new_v4);
+            }
+        }
+    }
+
+    fn medical_continuation(&self, hazard: &Hazard, at: i64) -> Option<Uuid> {
+        let LocalFacts::Medical {
+            onset_observed,
+            identity_uncertain,
+            ..
+        } = hazard.facts
+        else {
+            return None;
+        };
+        // An independently observed onset keeps its own incident. Geometry
+        // alone can link an already-low observation only with uncertainty.
+        if onset_observed || identity_uncertain || hazard.reason != "persistent_low_posture" {
+            return None;
+        }
+        let mut candidates = self.published.iter().filter(|(_, state)| {
+            matches!(state.facts, LocalFacts::Medical { .. })
+                && !state.resolved
+                && at.saturating_sub(state.last_visible_us) > 1_500_000
+                && state.region.iou(hazard.region) >= 0.35
+        });
+        let (&id, _) = candidates.next()?;
+        candidates.next().is_none().then_some(id)
     }
 
     pub fn packet_committed(&mut self, scope: SourceScope, id: Uuid, result: PacketResult) {
@@ -251,9 +411,138 @@ impl HazardPolicies {
             }
         }
     }
+
+    pub fn record_resolution(&mut self, scope: SourceScope, id: Uuid) {
+        if self.scope == scope
+            && let Some(published) = self.published.get_mut(&id)
+        {
+            self.fire.record_resolution(published.episode_id);
+            published.resolved = true;
+        }
+    }
+
+    pub fn refresh_resolutions(&mut self, store: &Store, scope: SourceScope, now: Instant) {
+        if let Some(pending) = self.resolutions.as_mut() {
+            match pending.try_recv() {
+                Ok(resolved) => {
+                    self.resolutions = None;
+                    for id in resolved {
+                        self.record_resolution(scope, id);
+                    }
+                }
+                Err(oneshot::error::TryRecvError::Empty) => return,
+                Err(oneshot::error::TryRecvError::Closed) => self.resolutions = None,
+            }
+        }
+        if self.scope != scope || self.resolution_check_at.is_some_and(|next| now < next) {
+            return;
+        }
+        self.resolution_check_at = Some(now + PACKET_RETRY);
+        let unresolved = self
+            .published
+            .iter()
+            .filter_map(|(&id, state)| {
+                (!state.resolved && matches!(state.facts, LocalFacts::Fire { .. })).then_some(id)
+            })
+            .collect::<Vec<_>>();
+        if !unresolved.is_empty() {
+            let (mut send, receive) = oneshot::channel();
+            self.resolutions = Some(receive);
+            let store = store.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = send.closed() => {},
+                    result = store.resolved_hazards(unresolved) => {
+                        if let Ok(resolved) = result {
+                            let _ = send.send(resolved);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn recovery_committed(&mut self, intent: RecoveryIntent, outcome: RecoveryOutcome) {
+        if self.scope != intent.scope {
+            return;
+        }
+        if let Some(published) = self.published.get_mut(&intent.incident_id)
+            && published.recovery
+                == (RecoveryProgress::Pending {
+                    source_us: intent.source_us,
+                    course: intent.course,
+                })
+        {
+            published.recovery = match outcome {
+                RecoveryOutcome::Applied | RecoveryOutcome::Inapplicable => {
+                    RecoveryProgress::Completed
+                }
+                RecoveryOutcome::NeedsEvidence | RecoveryOutcome::Superseded => {
+                    published.retry_packet = Some(Instant::now() + PACKET_RETRY);
+                    RecoveryProgress::Available
+                }
+            };
+            published.resolved |= outcome == RecoveryOutcome::Applied;
+        }
+    }
+}
+
+fn coalesce_observations(hazards: &mut Vec<Hazard>) {
+    let mut seen = HashMap::<Uuid, usize>::new();
+    let mut unique = Vec::<Hazard>::with_capacity(hazards.len());
+    for hazard in hazards.drain(..) {
+        if let Some(&index) = seen.get(&hazard.id) {
+            let previous = &mut unique[index];
+            previous.region = previous.region.union(hazard.region);
+            if hazard.lineage.association == EpisodeAssociation::Split {
+                previous.lineage.association = EpisodeAssociation::Split;
+            }
+        } else {
+            seen.insert(hazard.id, unique.len());
+            unique.push(hazard);
+        }
+    }
+    *hazards = unique;
+}
+
+fn recovery_course(motion: &sw_domain::MotionEvidence) -> Option<RecoveryCourse> {
+    if !motion.clear_eligible || !motion.onset_observed || motion.identity_uncertain {
+        return None;
+    }
+    match (motion.phase, motion.recovery_basis) {
+        (MotionPhase::RecoveredActivity, Some(RecoveryBasis::UprightActivity)) => {
+            Some(RecoveryCourse::UprightActivity)
+        }
+        (MotionPhase::RecoveredActivity, Some(RecoveryBasis::PriorSupportedPosture)) => {
+            Some(RecoveryCourse::PriorSupportedPosture)
+        }
+        (MotionPhase::OrdinaryActivity, _)
+            if motion.transition == TransitionKind::ControlledPattern =>
+        {
+            Some(RecoveryCourse::ControlledActivity)
+        }
+        _ => None,
+    }
 }
 
 impl Published {
+    fn new(hazard: &Hazard, capture: Instant, packet: bool) -> Self {
+        Self {
+            observed_at: hazard.source_us,
+            first_source_us: hazard.first_source_us,
+            segment_start_us: hazard.segment_start_us,
+            facts: hazard.facts,
+            packet: packet.then_some((capture, hazard.facts, hazard.region)),
+            retry_packet: None,
+            recovery: RecoveryProgress::Available,
+            resolved: false,
+            episode_id: hazard.lineage.episode_id,
+            region: hazard.region,
+            last_visible_us: hazard.source_us,
+            association: hazard.lineage.association,
+        }
+    }
+
     fn update(
         &mut self,
         hazard: &mut Hazard,
@@ -261,11 +550,28 @@ impl Published {
         now: Instant,
         capture: Instant,
     ) -> bool {
+        if self.resolved {
+            return false;
+        }
         let at = hazard.source_us;
-        let material = material_change(self.facts, hazard.facts);
+        if hazard.directly_visible {
+            self.region = hazard.region;
+            self.last_visible_us = at;
+        }
+        let new_segment = hazard.segment_start_us > self.segment_start_us
+            && match hazard.facts {
+                LocalFacts::Fire { .. } => true,
+                LocalFacts::Medical { .. } => self.episode_id != hazard.lineage.episode_id,
+            };
+        self.segment_start_us = hazard.segment_start_us;
+        self.episode_id = hazard.lineage.episode_id;
+        self.association = hazard.lineage.association;
+        let material = new_segment || material_change(self.facts, hazard.facts);
         let (important, refresh) = match self.packet {
             Some((previous, facts, region)) => (
-                material_change(facts, hazard.facts) || region.iou(hazard.region) < 0.35,
+                new_segment
+                    || material_change(facts, hazard.facts)
+                    || region.iou(hazard.region) < 0.35,
                 now.saturating_duration_since(previous) >= PACKET_REFRESH,
             ),
             None => (material, true),
@@ -309,26 +615,52 @@ impl Hazard {
             MedicalReason::PostureTransition => "posture_transition",
         };
         Some(Self {
-            id: motion.episode_id,
+            id: Uuid::nil(),
             assessment: Assessment::Concern,
             reason,
             first_source_us: (candidate.first_ts * 1_000_000.0).round() as i64,
             source_us: at,
+            segment_start_us: (candidate.first_ts * 1_000_000.0).round() as i64,
             region: candidate.region,
             limited: candidate.limited
                 || motion.identity_uncertain
                 || motion.phase == MotionPhase::VisibilityLost,
+            directly_visible: motion.phase != MotionPhase::VisibilityLost,
             write: HazardWrite::Open { packet: false },
-            facts: LocalFacts::Medical {
-                track_id: Counter(candidate.track_id),
+            recovery: None,
+            facts: medical_facts(&motion, false),
+            lineage: EvidenceLineage {
                 episode_id: motion.episode_id,
-                previous_episode_id: motion.previous_episode_id,
-                onset_observed: motion.onset_observed,
-                identity_uncertain: motion.identity_uncertain,
-                recovery_seconds: motion.recovery_seconds,
-                clear_eligible: motion.clear_eligible,
+                fire_track_id: None,
+                association: if motion.identity_uncertain {
+                    EpisodeAssociation::Uncertain
+                } else {
+                    EpisodeAssociation::Continuous
+                },
             },
         })
+    }
+
+    fn recovery(motion: &sw_domain::MotionEvidence, region: Box2d, intent: RecoveryIntent) -> Self {
+        Self {
+            id: intent.incident_id,
+            assessment: Assessment::Concern,
+            reason: intent.course.resolution_reason(),
+            first_source_us: (motion.started_ts * 1_000_000.0).round() as i64,
+            segment_start_us: (motion.started_ts * 1_000_000.0).round() as i64,
+            source_us: intent.source_us,
+            region,
+            facts: medical_facts(motion, true),
+            limited: false,
+            directly_visible: true,
+            lineage: EvidenceLineage {
+                episode_id: motion.episode_id,
+                fire_track_id: None,
+                association: EpisodeAssociation::Continuous,
+            },
+            recovery: Some(intent),
+            write: HazardWrite::Packet,
+        }
     }
 
     fn fire(episode: FireEpisode) -> Self {
@@ -345,14 +677,28 @@ impl Hazard {
             "visible_smoke"
         };
         Self {
-            id: episode.id,
+            id: Uuid::nil(),
             assessment: Assessment::Concern,
             reason,
             first_source_us: episode.first_source_us,
+            segment_start_us: episode.segment_start_source_us,
             source_us: episode.source_us,
             region: episode.region,
             limited: facts.visibility != Visibility::Good,
+            directly_visible: true,
             write: HazardWrite::Open { packet: false },
+            recovery: None,
+            lineage: EvidenceLineage {
+                episode_id: episode.id,
+                fire_track_id: Some(episode.track_id),
+                association: match episode.association {
+                    FireAssociation::New => EpisodeAssociation::New,
+                    FireAssociation::Continuous => EpisodeAssociation::Continuous,
+                    FireAssociation::Reobserved => EpisodeAssociation::Reobserved,
+                    FireAssociation::Split => EpisodeAssociation::Split,
+                    FireAssociation::Ambiguous => EpisodeAssociation::Uncertain,
+                },
+            },
             facts: LocalFacts::Fire {
                 flame_visible: facts.flame_visible,
                 smoke_visible: facts.smoke_visible,
@@ -379,6 +725,17 @@ impl Hazard {
     }
 }
 
+fn medical_facts(motion: &sw_domain::MotionEvidence, clear_eligible: bool) -> LocalFacts {
+    LocalFacts::Medical {
+        track_id: Counter(motion.track_id),
+        episode_id: motion.episode_id,
+        previous_episode_id: motion.previous_episode_id,
+        onset_observed: motion.onset_observed,
+        identity_uncertain: motion.identity_uncertain,
+        recovery_seconds: motion.recovery_seconds,
+        clear_eligible,
+    }
+}
 fn material_change(previous: LocalFacts, current: LocalFacts) -> bool {
     match (previous, current) {
         (
@@ -438,10 +795,12 @@ pub(crate) enum PacketResult {
     },
 }
 
-pub(crate) struct PacketCommit {
+pub(crate) struct HazardCommit {
     pub scope: SourceScope,
     pub incident: Uuid,
-    pub result: PacketResult,
+    pub packet: Option<PacketResult>,
+    pub recovery: Option<(RecoveryIntent, RecoveryOutcome)>,
+    pub resolved: bool,
 }
 
 pub(crate) struct PendingHazards {
@@ -454,12 +813,7 @@ pub(crate) struct PendingHazards {
 
 struct Batch {
     frame: Arc<CameraFrame>,
-    pending: VecDeque<Pending>,
-}
-
-enum Pending {
-    Evidence(Hazard),
-    Recovery(Uuid),
+    pending: VecDeque<Hazard>,
 }
 
 impl PendingHazards {
@@ -487,6 +841,23 @@ impl PendingHazards {
     }
 
     pub fn push(&mut self, frame: Arc<CameraFrame>, updates: HazardUpdates) {
+        self.queue.retain_mut(|batch| {
+            if batch.frame.scope.camera_id != frame.scope.camera_id {
+                return true;
+            }
+            if batch.frame.scope != frame.scope {
+                batch.pending.retain(|hazard| hazard.recovery.is_none());
+                return !batch.pending.is_empty();
+            }
+            if let Some(courses) = &updates.recovery_courses {
+                batch.pending.retain(|hazard| {
+                    hazard
+                        .recovery
+                        .is_none_or(|intent| courses.contains(&(intent.episode_id, intent.course)))
+                });
+            }
+            !batch.pending.is_empty()
+        });
         // Only a more recent packet supersedes queued image work. Keep the
         // earlier opening and material observations in the durable history.
         for update in updates
@@ -500,10 +871,8 @@ impl PendingHazards {
                 .filter(|batch| batch.frame.scope == frame.scope)
             {
                 for pending in &mut batch.pending {
-                    if let Pending::Evidence(hazard) = pending
-                        && hazard.id == update.id
-                    {
-                        hazard.write = match hazard.write {
+                    if pending.id == update.id && pending.recovery.is_none() {
+                        pending.write = match pending.write {
                             HazardWrite::Open { .. } => HazardWrite::Open { packet: false },
                             HazardWrite::Packet | HazardWrite::Observe => HazardWrite::Observe,
                         };
@@ -511,18 +880,13 @@ impl PendingHazards {
                 }
             }
         }
-        let pending: VecDeque<_> = updates
-            .hazards
-            .into_iter()
-            .map(Pending::Evidence)
-            .chain(updates.recoveries.into_iter().map(Pending::Recovery))
-            .collect();
+        let pending = VecDeque::from(updates.hazards);
         if !pending.is_empty() {
             self.queue.push_back(Batch { frame, pending });
         }
     }
 
-    pub async fn flush(&mut self) -> Option<PacketCommit> {
+    pub async fn flush(&mut self) -> Option<HazardCommit> {
         if self
             .retry_at
             .is_some_and(|time| time > tokio::time::Instant::now())
@@ -533,46 +897,36 @@ impl PendingHazards {
         if let Some(batch) = self.queue.front_mut()
             && let Some(pending) = batch.pending.front()
         {
-            let result = match pending {
-                Pending::Evidence(hazard) => {
-                    persist(
-                        &self.store,
-                        &self.evidence,
-                        &batch.frame,
-                        hazard,
-                        &self.origin,
-                    )
-                    .await
-                }
-                Pending::Recovery(incident) => match batch.frame.frame.header.source_micros {
-                    Some(source_us)
-                        if batch.frame.captured_at.elapsed() <= Duration::from_secs(3) =>
-                    {
-                        self.store
-                            .record_fresh_recovery(
-                                *incident,
-                                batch.frame.scope,
-                                source_us,
-                                batch.frame.observation_time,
-                            )
-                            .await
-                            .map(|_| None)
-                    }
-                    _ => Ok(None),
-                },
-            };
+            let result = persist(
+                &self.store,
+                &self.evidence,
+                &batch.frame,
+                pending,
+                &self.origin,
+            )
+            .await;
             match result {
                 outcome @ (Ok(_)
                 | Err(
                     StoreError::NotFound
                     | StoreError::Domain(DomainError::Resolved | DomainError::Stale),
                 )) => {
+                    let commit = match outcome {
+                        Ok(commit) => commit,
+                        Err(error) => pending.recovery.map(|intent| HazardCommit {
+                            scope: intent.scope,
+                            incident: intent.incident_id,
+                            packet: None,
+                            recovery: Some((intent, RecoveryOutcome::Superseded)),
+                            resolved: matches!(error, StoreError::Domain(DomainError::Resolved)),
+                        }),
+                    };
                     self.retry_at = None;
                     batch.pending.pop_front();
                     if batch.pending.is_empty() {
                         self.queue.pop_front();
                     }
-                    return outcome.ok().flatten();
+                    return commit;
                 }
                 Err(_) => {
                     if self.retry_at.is_none() {
@@ -592,7 +946,23 @@ async fn persist(
     frame: &Arc<CameraFrame>,
     hazard: &Hazard,
     origin: &AnalysisOrigin,
-) -> Result<Option<PacketCommit>, StoreError> {
+) -> Result<Option<HazardCommit>, StoreError> {
+    if let Some(intent) = hazard.recovery
+        && !frame
+            .observation_time
+            .fresh(utc_ms(), Instant::now(), Duration::from_secs(3))
+    {
+        // A prior attempt may have reached its transaction before the
+        // caller deadline. Ask storage for the idempotent acknowledgement.
+        let outcome = store.apply_recovery(intent, frame.observation_time).await?;
+        return Ok(Some(HazardCommit {
+            scope: frame.scope,
+            incident: hazard.id,
+            packet: None,
+            recovery: Some((intent, outcome)),
+            resolved: outcome == RecoveryOutcome::Applied,
+        }));
+    }
     let new = NewIncident {
         id: hazard.id,
         scope: frame.scope,
@@ -612,16 +982,38 @@ async fn persist(
             frame.observation_time,
             hazard.facts,
             hazard.region,
+            (hazard.directly_visible && frame.visibility == Visibility::Good)
+                .then_some(frame.scene_signature),
             opening,
         )
         .await?;
-    if incident.resolution.is_some()
-        || incident.last_source_us != hazard.source_us
+    if incident.resolution.is_some() {
+        let recovery = if let Some(intent) = hazard.recovery {
+            let outcome = store.apply_recovery(intent, frame.observation_time).await?;
+            Some((intent, outcome))
+        } else {
+            None
+        };
+        return Ok(Some(HazardCommit {
+            scope: frame.scope,
+            incident: incident.id,
+            packet: None,
+            recovery,
+            resolved: true,
+        }));
+    }
+    if incident.last_source_us != hazard.source_us
         || (opening
             && (incident.evidence.is_some()
                 || incident.evidence_state == EvidenceState::Unavailable))
     {
-        return Ok(None);
+        return Ok(hazard.recovery.map(|intent| HazardCommit {
+            scope: frame.scope,
+            incident: incident.id,
+            packet: None,
+            recovery: Some((intent, RecoveryOutcome::Superseded)),
+            resolved: false,
+        }));
     }
     if matches!(
         hazard.write,
@@ -629,13 +1021,6 @@ async fn persist(
     ) {
         return Ok(None);
     }
-    let completed = |result| {
-        Some(PacketCommit {
-            scope: frame.scope,
-            incident: incident.id,
-            result,
-        })
-    };
     if !opening
         && let Some(stamp) = incident.evidence
         && stamp.expires_at == frame.observation_time.expires_at()
@@ -662,23 +1047,31 @@ async fn persist(
                     at: frame.captured_at,
                 }
             };
-            return Ok(completed(result));
+            return packet_committed(store, frame, hazard, result).await;
         }
     }
     let evidence = evidence.clone();
-    let onset = hazard.first_source_us;
+    let onset = hazard.segment_start_us;
     let region = hazard.region;
+    let after_gap = hazard.segment_start_us > hazard.first_source_us;
     let frame_copy = frame.clone();
-    let selected = tokio::task::spawn_blocking(move || evidence.select(&frame_copy, onset, region))
-        .await
-        .map_err(|_| StoreError::Unavailable)?;
+    let selected =
+        tokio::task::spawn_blocking(move || evidence.select(&frame_copy, onset, region, after_gap))
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
     if selected.images.is_empty() {
         if incident.evidence_state == EvidenceState::Pending {
             store.evidence_unavailable(incident.id, utc_ms()).await?;
         }
-        return Ok(completed(PacketResult::Unavailable {
-            at: frame.captured_at,
-        }));
+        return packet_committed(
+            store,
+            frame,
+            hazard,
+            PacketResult::Unavailable {
+                at: frame.captured_at,
+            },
+        )
+        .await;
     }
     let coverage = selected.coverage;
     let mut limitations = Vec::new();
@@ -687,6 +1080,9 @@ async fn persist(
     }
     if hazard.limited {
         limitations.push(EvidenceLimitation::PartialVisibility);
+    }
+    if after_gap {
+        limitations.push(EvidenceLimitation::ObservationGap);
     }
     if !selected.has_pre_event {
         limitations.push(EvidenceLimitation::PreEventUnavailable);
@@ -698,11 +1094,13 @@ async fn persist(
     }
     let context = EvidenceContext {
         observed_interval: EvidenceInterval {
-            start_source_s: hazard.first_source_us.min(hazard.source_us) as f64 / 1_000_000.0,
+            start_source_s: hazard.segment_start_us.min(hazard.source_us) as f64 / 1_000_000.0,
             end_source_s: hazard.source_us as f64 / 1_000_000.0,
         },
         coverage,
         local_facts: hazard.facts,
+        lineage: Some(hazard.lineage),
+        recovery: hazard.recovery.map(RecoveryIntent::observation),
         limitations,
         policy_version: origin.policy_version.clone(),
         prompt_version: match hazard.category() {
@@ -745,7 +1143,28 @@ async fn persist(
             at: frame.captured_at,
         }
     };
-    Ok(completed(result))
+    packet_committed(store, frame, hazard, result).await
+}
+
+async fn packet_committed(
+    store: &Store,
+    frame: &CameraFrame,
+    hazard: &Hazard,
+    packet: PacketResult,
+) -> Result<Option<HazardCommit>, StoreError> {
+    let recovery = if let Some(intent) = hazard.recovery {
+        let outcome = store.apply_recovery(intent, frame.observation_time).await?;
+        Some((intent, outcome))
+    } else {
+        None
+    };
+    Ok(Some(HazardCommit {
+        scope: frame.scope,
+        incident: hazard.id,
+        packet: Some(packet),
+        recovery,
+        resolved: false,
+    }))
 }
 
 #[cfg(test)]
@@ -758,6 +1177,7 @@ mod tests {
             assessment: Assessment::Concern,
             reason: "visible_smoke",
             first_source_us: 0,
+            segment_start_us: 0,
             source_us: 0,
             region: Box2d {
                 x1: 0.0,
@@ -777,8 +1197,82 @@ mod tests {
                 visibility,
             },
             limited: visibility != EvidenceVisibility::Good,
+            directly_visible: true,
+            recovery: None,
+            lineage: EvidenceLineage {
+                episode_id: Uuid::nil(),
+                fire_track_id: Some(Uuid::nil()),
+                association: EpisodeAssociation::Continuous,
+            },
             write: HazardWrite::Open { packet: false },
         }
+    }
+
+    #[test]
+    fn medical_gap_keeps_a_low_subjects_incident_without_granting_identity() {
+        let scope = SourceScope {
+            camera_id: Uuid::new_v4(),
+            scene_revision: 1,
+            epoch: 1,
+        };
+        let mut policy = HazardPolicies::new(scope);
+        let incident = Uuid::new_v4();
+        let episode = Uuid::new_v4();
+        let make_hazard = |episode_id, onset_observed, source_us| {
+            let mut hazard = fire(0, EvidenceVisibility::Good);
+            hazard.reason = if onset_observed {
+                "suspected_fall"
+            } else {
+                "persistent_low_posture"
+            };
+            hazard.facts = LocalFacts::Medical {
+                episode_id,
+                track_id: Counter(1),
+                previous_episode_id: None,
+                onset_observed,
+                identity_uncertain: false,
+                recovery_seconds: 0.0,
+                clear_eligible: false,
+            };
+            hazard.lineage.episode_id = episode_id;
+            hazard.source_us = source_us;
+            hazard.first_source_us = source_us;
+            hazard.segment_start_us = source_us;
+            hazard
+        };
+        let initial = make_hazard(episode, true, 0);
+        policy
+            .published
+            .insert(incident, Published::new(&initial, Instant::now(), true));
+        let new_episode = Uuid::new_v4();
+        let mut after_gap = [make_hazard(new_episode, false, 1_600_000)];
+        policy.associate_incidents(&mut after_gap, 1_600_000);
+        let hazard = &after_gap[0];
+        assert_eq!(hazard.id, incident);
+        assert_eq!(hazard.lineage.episode_id, new_episode);
+        assert_eq!(hazard.lineage.association, EpisodeAssociation::Uncertain);
+        assert_eq!(hazard.first_source_us, 0);
+        assert_eq!(hazard.segment_start_us, 1_600_000);
+        assert!(matches!(
+            hazard.facts,
+            LocalFacts::Medical {
+                identity_uncertain: true,
+                clear_eligible: false,
+                ..
+            }
+        ));
+        assert!(hazard.recovery.is_none());
+
+        let mut different = [make_hazard(Uuid::new_v4(), false, 2_000_000)];
+        different[0].region.x1 = 120.0;
+        different[0].region.x2 = 220.0;
+        policy.associate_incidents(&mut different, 2_000_000);
+        assert_ne!(different[0].id, incident);
+
+        let mut second_fall = [make_hazard(Uuid::new_v4(), true, 5_000_000)];
+        policy.associate_incidents(&mut second_fall, 5_000_000);
+        assert_ne!(second_fall[0].id, incident);
+        assert_eq!(second_fall[0].first_source_us, 5_000_000);
     }
 
     #[test]
@@ -787,13 +1281,7 @@ mod tests {
         let start = Instant::now();
         let mut budget = PacketBudget::default();
         assert!(budget.take(start, true));
-        let mut published = Published {
-            observed_at: 0,
-            facts: initial.facts,
-            packet: Some((start, initial.facts, initial.region)),
-            retry_packet: None,
-            recovery_queued: false,
-        };
+        let mut published = Published::new(&initial, start, true);
         for (index, (flags, visibility)) in [
             (4, EvidenceVisibility::Limited),
             (5, EvidenceVisibility::Limited),
@@ -817,13 +1305,8 @@ mod tests {
         let start = Instant::now();
         let mut hazard = fire(0, EvidenceVisibility::Good);
         let mut budget = PacketBudget::default();
-        let mut published = Published {
-            observed_at: 0,
-            facts: hazard.facts,
-            packet: None,
-            retry_packet: Some(start + PACKET_RETRY),
-            recovery_queued: false,
-        };
+        let mut published = Published::new(&hazard, start, false);
+        published.retry_packet = Some(start + PACKET_RETRY);
         assert!(!published.update(&mut hazard, &mut budget, start, start));
         let retry = start + PACKET_RETRY;
         hazard.source_us = 2_000_000;
@@ -843,13 +1326,7 @@ mod tests {
         for _ in 0..PACKET_BURST {
             assert!(budget.take(start, true));
         }
-        let mut published = Published {
-            observed_at: 0,
-            facts: initial.facts,
-            packet: Some((start, initial.facts, initial.region)),
-            retry_packet: None,
-            recovery_queued: false,
-        };
+        let mut published = Published::new(&initial, start, true);
         let flicker = start + Duration::from_secs(1);
         let mut hazard = fire(1, EvidenceVisibility::Good);
         hazard.source_us = 1_000_000;

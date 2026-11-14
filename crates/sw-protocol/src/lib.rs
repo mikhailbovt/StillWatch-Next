@@ -112,6 +112,13 @@ pub struct AnalysisOrigin {
     pub policy_version: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct UncertainIncidentLink {
+    pub incident_id: Uuid,
+    pub source_epoch: Counter,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Incident {
@@ -127,6 +134,8 @@ pub struct Incident {
     pub detection_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_origin: Option<AnalysisOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub possible_continuation_of: Option<UncertainIncidentLink>,
     pub assessment: Assessment,
     pub attention: Attention,
     pub attention_cycle: Counter,

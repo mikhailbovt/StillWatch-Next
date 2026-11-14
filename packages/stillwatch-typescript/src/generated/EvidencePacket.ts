@@ -2,7 +2,13 @@
 
 export type Category = "medical" | "fire" | "overview";
 export type EvidenceLimitation =
-  "partial_visibility" | "sparse_coverage" | "source_changed" | "pre_event_unavailable" | "non_live";
+  | "partial_visibility"
+  | "sparse_coverage"
+  | "source_changed"
+  | "pre_event_unavailable"
+  | "non_live"
+  | "observation_gap";
+export type EpisodeAssociation = "new" | "continuous" | "reobserved" | "split" | "uncertain";
 export type LocalFacts =
   | {
       apparent_growth: boolean;
@@ -31,6 +37,7 @@ export type EvidenceVisibility = "good" | "limited" | "poor";
  * Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.
  */
 export type Counter = string;
+export type EvidenceRecovery = "upright_activity" | "prior_supported_posture" | "controlled_activity";
 export type UtcTimestamp = string;
 export type EvidenceImageAvailability = "available" | "unavailable";
 export type EvidenceImageKind = "overview" | "crop";
@@ -58,15 +65,22 @@ export interface EvidencePacket {
 export interface EvidenceContext {
   coverage: EvidenceCoverage;
   limitations: EvidenceLimitation[];
+  lineage?: EvidenceLineage | null;
   local_facts: LocalFacts;
   observed_interval: EvidenceInterval;
   policy_version: string;
   prompt_version: string;
+  recovery?: EvidenceRecovery | null;
 }
 export interface EvidenceCoverage {
   expected_samples: number;
   max_gap_ms: number;
   received_samples: number;
+}
+export interface EvidenceLineage {
+  association: EpisodeAssociation;
+  episode_id: string;
+  fire_track_id?: string | null;
 }
 export interface EvidenceInterval {
   end_source_s: number;

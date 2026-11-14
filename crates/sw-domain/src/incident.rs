@@ -44,6 +44,26 @@ pub enum Clearance {
     CorroboratedFireCourse,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryCourse {
+    UprightActivity,
+    PriorSupportedPosture,
+    ControlledActivity,
+}
+
+impl RecoveryCourse {
+    pub fn resolution_reason(self) -> &'static str {
+        match self {
+            Self::UprightActivity => "Corroborated upright activity",
+            Self::PriorSupportedPosture => "Corroborated return to prior supported posture",
+            Self::ControlledActivity => {
+                "Corroborated ordinary activity after the observed transition"
+            }
+        }
+    }
+}
+
 impl Clearance {
     fn supports(self, category: Category) -> bool {
         matches!(
@@ -90,6 +110,12 @@ pub struct AnalysisOrigin {
     pub policy_version: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UncertainIncidentLink {
+    pub incident_id: Uuid,
+    pub source_epoch: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Incident {
     pub id: Uuid,
@@ -99,6 +125,8 @@ pub struct Incident {
     pub detection_reason: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_origin: Option<AnalysisOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub possible_continuation_of: Option<UncertainIncidentLink>,
     pub first_source_us: i64,
     pub last_source_us: i64,
     pub live: bool,
@@ -219,6 +247,7 @@ impl Incident {
             category: new.category,
             detection_reason: new.reason,
             analysis_origin: new.analysis_origin,
+            possible_continuation_of: None,
             first_source_us: new.first_source_us,
             last_source_us: new.last_source_us,
             live: new.live,
@@ -369,6 +398,41 @@ impl Incident {
         Ok(Transition {
             incident,
             notification,
+            silence: None,
+        })
+    }
+
+    pub fn record_recovery_course(
+        &self,
+        scope: SourceScope,
+        source_us: i64,
+        course: RecoveryCourse,
+        now: UnixMillis,
+    ) -> Result<Transition, DomainError> {
+        if self.attention != Attention::Review || self.acknowledgement.is_some() {
+            return Err(DomainError::Stale);
+        }
+        if self.resolution.is_some() {
+            return Err(DomainError::Resolved);
+        }
+        if scope != self.scope
+            || source_us != self.last_source_us
+            || self.category != Category::Medical
+            || self.evidence_state != EvidenceState::Persisted
+        {
+            return Err(DomainError::Stale);
+        }
+        let mut incident = self.next(now)?;
+        incident.assessment = Assessment::NoVisibleConcern;
+        incident.assessed_evidence_version = incident.evidence.map(|stamp| stamp.version);
+        incident.resolution = Some(Resolution {
+            actor_id: None,
+            at: now.max(self.updated_at),
+            reason: course.resolution_reason().into(),
+        });
+        Ok(Transition {
+            incident,
+            notification: None,
             silence: None,
         })
     }

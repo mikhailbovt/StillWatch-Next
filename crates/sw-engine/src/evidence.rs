@@ -146,10 +146,16 @@ impl EvidenceSampler {
         }
     }
 
-    pub fn select(&self, frame: &CameraFrame, onset: i64, region: Box2d) -> EvidenceSelection {
+    pub fn select(
+        &self,
+        frame: &CameraFrame,
+        onset: i64,
+        region: Box2d,
+        after_gap: bool,
+    ) -> EvidenceSelection {
         let at = frame.frame.header.source_micros.expect("analyzed frame");
         let start = onset
-            .saturating_sub(1_500_000)
+            .saturating_sub(if after_gap { 0 } else { 1_500_000 })
             .max(at.saturating_sub(HISTORY_US));
         let mut images = Vec::new();
         let mut sampled = Vec::new();

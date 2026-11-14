@@ -1,15 +1,18 @@
 #![forbid(unsafe_code)]
 
 mod fire;
+mod fire_episode;
 mod incident;
 mod medical;
 mod motion;
 mod observation;
 mod pose;
+mod scene;
 mod tracking;
 
 pub use fire::{
-    FireDecision, FireEpisode, FireFacts, FirePolicy, FireSample, FireSettings, Visibility,
+    FireAssociation, FireDecision, FireEpisode, FireFacts, FirePolicy, FireSample, FireSettings,
+    Visibility,
 };
 pub use incident::*;
 pub use medical::{MedicalRules, MedicalSample, MedicalSettings};
@@ -18,6 +21,7 @@ pub use motion::{
     TransitionKind,
 };
 pub use observation::*;
+pub use scene::{SCENE_SIGNATURE_BYTES, SceneSignature};
 pub use tracking::{PoseTracker, TrackingError};
 
 /// A deterministic temporal policy for one camera stream. Inputs own or borrow
