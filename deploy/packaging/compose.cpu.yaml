@@ -6,7 +6,12 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs:
-      - /tmp
+      - /tmp:size=512m
+    logging:
+      driver: local
+      options:
+        max-size: "16m"
+        max-file: "3"
     environment:
       STILLWATCH_MODEL_DIR: /opt/stillwatch-models
       STILLWATCH_MODEL_SHA256: ${STILLWATCH_MODEL_SHA256:?Set the authorized model manifest SHA-256}

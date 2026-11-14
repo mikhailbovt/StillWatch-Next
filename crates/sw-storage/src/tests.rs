@@ -9,11 +9,11 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
-    CameraAction, CameraCommand, CameraLimits, ChangeCursor, EvidenceFailure, EvidenceImage,
-    EvidenceOutcome, EvidenceWrite, HealthIssue, HealthObservation, OperatorCommand, Store,
-    StoreConfig, StoreError,
+    BackupLimits, CameraAction, CameraCommand, CameraLimits, ChangeCursor, EvidenceFailure,
+    EvidenceImage, EvidenceOutcome, EvidenceWrite, HealthIssue, HealthObservation, OperatorCommand,
+    Store, StoreConfig, StoreError,
     db::{DATABASE_FILE, Database},
-    restore_backup,
+    restore_backup, restore_backup_with_limits,
 };
 
 const BLACK: &[u8] = include_bytes!("../../../tests/fixtures/evidence/black.jpg");
@@ -1040,8 +1040,27 @@ async fn restore_checks_blob_integrity_and_rotates_stream_generation() {
         .unwrap();
     let cursor = store.snapshot().await.unwrap().cursor;
     let backup = root.path().join("backup");
-    store.backup(backup.clone()).await.unwrap();
+    let rejected_budget = BackupLimits { max_bytes: 1 };
+    assert!(matches!(
+        store
+            .backup_with_limits(backup.clone(), rejected_budget)
+            .await,
+        Err(StoreError::BackupCapacity)
+    ));
+    assert!(!backup.exists());
+    let budget = BackupLimits {
+        max_bytes: 4 * 1024 * 1024,
+    };
+    store
+        .backup_with_limits(backup.clone(), budget)
+        .await
+        .unwrap();
     let target = root.path().join("restored");
+    assert!(matches!(
+        restore_backup_with_limits(&backup, &target, rejected_budget),
+        Err(StoreError::BackupCapacity)
+    ));
+    assert!(!target.exists());
     let identity = restore_backup(&backup, &target).unwrap();
     assert_eq!(identity.instance_id, store.identity().instance_id);
     assert_ne!(identity.generation, cursor.generation);

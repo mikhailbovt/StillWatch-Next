@@ -17,6 +17,7 @@ base64 = "=0.23.1"
 clap = { version = "=4.6.7", features = ["derive"] }
 ed25519-dalek = "=2.2.0"
 ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["device", "software-scaling"] }
+fs4 = "=1.1.0"
 getrandom = "=0.4.3"
 hyper = { version = "=1.12.0", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["service", "tokio"] }

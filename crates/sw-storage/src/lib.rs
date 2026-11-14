@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use db::Database;
 
-pub use backup::restore_backup;
+pub use backup::{BackupLimits, restore_backup, restore_backup_with_limits};
 pub use budget::DEFAULT_DATABASE_QUOTA_BYTES;
 pub use cameras::{CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult};
 pub use evidence::{
@@ -65,6 +65,8 @@ pub enum StoreError {
     Unavailable,
     #[error("database storage capacity reached")]
     DatabaseCapacity,
+    #[error("backup exceeds its byte budget or available destination space")]
+    BackupCapacity,
     #[error("incident does not exist")]
     NotFound,
     #[error("incident already exists with different creation facts")]
@@ -453,6 +455,15 @@ impl Store {
     }
 
     pub async fn backup(&self, destination: PathBuf) -> Result<(), StoreError> {
-        self.call(move |db| db.backup(&destination)).await
+        self.backup_with_limits(destination, BackupLimits::default())
+            .await
+    }
+
+    pub async fn backup_with_limits(
+        &self,
+        destination: PathBuf,
+        limits: BackupLimits,
+    ) -> Result<(), StoreError> {
+        self.call(move |db| db.backup(&destination, limits)).await
     }
 }

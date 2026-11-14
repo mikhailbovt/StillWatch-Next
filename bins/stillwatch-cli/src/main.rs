@@ -15,7 +15,9 @@ use sw_protocol::{
     CameraConfig, CameraPatch, Counter, DeviceRole, DeviceScope, Health, HealthState,
     IdempotencyKey, PairingRequest, SourceProbeRequest,
 };
-use sw_storage::{LegacyImport, Store, StoreConfig, import_legacy, restore_backup};
+use sw_storage::{
+    BackupLimits, LegacyImport, Store, StoreConfig, import_legacy, restore_backup_with_limits,
+};
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -67,6 +69,9 @@ enum Command {
         data_dir: PathBuf,
         #[arg(long)]
         destination: PathBuf,
+        /// Cap the combined size of the database, manifest and evidence.
+        #[arg(long)]
+        max_bytes: Option<u64>,
     },
     /// Verify and restore a backup to a fresh directory.
     Restore {
@@ -74,6 +79,9 @@ enum Command {
         backup: PathBuf,
         #[arg(long)]
         destination: PathBuf,
+        /// Cap the combined size of the database, manifest and evidence.
+        #[arg(long)]
+        max_bytes: Option<u64>,
     },
     /// Read an offline schema-1 snapshot into a separate Core data directory.
     Migrate {
@@ -265,16 +273,24 @@ async fn main() -> Result<()> {
         Command::BackupOffline {
             data_dir,
             destination,
+            max_bytes,
         } => {
             let store = Store::open(&data_dir, StoreConfig::default())?;
-            store.backup(std::path::absolute(destination)?).await?;
+            store
+                .backup_with_limits(std::path::absolute(destination)?, backup_limits(max_bytes))
+                .await?;
             println!("Backup verified for {}", store.identity().instance_id);
         }
         Command::Restore {
             backup,
             destination,
+            max_bytes,
         } => {
-            let identity = restore_backup(&backup, &std::path::absolute(destination)?)?;
+            let identity = restore_backup_with_limits(
+                &backup,
+                &std::path::absolute(destination)?,
+                backup_limits(max_bytes),
+            )?;
             println!(
                 "Restored {} with stream generation {}",
                 identity.instance_id, identity.generation
@@ -331,6 +347,12 @@ async fn pair(
         );
     }
     Ok(())
+}
+
+fn backup_limits(max_bytes: Option<u64>) -> BackupLimits {
+    max_bytes.map_or_else(BackupLimits::default, |max_bytes| BackupLimits {
+        max_bytes,
+    })
 }
 
 fn local_client(directory: &Path, local: SocketAddr) -> Result<Client> {

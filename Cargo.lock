@@ -2338,6 +2338,7 @@ name = "sw-storage"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "fs4",
  "getrandom 0.4.3",
  "rusqlite",
  "serde",

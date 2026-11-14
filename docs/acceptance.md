@@ -38,6 +38,8 @@ The Android 16 emulator preserved the observed notification denial time after fo
 
 `tests/e2e/storage_budget.py` verified SQLite metadata exhaustion and backpressure on the WAL with an external reader on Windows and Ubuntu. The API kept committed state readable, returned 507 for blocked writes, and accepted a retry after headroom returned. The maintenance CLI produced a redacted report while readiness returned 503. A storage test restarted with pending evidence in a full database and completed reconciliation after freeing pages.
 
+The backup and restore CLI rejected a small byte budget on both systems and insufficient destination headroom on a 48 MiB Ubuntu tmpfs. Failed operations left no published directory. A subsequent restore preserved the incident and camera and changed the stream generation. The CPU Compose profile verified its mounted temporary filesystem size and the driver settings for log rotation.
+
 The KMU replay added one low-light smoke onset, one daytime clip with smoke present at the start and ten labeled lookalikes. Neither positive matched the eight-second window. The low-light sequence ended 5.33 seconds after the labeled onset. The daytime clip produced a review at 13.67 seconds, and five lookalike clips produced 13 fire reviews. See `models/evaluations/kmu-fire-smoke-v1.md` for scope and hashes.
 
 ## Release artifacts

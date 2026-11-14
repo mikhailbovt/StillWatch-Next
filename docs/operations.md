@@ -8,6 +8,8 @@ The Windows x64 MSI installs the StillWatchCore service under LocalService. Serv
 
 The Windows Core installer includes the locked Microsoft Visual C++ x64 runtime beside the executables. The SCM restarts the Core after up to two unexpected exits, with a three-second delay. Review the System event log if restarts are exhausted. The failure count resets after a day without an unexpected exit.
 
+The CPU and CUDA Compose profiles use a 512 MiB temporary filesystem and rotate the Core log across three 16 MiB files. The Linux package writes to the systemd journal. Set the journal's storage budget and retention through the host's journald policy. [Docker local logging driver](https://docs.docker.com/engine/logging/drivers/local/), [systemd journal limits](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html)
+
 ~~~sh
 sudo systemctl enable --now stillwatch.service
 sudo -u stillwatch stillwatch-cli doctor --data-dir /var/lib/stillwatch
@@ -95,6 +97,8 @@ stillwatch-cli restore --backup BACKUP --destination RESTORED_DATA
 ~~~
 
 Compare the source snapshot digest and row counts from both migration runs. The migration manifest also records how many historical images are available and the digest of the new database. Archived assessments remain associated with their original provider. Previously open incidents require reassessment and the migration creates no notification intents. For cutover, use a separate directory for the new Core and keep the old backup for rollback. Restore data compatible with the previous binary when rolling back a schema change.
+
+Each backup and restore defaults to a 4 GiB per-operation budget. The `--max-bytes` option overrides it. The check includes the database, manifest and evidence, and requires 64 MiB of additional free space on the destination volume at preflight. The destination becomes visible after metadata and evidence validation. Account for previously saved backups in the destination volume's quota.
 
 Core retains evidence JPEGs for 24 hours by default. Set evidence_retention_hours before cutover to choose how long copied images should stay accessible. Retention applies to the original capture time. Expired evidence keeps its historical metadata and is shown as unavailable.
 
