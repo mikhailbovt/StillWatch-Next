@@ -125,7 +125,7 @@ def verify_cadence(args, root, model_options):
     for fps in (2, 15):
         name = f"cadence-{fps}.mp4"
         subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(args.demo),
-                        "-vf", f"scale=640:360,fps={fps}", "-t", "30", "-an", "-c:v", "libx264",
+                        "-vf", f"scale=640:360,fps={fps}", "-t", "45", "-an", "-c:v", "libx264",
                         "-threads", "1", str(root / name)], check=True)
     with run_core(args.core, args.worker, root / "cadence-data", root, root / "cadence.log",
                   *model_options, "--inference-workers", "2", "--inference-threads", "3") as (_, client):
@@ -155,6 +155,26 @@ def verify_cadence(args, root, model_options):
             assert status == 200 and details["source_epoch"] == analysis["source_epoch"]
             assert details["cadence"]["below_target"] == cadence["below_target"]
         print(json.dumps({"analysis_cadence": {fps: rows[camera]["cadence"] for fps, camera in cameras.items()}}))
+
+        issue = "inference_below_target"
+        slow = cameras[2]
+        started, = until(lambda: health_events(client, issue, slow, active_only=True), 12)
+        assert not health_events(client, issue, cameras[15], active_only=True)
+        status, _ = client.call("PATCH", f"/api/v2/cameras/{slow}", {
+            "source": {"type": "replay", "file": "cadence-15.mp4", "pace": True},
+        }, key="cadence-recovered", revision=client.camera(slow)["revision"])
+        assert status == 200
+
+        def recovered():
+            event, = health_events(client, issue, slow)
+            return event if event["ended_at"] else None
+
+        ended = until(recovered, 28)
+        assert ended["sequence"] == started["sequence"]
+        assert ended["ended_at"] is not None
+        active = client.camera(slow)["runtime"]["analysis"]
+        assert active["state"] == "ready" and not active["cadence"]["below_target"]
+        print(json.dumps({"sustained_cadence_issue_recorded_and_ended": True}))
 
 
 def inference_worker(parent):

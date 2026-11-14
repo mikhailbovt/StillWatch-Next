@@ -172,6 +172,7 @@ class _EventTile extends StatelessWidget {
       'invalid_source_clock' => 'Camera timestamps stalled or invalid',
       'host_clock_discontinuity' => 'Core system clock changed abruptly',
       'inference_unavailable' => 'Local analysis unavailable',
+      'inference_below_target' => 'Local analysis below target rate',
       'model_pack_unverified' => 'Model pack could not be verified',
       'semantic_unavailable' => 'Semantic worker unavailable',
       'semantic_budget_exhausted' => 'Daily semantic budget exhausted',

@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 pub(crate) const LOW_DISK_BYTES: u64 = 512 * 1024 * 1024;
 const STALE_ANALYSIS_AFTER: Duration = Duration::from_secs(6);
+const CONFIRM_CADENCE_AFTER: Duration = Duration::from_secs(6);
 const MAX_CLOCK_STEP: Duration = Duration::from_secs(5);
 const CLOCK_STABLE_FOR: Duration = Duration::from_secs(30);
 
@@ -27,6 +28,7 @@ pub(crate) async fn monitor(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut recorded = BTreeSet::new();
     let mut stale_analysis = HashMap::new();
+    let mut cadence = HashMap::new();
     let started = Instant::now();
     let mut clock = WallClock {
         previous: (started, now_ms()),
@@ -92,14 +94,18 @@ pub(crate) async fn monitor(
         }
         if let Some(cameras) = registry.capture_health() {
             stale_analysis.retain(|id, _| cameras.iter().any(|camera| camera.id == *id));
+            cadence.retain(|id, _| cameras.iter().any(|camera| camera.id == *id));
             for camera in cameras {
                 observe_camera(&camera, &mut observations);
                 let analysis = camera
                     .usable_epoch
                     .zip(vision.as_ref())
-                    .map(|(epoch, vision)| (epoch, vision.status(camera.id, epoch).state));
+                    .map(|(epoch, vision)| (epoch, vision.status(camera.id, epoch)));
+                let analysis_state = analysis
+                    .as_ref()
+                    .map(|(epoch, status)| (*epoch, status.state));
                 if let Some((epoch, state)) =
-                    analysis.filter(|(_, state)| *state != AnalysisState::Ready)
+                    analysis_state.filter(|(_, state)| *state != AnalysisState::Ready)
                 {
                     let (previous_epoch, since) = stale_analysis
                         .entry(camera.id)
@@ -117,6 +123,25 @@ pub(crate) async fn monitor(
                         || camera.phase == CaptureState::Completed
                     {
                         observations.insert(for_camera(&camera, InferenceUnavailable, false));
+                    }
+                }
+                if let Some((epoch, measured)) = analysis.and_then(|(epoch, status)| {
+                    status
+                        .cadence
+                        .map(|measured| (epoch, measured.below_target))
+                }) {
+                    let reading = (epoch, measured);
+                    let (previous, since) = cadence.entry(camera.id).or_insert((reading, now));
+                    if *previous != reading {
+                        (*previous, *since) = (reading, now);
+                    }
+                    if now.duration_since(*since) >= CONFIRM_CADENCE_AFTER {
+                        observations.insert(for_camera(&camera, InferenceBelowTarget, measured));
+                    }
+                } else {
+                    cadence.remove(&camera.id);
+                    if vision.is_none() || camera.phase == CaptureState::Completed {
+                        observations.insert(for_camera(&camera, InferenceBelowTarget, false));
                     }
                 }
             }
