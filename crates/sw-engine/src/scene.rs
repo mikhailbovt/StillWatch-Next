@@ -200,10 +200,41 @@ impl VisibleFrame<'_> {
     }
 }
 
-pub(crate) fn different(reference: &[u8], current: &[u8; FINGERPRINT_BYTES]) -> bool {
-    // Remove global exposure offset. A dark frame by itself suspends use of
-    // the context; a spatial change observed with good visibility invalidates it.
-    !SceneSignature(*current).matches(reference)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SceneAlignment {
+    Aligned,
+    Uncertain,
+    Changed,
+}
+
+pub(crate) fn alignment(reference: &[u8], current: &SceneSample) -> SceneAlignment {
+    if current.visibility != Visibility::Good {
+        return SceneAlignment::Uncertain;
+    }
+    if !SceneSignature(current.fingerprint).matches(reference) {
+        return SceneAlignment::Changed;
+    }
+    // A local shift or obstruction can change a smaller group of cells than
+    // the permanent invalidation test. Remove uniform exposure changes before
+    // deciding whether to use the operator's polygon for this frame.
+    let mut offsets = [0_i16; CELLS];
+    for ((offset, &before), &after) in offsets
+        .iter_mut()
+        .zip(&reference[8..])
+        .zip(&current.fingerprint[8..])
+    {
+        *offset = i16::from(after) - i16::from(before);
+    }
+    let (_, median, _) = offsets.select_nth_unstable(CELLS / 2);
+    let median = *median;
+    let residuals = offsets.map(|offset| (offset - median).abs());
+    if residuals.iter().filter(|&&offset| offset >= 26).count() >= 8
+        || residuals.iter().filter(|&&offset| offset >= 48).count() >= 5
+    {
+        SceneAlignment::Uncertain
+    } else {
+        SceneAlignment::Aligned
+    }
 }
 
 pub(crate) fn overlap(
@@ -400,11 +431,23 @@ mod tests {
         let mut b = a;
         a[8..].fill(90);
         b[8..].fill(110);
-        assert!(!different(&a, &b));
+        let aligned = |fingerprint, visibility| {
+            alignment(
+                &a,
+                &SceneSample {
+                    visibility,
+                    fingerprint,
+                },
+            )
+        };
+        assert_eq!(aligned(b, Visibility::Good), SceneAlignment::Aligned);
+        assert_eq!(aligned(b, Visibility::Limited), SceneAlignment::Uncertain);
+        b[10..15].fill(180);
+        assert_eq!(aligned(b, Visibility::Good), SceneAlignment::Uncertain);
         b[8..28].fill(210);
-        assert!(different(&a, &b));
+        assert_eq!(aligned(b, Visibility::Good), SceneAlignment::Changed);
         b = a;
         b[0] = 1;
-        assert!(different(&a, &b));
+        assert_eq!(aligned(b, Visibility::Good), SceneAlignment::Changed);
     }
 }

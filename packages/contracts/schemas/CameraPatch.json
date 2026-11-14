@@ -200,6 +200,7 @@
       "type": "object",
       "properties": {
         "mode": {
+          "description": "Operator annotation for its expected duty cycle.",
           "$ref": "#/$defs/ControlledMode"
         },
         "polygon": {
@@ -211,6 +212,7 @@
           "minItems": 3
         },
         "source": {
+          "description": "Operator annotation for the expected source within the polygon.",
           "$ref": "#/$defs/ControlledSource"
         }
       },

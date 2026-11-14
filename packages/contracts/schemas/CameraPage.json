@@ -316,6 +316,10 @@
             "null"
           ]
         },
+        "controlled_scene_suspended": {
+          "description": "The confirmed polygon is suspended because the current view could not be aligned.",
+          "type": "boolean"
+        },
         "dropped": {
           "$ref": "#/$defs/Counter"
         },
@@ -509,6 +513,7 @@
       "type": "object",
       "properties": {
         "mode": {
+          "description": "Operator annotation for its expected duty cycle.",
           "$ref": "#/$defs/ControlledMode"
         },
         "polygon": {
@@ -520,6 +525,7 @@
           "minItems": 3
         },
         "source": {
+          "description": "Operator annotation for the expected source within the polygon.",
           "$ref": "#/$defs/ControlledSource"
         }
       },

@@ -92,6 +92,7 @@ struct State {
     lagging: Option<bool>,
     codec: Option<Arc<str>>,
     repeated_frame: bool,
+    controlled_scene_suspended: bool,
     retrying: bool,
     clock_held: bool,
 }
@@ -282,6 +283,7 @@ impl CameraRegistry {
             lagging: None,
             codec: None,
             repeated_frame: false,
+            controlled_scene_suspended: item.reviewed_scene.is_some(),
             retrying: false,
             clock_held: false,
         });
@@ -324,6 +326,12 @@ impl CameraRegistry {
                 source_lagging: state.lagging,
                 codec: state.codec.as_deref().map(str::to_owned),
                 repeated_frame: state.repeated_frame,
+                controlled_scene_suspended: item.reviewed_scene.is_some()
+                    && (state.controlled_scene_suspended
+                        || !matches!(
+                            state.phase,
+                            CaptureState::Streaming | CaptureState::Replaying
+                        )),
                 analysis: None,
             },
         }
@@ -1011,6 +1019,7 @@ impl CameraRegistry {
                 lagging: None,
                 codec: None,
                 repeated_frame: false,
+                controlled_scene_suspended: false,
                 retrying: false,
                 clock_held: false,
             });
@@ -1224,6 +1233,7 @@ impl CameraRegistry {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
                         state.repeated_frame = false;
+                        state.controlled_scene_suspended = camera.reviewed_scene.is_some();
                         state.relative_lag = None;
                         state.lagging = None;
                         if state.codec.is_none() {
@@ -1286,11 +1296,14 @@ impl CameraRegistry {
                 content.observe(&frame.rgb, sample.fingerprint, now);
             }
             let usable = has_native_time && qualified_rate && !content.unconfirmed(now);
-            let moved = camera.reviewed_scene.as_ref().is_some_and(|reference| {
-                usable
-                    && sample.visibility == Visibility::Good
-                    && scene::different(reference, &sample.fingerprint)
+            let alignment = camera.reviewed_scene.as_ref().map(|reference| {
+                if usable {
+                    scene::alignment(reference, &sample)
+                } else {
+                    scene::SceneAlignment::Uncertain
+                }
             });
+            let moved = alignment == Some(scene::SceneAlignment::Changed);
             let confirmed_shift = if moved {
                 now.duration_since(*moved_since.get_or_insert(now)) >= Duration::from_millis(750)
             } else {
@@ -1342,8 +1355,7 @@ impl CameraRegistry {
                 scene_signature: sw_domain::SceneSignature(sample.fingerprint),
                 masks: Arc::clone(&masks),
                 controlled: if camera.reviewed_scene.is_some()
-                    && !moved
-                    && sample.visibility == Visibility::Good
+                    && alignment == Some(scene::SceneAlignment::Aligned)
                 {
                     Arc::clone(&zones)
                 } else {
@@ -1374,6 +1386,8 @@ impl CameraRegistry {
                     }
                 }
                 state.repeated_frame = content.holding;
+                state.controlled_scene_suspended = camera.reviewed_scene.is_some()
+                    && alignment != Some(scene::SceneAlignment::Aligned);
                 state.relative_lag = relative_lag.map(|lag| (scope.epoch, lag));
                 state.lagging = source_lagging;
                 state.retrying = false;
@@ -1433,6 +1447,7 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
     state.send_modify(|state| {
         state.phase = phase;
         state.repeated_frame = false;
+        state.controlled_scene_suspended = false;
         state.clock_held = false;
         state.relative_lag = None;
         state.lagging = None;

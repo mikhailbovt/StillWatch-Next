@@ -816,6 +816,10 @@ class _CameraEditorState extends State<_CameraEditor> {
                 'Controlled fire regions',
                 style: theme.textTheme.titleMedium,
               ),
+              if (widget.camera?.controlledSceneSuspended == true)
+                const Text(
+                  'Fire regions are suspended while the camera view is uncertain.',
+                ),
               for (final (index, region) in _regions.indexed)
                 ListTile(
                   contentPadding: EdgeInsets.zero,

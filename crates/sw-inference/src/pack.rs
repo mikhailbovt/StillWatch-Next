@@ -369,7 +369,10 @@ impl Manifest {
                 canonical_hex(&self.baseline, 40)
                     && contract.source_revision == self.baseline
                     && contract.observation_spec_sha256 == format!("{:x}", Sha256::digest(spec))
-                    && contract.compatible_policy == "local-policy-4"
+                    && matches!(
+                        contract.compatible_policy.as_str(),
+                        "local-policy-4" | "local-policy-5"
+                    )
                     && contract.roles.person == ModelId::PoseBalanced
                     && contract.roles.hazard == ModelId::Fire
                     && shapes_valid

@@ -327,7 +327,7 @@ def main() -> None:
                 raise ValueError("Model contract can declare at most 16 shapes")
             manifest["contract"] = {
                 "source_revision": BASELINE, "observation_spec_sha256": sha256(spec),
-                "compatible_policy": "local-policy-4", "tensor_shapes": shapes,
+                "compatible_policy": "local-policy-5", "tensor_shapes": shapes,
                 "roles": {"person": "pose_balanced", "hazard": "fire"},
             }
         write_json(pack / "models.lock.json", manifest)

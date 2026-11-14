@@ -41,7 +41,9 @@ pub enum ControlledMode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ControlledFireRegion {
+    /// Operator annotation for the expected source within the polygon.
     pub source: ControlledSource,
+    /// Operator annotation for its expected duty cycle.
     pub mode: ControlledMode,
     #[cfg_attr(feature = "schema", schemars(length(min = 3, max = 16)))]
     pub polygon: Vec<RegionPoint>,
@@ -415,6 +417,9 @@ pub struct CameraRuntime {
     pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeated_frame: bool,
+    /// The confirmed polygon is suspended because the current view could not be aligned.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub controlled_scene_suspended: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<AnalysisStatus>,
 }

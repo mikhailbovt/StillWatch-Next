@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
-const POLICY_VERSION: &str = "local-policy-4";
+const POLICY_VERSION: &str = "local-policy-5";
 const PACKET_PERIOD: Duration = Duration::from_secs(4);
 const PACKET_REFRESH: Duration = Duration::from_secs(10);
 const PACKET_RETRY: Duration = Duration::from_secs(2);

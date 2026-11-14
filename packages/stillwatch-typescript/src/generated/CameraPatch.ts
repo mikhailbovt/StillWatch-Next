@@ -1,7 +1,5 @@
 // Generated from sw-protocol schemas. Regenerate with npm run generate.
 
-export type ControlledMode = "steady" | "intermittent";
-export type ControlledSource = "burner" | "candle" | "fireplace" | "grill";
 export type CameraPriority = "normal" | "high";
 export type CameraSource =
   | {
@@ -39,7 +37,10 @@ export interface CameraPatch {
   source?: CameraSource | null;
 }
 export interface ControlledFireRegion {
-  mode: ControlledMode;
+  /**
+   * Operator annotation for its expected duty cycle.
+   */
+  mode: "steady" | "intermittent";
   /**
    * @minItems 3
    * @maxItems 16
@@ -167,7 +168,10 @@ export interface ControlledFireRegion {
         RegionPoint,
         RegionPoint
       ];
-  source: ControlledSource;
+  /**
+   * Operator annotation for the expected source within the polygon.
+   */
+  source: "burner" | "candle" | "fireplace" | "grill";
 }
 export interface RegionPoint {
   x: number;
