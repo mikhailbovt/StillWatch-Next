@@ -194,11 +194,15 @@ impl Model {
         input: &[i64; 4],
         output: &[i64; 3],
         bytes: &[u8],
+        profiling_prefix: Option<&Path>,
     ) -> Result<Self, InferenceError> {
         let mut builder = Session::builder(&runtime.environment)
             .map_err(ort_error)?
             .with_optimization_level(GraphOptimizationLevel::All)
             .map_err(ort_error)?;
+        if let Some(prefix) = profiling_prefix {
+            builder = builder.with_profiling(prefix).map_err(ort_error)?;
+        }
         if let Some(config) = &runtime.cuda {
             let cuda = ort::ep::CUDA::default()
                 .with_device_id(i32::from(config.device))
@@ -251,6 +255,10 @@ impl Model {
             return Err(InferenceError::Tensor);
         }
         Ok(consume(output))
+    }
+
+    pub fn finish_profile(&mut self) -> Result<String, InferenceError> {
+        self.session.end_profiling().map_err(ort_error)
     }
 }
 

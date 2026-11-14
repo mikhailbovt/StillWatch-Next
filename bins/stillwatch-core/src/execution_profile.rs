@@ -10,7 +10,10 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use sw_engine::{WorkerBinary, execution_host};
-use sw_protocol::{AnalysisWorkload, ExecutionHost, SemanticRoute, worker::InferenceConfig};
+use sw_protocol::{
+    AnalysisWorkload, ExecutionHost, SemanticRoute,
+    worker::{InferenceConfig, LiveModelProfile},
+};
 use sw_storage::AnalysisAdmission;
 
 use crate::{Config, valid_digest};
@@ -89,7 +92,18 @@ struct QualificationReport {
     execution_profile_digest: String,
     candidate_digest: String,
     native_wall_seconds: f64,
+    active_model_results: ActiveModelResults,
     criteria: Vec<Criterion>,
+}
+
+#[derive(Deserialize)]
+struct ActiveModelResults {
+    observation_spec_sha256: String,
+    artifact_validation: String,
+    active_profile_numeric: String,
+    active_profile_observations: String,
+    active_profile_events: String,
+    full_pack_numeric: String,
 }
 
 #[derive(Deserialize)]
@@ -109,7 +123,7 @@ pub(super) async fn verify(
     config: &Config,
     worker: &WorkerBinary,
     inference: &InferenceConfig,
-) -> Result<Arc<AnalysisAdmission>> {
+) -> Result<(Arc<AnalysisAdmission>, LiveModelProfile)> {
     ensure!(
         selection.profile_file.is_absolute() && selection.report_file.is_absolute(),
         "qualification artifacts must use absolute paths"
@@ -190,11 +204,23 @@ pub(super) async fn verify(
     })
     .await??;
 
-    Ok(Arc::new(AnalysisAdmission {
-        id: profile.id,
-        sha256: selection.profile_sha256.to_ascii_lowercase(),
-        workload: profile.work,
-    }))
+    let live_models = LiveModelProfile {
+        pose_balanced_sha256: profile.artifacts.pose_balanced,
+        fire_sha256: profile.artifacts.fire,
+        warm_shapes: profile
+            .tensor_shapes
+            .into_iter()
+            .map(|[_, _, h, w]| [h, w])
+            .collect(),
+    };
+    Ok((
+        Arc::new(AnalysisAdmission {
+            id: profile.id,
+            sha256: selection.profile_sha256.to_ascii_lowercase(),
+            workload: profile.work,
+        }),
+        live_models,
+    ))
 }
 
 impl ExecutionProfile {
@@ -253,6 +279,18 @@ impl ExecutionProfile {
                 && (3_600.0..=10_800.0).contains(&report.native_wall_seconds)
                 && (required.len()..=128).contains(&report.criteria.len()),
             "report does not qualify this execution profile"
+        );
+        let models = &report.active_model_results;
+        let tolerance = include_bytes!("../../../qualification/observation-parity-v1.json");
+        ensure!(
+            format!("{:x}", Sha256::digest(tolerance)) == models.observation_spec_sha256
+                && models.artifact_validation == "pass"
+                && models.active_profile_numeric == "pass"
+                && models.active_profile_observations == "pass"
+                && models.active_profile_events == "pass"
+                && (models.full_pack_numeric == "pass"
+                    || self.artifacts.cuda.is_some() && models.full_pack_numeric == "fail"),
+            "report lacks numerical, observation or event evidence for the live roles"
         );
         let mut passed = BTreeSet::new();
         for criterion in &report.criteria {
@@ -356,6 +394,12 @@ impl ExecutionProfile {
             self.tensor_shapes == [shape],
             "tensor input differs from the qualification"
         );
+        if let Some(contract) = manifest.contract {
+            ensure!(
+                contract.tensor_shapes.contains(&[shape[2], shape[3]]),
+                "tensor shape falls outside the model contract"
+            );
+        }
         Ok(())
     }
 }
@@ -364,6 +408,12 @@ impl ExecutionProfile {
 struct ModelManifest {
     profile: String,
     models: ModelRoles,
+    contract: Option<ModelShapeContract>,
+}
+
+#[derive(Deserialize)]
+struct ModelShapeContract {
+    tensor_shapes: Vec<[u16; 2]>,
 }
 
 #[derive(Deserialize)]

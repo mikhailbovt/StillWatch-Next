@@ -19,6 +19,17 @@
     "library_sha256": {
       "type": "string"
     },
+    "live_profile": {
+      "description": "A pinned live profile restricts model roles and shapes before READY.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LiveModelProfile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "manifest_sha256": {
       "type": "string"
     },
@@ -61,6 +72,37 @@
         "device",
         "provider_sha256",
         "shared_sha256"
+      ]
+    },
+    "LiveModelProfile": {
+      "type": "object",
+      "properties": {
+        "fire_sha256": {
+          "type": "string"
+        },
+        "pose_balanced_sha256": {
+          "type": "string"
+        },
+        "warm_shapes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_balanced_sha256",
+        "fire_sha256",
+        "warm_shapes"
       ]
     }
   }

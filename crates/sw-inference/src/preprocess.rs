@@ -110,9 +110,16 @@ pub struct Preprocessor {
     profile: InputProfile,
     input: Vec<f32>,
     geometry: Option<Letterbox>,
+    maps: Vec<ResizeMap>,
+}
+
+struct ResizeMap {
+    geometry: Letterbox,
     horizontal: Vec<Sample>,
     vertical: Vec<Sample>,
 }
+
+const MAX_RESIZE_MAPS: usize = 4;
 
 impl Preprocessor {
     pub fn new(profile: InputProfile) -> Self {
@@ -120,8 +127,7 @@ impl Preprocessor {
             profile,
             input: Vec::with_capacity(TensorSize::SQUARE.input_values()),
             geometry: None,
-            horizontal: Vec::new(),
-            vertical: Vec::new(),
+            maps: Vec::new(),
         }
     }
     /// Fills a reusable RGB NCHW tensor and returns the exact integer padding.
@@ -130,19 +136,49 @@ impl Preprocessor {
         if self.geometry != Some(geometry) {
             self.input.resize(geometry.tensor.input_values(), PAD);
             self.input.fill(PAD);
-            self.horizontal = samples(image.width, geometry.resized_width, false);
-            self.vertical = samples(image.height, geometry.resized_height, true);
             self.geometry = Some(geometry);
         }
         let [tensor_h, tensor_w] = geometry.tensor.dimensions();
         let plane = tensor_h * tensor_w;
+        if image.width == geometry.resized_width && image.height == geometry.resized_height {
+            let (red, rest) = self.input.split_at_mut(plane);
+            let (green, blue) = rest.split_at_mut(plane);
+            for (row, rgb) in image.rgb.chunks_exact(image.width * 3).enumerate() {
+                let output = (row + geometry.top) * tensor_w + geometry.left;
+                let end = output + image.width;
+                let channels = red[output..end]
+                    .iter_mut()
+                    .zip(&mut green[output..end])
+                    .zip(&mut blue[output..end]);
+                for (((r, g), b), rgb) in channels.zip(rgb.chunks_exact(3)) {
+                    *r = f32::from(rgb[0]) / 255.0;
+                    *g = f32::from(rgb[1]) / 255.0;
+                    *b = f32::from(rgb[2]) / 255.0;
+                }
+            }
+            return (&self.input, geometry);
+        }
+        let index = if let Some(index) = self.maps.iter().position(|map| map.geometry == geometry) {
+            index
+        } else {
+            if self.maps.len() == MAX_RESIZE_MAPS {
+                self.maps.remove(0);
+            }
+            self.maps.push(ResizeMap {
+                geometry,
+                horizontal: samples(image.width, geometry.resized_width, false),
+                vertical: samples(image.height, geometry.resized_height, true),
+            });
+            self.maps.len() - 1
+        };
+        let map = &self.maps[index];
         let area_2x = image.width == geometry.resized_width * 2
             && image.height == geometry.resized_height * 2;
-        for (row, vertical) in self.vertical.iter().enumerate() {
+        for (row, vertical) in map.vertical.iter().enumerate() {
             let upper = vertical.low * image.width * 3;
             let lower = vertical.high * image.width * 3;
             let output = (row + geometry.top) * tensor_w + geometry.left;
-            for (column, horizontal) in self.horizontal.iter().enumerate() {
+            for (column, horizontal) in map.horizontal.iter().enumerate() {
                 let x0 = horizontal.low * 3;
                 let x1 = horizontal.high * 3;
                 let [left, right] = horizontal.weights;
@@ -197,5 +233,59 @@ mod tests {
         assert_eq!(geometry.tensor_size().dimensions(), [384, 640]);
         assert_eq!(tensor.len(), 3 * 384 * 640);
         assert_eq!(geometry.tensor_size().anchors(), 5040);
+    }
+
+    #[test]
+    fn direct_nchw_and_mixed_geometry_preserve_bit_exact_pixels_and_padding() {
+        let mut reuse = Preprocessor::new(InputProfile::Rectangular);
+        let mut random = 123_u32;
+        for (width, height) in [
+            (640, 360),
+            (360, 640),
+            (640, 640),
+            (1280, 720),
+            (511, 383),
+            (300, 193),
+            (392, 256),
+            (900, 650),
+            (840, 510),
+            (511, 383),
+            (640, 360),
+        ] {
+            let mut pixels = vec![0; width * height * 3];
+            for value in &mut pixels {
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *value = (random >> 24) as u8;
+            }
+            let image = Image::rgb(width as u32, height as u32, &pixels).unwrap();
+            let mut fresh = Preprocessor::new(InputProfile::Rectangular);
+            let (current, geometry) = reuse.prepare(image);
+            let (reference, expected) = fresh.prepare(image);
+            assert_eq!(geometry, expected);
+            assert!(
+                current
+                    .iter()
+                    .zip(reference)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+            if (width, height) == (geometry.resized_width, geometry.resized_height) {
+                let [rows, cols] = geometry.tensor_size().dimensions();
+                for (channel, plane) in current.chunks_exact(rows * cols).enumerate() {
+                    for (y, row) in plane.chunks_exact(cols).enumerate() {
+                        for (x, &value) in row.iter().enumerate() {
+                            let expected =
+                                match (x.checked_sub(geometry.left), y.checked_sub(geometry.top)) {
+                                    (Some(x), Some(y)) if x < width && y < height => {
+                                        f32::from(pixels[(y * width + x) * 3 + channel]) / 255.0
+                                    }
+                                    _ => PAD,
+                                };
+                            assert_eq!(value.to_bits(), expected.to_bits());
+                        }
+                    }
+                }
+            }
+            assert!(reuse.maps.len() <= MAX_RESIZE_MAPS);
+        }
     }
 }

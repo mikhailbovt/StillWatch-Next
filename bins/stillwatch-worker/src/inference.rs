@@ -7,11 +7,11 @@ use anyhow::{Context, Result, ensure};
 use sw_domain::Observation;
 use sw_inference::{
     CudaProvider, Image, InferenceError, Letterbox, ModelId, ModelPack, PerceptionBackend,
-    Preprocessor, Runtime, decode, decode_fire_with_proposals, trace_fire,
+    Preprocessor, Runtime, TensorSize, decode, decode_fire_with_proposals, trace_fire,
 };
 use sw_protocol::worker::{
     CONFIG_MAX_BYTES, CudaConfig, ExecutionTiming, FIRE_DIAGNOSTIC_READY, FireProposalResult,
-    FrameHeader, HEADER_LEN, INFERENCE_READY, InferenceConfig, InferenceResult,
+    FrameHeader, HEADER_LEN, INFERENCE_READY, InferenceConfig, InferenceResult, LiveModelProfile,
     MODEL_INITIALIZATION_FAILED, MODEL_PACK_UNAVAILABLE, PtsQuality, RESULT_MAX_BYTES,
     RUNTIME_UNAVAILABLE, TIMED_INFERENCE_READY, Tasks,
 };
@@ -42,6 +42,18 @@ pub fn run(mode: Mode) -> Result<()> {
         return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE);
     };
     let using_cuda = config.cuda.is_some();
+    let warm_shapes = if let Some(profile) = &config.live_profile {
+        match profile_shapes(&pack, profile) {
+            Some(shapes) => shapes,
+            None => return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE),
+        }
+    } else {
+        let inventory = pack.declared_shapes().unwrap_or_default();
+        inventory
+            .iter()
+            .map(|&[h, w]| TensorSize::new(h, w))
+            .collect::<Result<Vec<_>, _>>()?
+    };
     let runtime = match Runtime::load(
         &config.library,
         &config.library_sha256,
@@ -61,7 +73,17 @@ pub fn run(mode: Mode) -> Result<()> {
     let mut prepare = Preprocessor::new(pack.profile());
     drop(pack);
     let mut pixels = Vec::new();
-    if using_cuda {
+    if !warm_shapes.is_empty() {
+        let mut input = Vec::new();
+        for &shape in &warm_shapes {
+            input.resize(shape.input_values(), 114.0 / 255.0);
+            if pose.evaluate(shape, &input, |_| ()).is_err()
+                || fire.evaluate(shape, &input, |_| ()).is_err()
+            {
+                return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED);
+            }
+        }
+    } else if using_cuda {
         // The first CUDA call can load and compile kernels. Keep that work within
         // the supervised startup deadline and leave the live frame deadline intact.
         pixels.resize(640 * 360 * 3, 0);
@@ -113,6 +135,10 @@ pub fn run(mode: Mode) -> Result<()> {
         }
         let image = Image::rgb(header.width, header.height, &pixels)?;
         let (tensor, geometry) = prepare.prepare(image);
+        ensure!(
+            warm_shapes.is_empty() || warm_shapes.contains(&geometry.tensor_size()),
+            "frame tensor shape falls outside the assigned live model profile"
+        );
         if timed {
             timing.preprocess_us = micros(started.elapsed());
         }
@@ -245,4 +271,22 @@ pub fn cuda_provider(config: CudaConfig) -> CudaProvider {
         provider_sha256: config.provider_sha256,
         shared_sha256: config.shared_sha256,
     }
+}
+
+fn profile_shapes(pack: &ModelPack, profile: &LiveModelProfile) -> Option<Vec<TensorSize>> {
+    if pack.artifact_digest(ModelId::PoseBalanced)? != profile.pose_balanced_sha256
+        || pack.artifact_digest(ModelId::Fire)? != profile.fire_sha256
+        || !(1..=16).contains(&profile.warm_shapes.len())
+    {
+        return None;
+    }
+    let mut shapes = Vec::with_capacity(profile.warm_shapes.len());
+    for &[height, width] in &profile.warm_shapes {
+        let shape = TensorSize::new(usize::from(height), usize::from(width)).ok()?;
+        if !pack.supports_shape(shape) || shapes.contains(&shape) {
+            return None;
+        }
+        shapes.push(shape);
+    }
+    Some(shapes)
 }

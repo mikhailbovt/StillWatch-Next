@@ -10,6 +10,19 @@
     "candidate_digest": {"$ref": "#/$defs/digest"},
     "profile_digest": {"$ref": "#/$defs/digest"},
     "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "active_model_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_spec_sha256", "artifact_validation", "active_profile_numeric", "active_profile_observations", "active_profile_events", "full_pack_numeric"],
+      "properties": {
+        "observation_spec_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "artifact_validation": {"enum": ["pass", "fail", "not_run"]},
+        "active_profile_numeric": {"enum": ["pass", "fail", "not_run"]},
+        "active_profile_observations": {"enum": ["pass", "fail", "not_run"]},
+        "active_profile_events": {"enum": ["pass", "fail", "not_run"]},
+        "full_pack_numeric": {"enum": ["pass", "fail", "not_run"]}
+      }
+    },
     "run_manifest_digest": {"$ref": "#/$defs/digest"},
     "native_wall_seconds": {"$ref": "#/$defs/duration"},
     "source_video_seconds": {"$ref": "#/$defs/duration"},

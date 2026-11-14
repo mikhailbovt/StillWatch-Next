@@ -1,0 +1,11 @@
+{
+  "version": "observation-parity-v1",
+  "minimum_iou": 0.90,
+  "max_score_abs": 0.001,
+  "max_box_pixels": 0.25,
+  "max_box_fraction": 0.001,
+  "max_keypoint_pixels": 0.25,
+  "max_keypoint_fraction": 0.001,
+  "max_joint_confidence_abs": 0.001,
+  "max_histogram_l1": 0.02
+}

@@ -201,7 +201,8 @@ def measure(args, root, fixture, count, samples):
             for camera in ids:
                 started = time.monotonic()
                 status, item = local.call("GET", f"/api/v2/cameras/{camera}/analysis-status")
-                latency = 1000 * (time.monotonic() - started)
+                received = time.monotonic()
+                latency = 1000 * (received - started)
                 timings.append(latency)
                 if status != 200:
                     raise RuntimeError(f"analysis status returned {status}")
@@ -210,9 +211,10 @@ def measure(args, root, fixture, count, samples):
                 if cadence is not None:
                     cadence_samples += 1
                     below_target += int(cadence["below_target"])
-                observations.setdefault(camera, []).append((point, item))
+                received_s = received - began
+                observations.setdefault(camera, []).append((received_s, item))
                 samples.writerow([
-                    count, round(point, 3), camera, item["state"], item["source_epoch"],
+                    count, round(received_s, 4), camera, item["state"], item["source_epoch"],
                     item["pose_frames"], item["fire_frames"], item["last_analysis_age_ms"],
                     item["last_worker_ms"], resident, threads, processes, disks[-1], round(latency, 4),
                     *[cadence.get(field) if cadence is not None else None for field in CADENCE_FIELDS],

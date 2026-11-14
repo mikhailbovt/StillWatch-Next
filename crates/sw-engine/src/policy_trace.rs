@@ -5,7 +5,9 @@ use sw_domain::{
     Box2d, FireDecision, FireFacts, FirePolicy, FireSample, FireSettings, Observation,
     ObservationLabel, PoseTracker, SourceScope,
 };
-use sw_protocol::worker::{FrameHeader, HEADER_LEN, InferenceResult, PtsQuality, RESULT_MAX_BYTES};
+use sw_protocol::worker::{
+    FireProposalResult, FrameHeader, HEADER_LEN, InferenceResult, PtsQuality, RESULT_MAX_BYTES,
+};
 use uuid::Uuid;
 
 use crate::scene;
@@ -49,7 +51,25 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
         }
         body.resize(length, 0);
         input.read_exact(&mut body)?;
-        let observations: InferenceResult = serde_json::from_slice(&body)?;
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum TraceObservation {
+            Proposed(FireProposalResult),
+            Basic(InferenceResult),
+        }
+        let (observations, proposals) = match serde_json::from_slice(&body)? {
+            TraceObservation::Proposed(result) => (result.inference, result.fire_proposals),
+            TraceObservation::Basic(result) => (result, Vec::new()),
+        };
+        if proposals.len() > 8
+            || proposals.iter().any(|p| {
+                p.label == ObservationLabel::Person
+                    || !p.valid()
+                    || !(f64::from(0.12_f32)..=f64::from(0.20_f32)).contains(&p.score)
+            })
+        {
+            return Err(invalid_frame());
+        }
         let regions = observations
             .fire
             .filter(|items| items.len() <= 300)
@@ -81,7 +101,7 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
                 source_us: pts,
                 dimensions: (header.width, header.height),
                 regions: &regions,
-                weak_proposals: &[],
+                weak_proposals: &proposals,
                 visibility,
                 region_visibility: &|observation| {
                     view.region(

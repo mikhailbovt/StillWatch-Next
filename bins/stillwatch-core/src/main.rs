@@ -229,12 +229,18 @@ fn main() -> Result<()> {
         }
     }
     if config.check_inference {
-        let inference = inference_config(&config)?.context("no model pack configured")?;
+        let mut inference = inference_config(&config)?.context("no model pack configured")?;
         let worker = WorkerBinary::open(&worker_path(&config)?)?;
         let lanes = usize::from(config.inference_workers);
-        runtime()?.block_on(sw_engine::verify_inference_startup(
-            &worker, &inference, lanes,
-        ))?;
+        runtime()?.block_on(async {
+            if let Some(selection) = &config.execution_profile {
+                let (_, models) =
+                    execution_profile::verify(selection, &config, &worker, &inference).await?;
+                inference.live_profile = Some(models);
+            }
+            sw_engine::verify_inference_startup(&worker, &inference, lanes).await?;
+            Ok::<_, anyhow::Error>(())
+        })?;
         println!("StillWatch inference workers are ready ({lanes})");
         return Ok(());
     }
@@ -441,7 +447,7 @@ async fn serve(
         raw_bytes: config.raw_frame_bytes,
     };
     let inference_workers = usize::from(config.inference_workers);
-    let inference = inference_config(&config)?;
+    let mut inference = inference_config(&config)?;
     let admission = if let Some(selection) = &config.execution_profile {
         let verified = async {
             execution_profile::verify(
@@ -454,8 +460,11 @@ async fn serve(
         }
         .await;
         match verified {
-            Ok(profile) => {
+            Ok((profile, live_models)) => {
                 config.media.workload_limits = Some(profile.workload.media);
+                if let Some(inference) = &mut inference {
+                    inference.live_profile = Some(live_models);
+                }
                 Some(profile)
             }
             Err(error) => {
@@ -925,6 +934,7 @@ fn inference_config(config: &Config) -> Result<Option<InferenceConfig>> {
                 library_sha256: library_sha256.clone(),
                 threads,
                 cuda,
+                live_profile: None,
             }))
         }
         (None, None, None, None) => Ok(None),

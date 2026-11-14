@@ -36,6 +36,8 @@ stillwatch-worker doctor ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256
 
 Stage the complete new pack in a separate versioned directory owned by the administrator. Preserve the previous pack. The worker checks the class map, hashes, ONNX operators, opset, and tensor declarations before opening sessions. The current profile uses embedded weights.
 
+Manifest v3 also declares the source revision, weight hashes, active roles, permitted tensor shapes, observation specification digest and compatible policy. The worker warms the declared shapes and verifies the selection before starting analysis. Manifest v2 remains supported for existing installations. The model exporter can write v3 with `--versioned-contract`.
+
 For atomic selection, set `model_selection_file` in core.json to an absolute file path in a protected directory. On Linux, use `STILLWATCH_SETTINGS_FILE` to load that core.json and remove model and CUDA assignments from the service environment. The service account needs read access to the selection, pack, and runtime. Run the command below from the installed worker directory with the trusted digests. For a CUDA deployment, append `--cuda DEVICE CUDA_PROVIDER_SHA256 ORT_SHARED_PROVIDER_SHA256` and perform activation on the selected GPU host.
 
 ~~~text

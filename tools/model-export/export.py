@@ -263,6 +263,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", type=Path, action="append", default=[])
     parser.add_argument("--profile", choices=(SQUARE, RECTANGULAR), default=RECTANGULAR)
+    parser.add_argument("--versioned-contract", action="store_true",
+                        help="Declare the generated model roles, fixture shapes and policy in manifest v3")
     args = parser.parse_args()
     baseline = args.baseline.resolve(strict=True)
     weights = args.weights.resolve(strict=True)
@@ -306,8 +308,9 @@ def main() -> None:
             "cases": {name: metadata for name, _, metadata in cases},
             "models": reports,
         })
-        write_json(pack / "models.lock.json", {
-            "schema_version": 2, "profile": args.profile, "execution_provider": "cpu",
+        manifest = {
+            "schema_version": 3 if args.versioned_contract else 2,
+            "profile": args.profile, "execution_provider": "cpu",
             "baseline": BASELINE, "baseline_lock_sha256": sha256(baseline / "models.lock.json"),
             "onnxruntime": RUNTIME, "models": exports,
             "exporter": {
@@ -316,7 +319,18 @@ def main() -> None:
                 "ultralytics": ultralytics.__version__, "fused": True, "dynamo": False,
             },
             "parity_report_sha256": sha256(pack / "parity-report.json"),
-        })
+        }
+        if args.versioned_contract:
+            spec = Path(__file__).resolve().parents[2] / "qualification/observation-parity-v1.json"
+            shapes = sorted({tuple(metadata["tensor_hw"]) for _, _, metadata in cases})
+            if len(shapes) > 16:
+                raise ValueError("Model contract can declare at most 16 shapes")
+            manifest["contract"] = {
+                "source_revision": BASELINE, "observation_spec_sha256": sha256(spec),
+                "compatible_policy": "local-policy-4", "tensor_shapes": shapes,
+                "roles": {"person": "pose_balanced", "hazard": "fire"},
+            }
+        write_json(pack / "models.lock.json", manifest)
         pack.rename(output)
 
 

@@ -9,6 +9,7 @@ The [completion plan](../StillWatch_Next_Completion_Plan_RU.md) sets the sequenc
 - [Report schema](schemas/report-v2.schema.json) defines the validator's output. The validator will derive each criterion from the pinned inputs and evidence. An observed gate violation takes precedence over incomplete coverage. The JSON Schema checks result structure. It does not calculate a verdict from a benchmark export.
 - [Quality contract](quality-contract.json) freezes the first-cycle quality gates. The site budget is eight false Reviews per day across 16 cameras. The independent Urgent budget is at most 0.001 false Urgents per camera-hour. Timely fire and fall Review targets are 95% within eight seconds, with independent strata and separately measured urgent decisions. These are product acceptance targets chosen for this plan, not measured accuracy or industry standards.
 - [Release obligations](release-requirements.json) lists all 17 criteria from §23.1 and the owners and evidence for G1–G5. A release requires both the applicable native reports and the remaining release evidence.
+- [Observation parity v1](observation-parity-v1.json) requires exact CPU preprocessing and one-to-one same-class comparisons on frozen RGB fixtures. Displacement is limited to a quarter pixel and 0.1% of the image axis. The score and joint confidence caps are 0.001. Histogram L1 of 0.02 permits redistribution of at most 1% of normalized bin mass. All locked tensor thresholds remain in force.
 
 ## Evaluation inputs and interpretation
 

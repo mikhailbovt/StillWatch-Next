@@ -77,6 +77,26 @@ fn main() -> Result<()> {
         ),
         [
             command,
+            profile_dir,
+            library,
+            library_sha,
+            model_pack,
+            manifest_sha,
+            flags @ ..,
+        ] if command == "profile-model-pack" => {
+            let dir = Path::new(profile_dir);
+            std::fs::create_dir(dir).context("create a new profiling output directory")?;
+            parity::verify_with_profile(
+                Path::new(library),
+                text_arg(library_sha)?,
+                Path::new(model_pack),
+                text_arg(manifest_sha)?,
+                cuda_args(flags)?.map(inference::cuda_provider),
+                Some(dir),
+            )
+        }
+        [
+            command,
             library,
             library_sha,
             model_pack,

@@ -1,0 +1,8 @@
+{
+  "manifest_sha256": "e1836c81374f8b7a321d9c912655ec98f3b3f3427aeda124292e23408cf60426",
+  "description": "Daytime smoke sequence including the known late opening and the short observable nighttime interval.",
+  "clips": {
+    "indoor_daytime_smoke.mp4": {"window_s": [0, 25]},
+    "indoor_night_smoke.mp4": {"window_s": [30, 39.333333]}
+  }
+}

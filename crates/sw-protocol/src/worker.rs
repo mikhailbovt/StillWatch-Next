@@ -121,6 +121,18 @@ pub struct InferenceConfig {
     pub threads: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cuda: Option<CudaConfig>,
+    /// A pinned live profile restricts model roles and shapes before READY.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_profile: Option<LiveModelProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LiveModelProfile {
+    pub pose_balanced_sha256: String,
+    pub fire_sha256: String,
+    pub warm_shapes: Vec<[u16; 2]>,
 }
 
 /// Administrator-owned selection written after validating and warming the pack.

@@ -128,6 +128,24 @@ struct Manifest {
     onnxruntime: String,
     parity_report_sha256: String,
     models: BTreeMap<ModelId, Entry>,
+    contract: Option<ModelContract>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelContract {
+    source_revision: String,
+    observation_spec_sha256: String,
+    compatible_policy: String,
+    tensor_shapes: Vec<[usize; 2]>,
+    roles: LiveRoles,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LiveRoles {
+    person: ModelId,
+    hazard: ModelId,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +163,8 @@ struct Entry {
 #[derive(Deserialize)]
 struct Source {
     classes: BTreeMap<String, String>,
+    sha256: Option<String>,
+    tensor_sha256: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -217,6 +237,13 @@ pub struct ModelPack {
 }
 
 impl ModelPack {
+    pub fn artifact_digest(&self, id: ModelId) -> Option<&str> {
+        self.manifest
+            .models
+            .get(&id)
+            .map(|entry| entry.sha256.as_str())
+    }
+
     pub fn open(root: &Path, trusted_manifest_sha256: &str) -> Result<Self, InferenceError> {
         let root = root.canonicalize()?;
         let bytes = read_verified(
@@ -226,8 +253,7 @@ impl ModelPack {
         )?;
         let manifest: Manifest =
             serde_json::from_slice(&bytes).map_err(|_| InferenceError::Manifest)?;
-        if manifest.schema_version != 2
-            || manifest.baseline != BASELINE
+        if !manifest.contract_valid()
             || manifest.execution_provider != "cpu"
             || manifest.onnxruntime != RUNTIME_VERSION
             || ModelId::ALL.iter().any(|id| {
@@ -259,11 +285,36 @@ impl ModelPack {
         })
     }
 
+    pub fn supports_shape(&self, shape: TensorSize) -> bool {
+        self.profile().accepts(shape)
+            && self
+                .manifest
+                .contract
+                .as_ref()
+                .is_none_or(|contract| contract.tensor_shapes.contains(&shape.dimensions()))
+    }
+
+    pub fn declared_shapes(&self) -> Option<&[[usize; 2]]> {
+        self.manifest
+            .contract
+            .as_ref()
+            .map(|contract| contract.tensor_shapes.as_slice())
+    }
+
     pub fn profile(&self) -> InputProfile {
         self.manifest.profile
     }
 
     pub fn load(&self, runtime: &Runtime, id: ModelId) -> Result<Model, InferenceError> {
+        self.load_profiled(runtime, id, None)
+    }
+
+    pub fn load_profiled(
+        &self,
+        runtime: &Runtime,
+        id: ModelId,
+        profile_prefix: Option<&Path>,
+    ) -> Result<Model, InferenceError> {
         let entry = self
             .manifest
             .models
@@ -277,6 +328,7 @@ impl ModelPack {
             &entry.input.shape,
             &entry.output.shape,
             bytes,
+            profile_prefix,
         )
     }
 
@@ -287,6 +339,50 @@ impl ModelPack {
             &self.manifest.parity_report_sha256,
         )
     }
+}
+
+impl Manifest {
+    fn contract_valid(&self) -> bool {
+        match (self.schema_version, &self.contract) {
+            (2, None) => self.baseline == BASELINE,
+            (3, Some(contract)) => {
+                let spec = include_bytes!("../../../qualification/observation-parity-v1.json");
+                let shapes = &contract.tensor_shapes;
+                let shapes_valid = (1..=16).contains(&shapes.len())
+                    && shapes.iter().enumerate().all(|(i, &[h, w])| {
+                        TensorSize::new(h, w).is_ok_and(|size| self.profile.accepts(size))
+                            && !shapes[..i].contains(&[h, w])
+                    });
+                canonical_hex(&self.baseline, 40)
+                    && contract.source_revision == self.baseline
+                    && contract.observation_spec_sha256 == format!("{:x}", Sha256::digest(spec))
+                    && contract.compatible_policy == "local-policy-4"
+                    && contract.roles.person == ModelId::PoseBalanced
+                    && contract.roles.hazard == ModelId::Fire
+                    && shapes_valid
+                    && self.models.values().all(|entry| {
+                        entry
+                            .source
+                            .sha256
+                            .as_deref()
+                            .is_some_and(|hash| canonical_hex(hash, 64))
+                            && entry
+                                .source
+                                .tensor_sha256
+                                .as_deref()
+                                .is_some_and(|hash| canonical_hex(hash, 64))
+                    })
+            }
+            _ => false,
+        }
+    }
+}
+
+fn canonical_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 fn read_verified(path: &Path, limit: u64, digest: &str) -> Result<Vec<u8>, InferenceError> {
