@@ -316,8 +316,41 @@ impl Store {
         new: NewIncident,
         observed: ObservationTime,
     ) -> Result<Incident, StoreError> {
-        self.call(move |db| db.create_observed_hazard(new, observed))
+        self.call(move |db| db.create_observed_hazard(new, observed, None))
             .await
+    }
+
+    pub async fn record_hazard_observation(
+        &self,
+        new: NewIncident,
+        observed: ObservationTime,
+        facts: sw_protocol::LocalFacts,
+        region: sw_domain::Box2d,
+        opening: bool,
+    ) -> Result<Incident, StoreError> {
+        if !region.valid()
+            || !matches!(
+                (new.category, facts),
+                (
+                    sw_domain::Category::Fire,
+                    sw_protocol::LocalFacts::Fire { .. }
+                ) | (
+                    sw_domain::Category::Medical,
+                    sw_protocol::LocalFacts::Medical { .. }
+                )
+            )
+        {
+            return Err(StoreError::Invalid);
+        }
+        let facts = serde_json::to_string(&(facts, region))?;
+        self.call(move |db| {
+            if opening {
+                db.create_observed_hazard(new, observed, Some(facts))
+            } else {
+                db.observe_hazard_with_facts(new, observed, facts)
+            }
+        })
+        .await
     }
 
     pub async fn observe_hazard(

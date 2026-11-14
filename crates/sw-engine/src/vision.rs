@@ -303,7 +303,11 @@ impl VisionScheduler {
                         if *shutdown.borrow() {
                             break None;
                         }
-                        pending.flush().await;
+                        if let Some(commit) = pending.flush().await
+                            && let Some(policy) = policies.get_mut(&commit.scope.camera_id)
+                        {
+                            policy.packet_committed(commit.scope, commit.incident, commit.result);
+                        }
                         if pending.blocked() {
                             self.phase(
                                 lane,

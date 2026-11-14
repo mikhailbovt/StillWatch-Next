@@ -20,6 +20,67 @@ const BLACK: &[u8] = include_bytes!("../../../tests/fixtures/evidence/black.jpg"
 const WHITE: &[u8] = include_bytes!("../../../tests/fixtures/evidence/white.jpg");
 
 #[tokio::test]
+async fn material_observations_are_durable_and_bounded_without_image_packets() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let camera = store
+        .mutate_camera(
+            CameraCommand {
+                actor: Uuid::new_v4(),
+                key: "create-observation-camera".parse().unwrap(),
+                action: CameraAction::Create(serde_json::from_value(serde_json::json!({
+                    "name": "Camera", "enabled": true, "source": {"type": "usb", "device_id": "sample"}
+                })).unwrap()),
+            },
+            Some(Dimensions { width: 160, height: 120 }),
+            None,
+            CameraLimits { active: 1, raw_bytes: 1_048_576 },
+            1_000,
+        ).await.unwrap().camera;
+    let mut observed = incident();
+    observed.category = Category::Fire;
+    observed.scope.camera_id = camera.id;
+    observed.scope.epoch = camera.epoch;
+    observed.scope.scene_revision = camera.scene_revision;
+    for index in 0..70 {
+        let time = crate::ObservationTime::new(crate::utc_ms(), std::time::Instant::now());
+        observed.last_source_us = index * 500_000;
+        observed.observed_host_utc = Some(time.observed_host_utc);
+        let facts = sw_protocol::LocalFacts::Fire {
+            flame_visible: index >= 20,
+            smoke_visible: true,
+            apparent_growth: index >= 30,
+            smoke_growth: index >= 10,
+            escaped_controlled_region: index >= 40,
+            controlled_region_overlap: None,
+            continuity_samples: 3,
+            detector_confidence: 0.65,
+            visibility: sw_protocol::EvidenceVisibility::Good,
+        };
+        let region = sw_domain::Box2d {
+            x1: 20.0,
+            y1: 20.0,
+            x2: 80.0,
+            y2: 80.0,
+        };
+        let saved = store
+            .record_hazard_observation(observed.clone(), time, facts, region, index == 0)
+            .await
+            .unwrap();
+        assert_eq!(saved.last_source_us, observed.last_source_us);
+        assert_eq!(saved.evidence_version(), 0);
+    }
+    let (count, oldest, latest) = store.call(move |db| {
+        db.conn.query_row(
+            "SELECT count(*), min(source_us), max(source_us) FROM hazard_observations WHERE incident_id = ?",
+            [observed.id.as_bytes()],
+            |r| Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+        ).map_err(Into::into)
+    }).await.unwrap();
+    assert_eq!((count, oldest, latest), (64, 3_000_000, 34_500_000));
+}
+
+#[tokio::test]
 async fn health_intervals_survive_restart_and_respect_camera_revision_and_scope() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(root.path(), StoreConfig::default()).unwrap();

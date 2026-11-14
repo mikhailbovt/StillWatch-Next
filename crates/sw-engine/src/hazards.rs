@@ -1,31 +1,37 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use sw_domain::{
-    AnalysisOrigin, Assessment, Box2d, Category, DomainError, EvidenceStamp, FireDecision,
-    FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy, MedicalCandidate,
-    MedicalReason, MedicalRules, MedicalSample, MotionPhase, NewIncident, SourceScope, Visibility,
+    AnalysisOrigin, Assessment, Box2d, Category, DomainError, EvidenceStamp, EvidenceState,
+    FireDecision, FireEpisode, FirePolicy, FireSample, FireSettings, HazardPolicy,
+    MedicalCandidate, MedicalReason, MedicalRules, MedicalSample, MotionPhase, NewIncident,
+    SourceScope, Visibility,
 };
 use sw_protocol::{
     Counter, Dimensions, EvidenceContext, EvidenceInterval, EvidenceLimitation, EvidenceVisibility,
     LocalFacts, worker::InferenceResult,
 };
-use sw_storage::{EvidenceWrite, Store, StoreError, utc_ms};
+use sw_storage::{EvidenceOutcome, EvidenceWrite, Store, StoreError, utc_ms};
 use uuid::Uuid;
 
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
-const POLICY_VERSION: &str = "local-policy-2";
+const POLICY_VERSION: &str = "local-policy-3";
+const PACKET_PERIOD: Duration = Duration::from_secs(4);
+const PACKET_REFRESH: Duration = Duration::from_secs(10);
+const PACKET_RETRY: Duration = Duration::from_secs(2);
+const PACKET_BURST: u8 = 3;
 
 pub(crate) struct HazardPolicies {
     scope: SourceScope,
     medical: MedicalRules,
     fire: FirePolicy,
     published: HashMap<Uuid, Published>,
+    packets: PacketBudget,
     last_pose: Option<i64>,
 }
 
@@ -38,14 +44,51 @@ pub(crate) struct Hazard {
     pub region: Box2d,
     pub facts: LocalFacts,
     pub limited: bool,
-    pub update: bool,
+    write: HazardWrite,
 }
 
 struct Published {
-    at: i64,
+    observed_at: i64,
     facts: LocalFacts,
-    updates: u8,
+    packet: Option<(Instant, LocalFacts, Box2d)>,
+    retry_packet: Option<Instant>,
     recovery_queued: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HazardWrite {
+    Open { packet: bool },
+    Observe,
+    Packet,
+}
+
+#[derive(Default)]
+struct PacketBudget {
+    refill_at: Option<Instant>,
+    tokens: u8,
+}
+
+impl PacketBudget {
+    fn take(&mut self, now: Instant, urgent: bool) -> bool {
+        let last = *self.refill_at.get_or_insert_with(|| {
+            self.tokens = PACKET_BURST;
+            now
+        });
+        let refills = now.saturating_duration_since(last).as_secs() / PACKET_PERIOD.as_secs();
+        if refills > 0 {
+            self.tokens = self
+                .tokens
+                .saturating_add(refills.min(u64::from(PACKET_BURST)) as u8)
+                .min(PACKET_BURST);
+            self.refill_at = Some(last + PACKET_PERIOD * refills.min(u64::from(u32::MAX)) as u32);
+        }
+        // Leave one token available for new incidents, flames, escape or recovery.
+        if self.tokens <= u8::from(!urgent) {
+            return false;
+        }
+        self.tokens -= 1;
+        true
+    }
 }
 
 pub(crate) struct HazardUpdates {
@@ -61,6 +104,7 @@ impl HazardPolicies {
             medical: MedicalRules::default(),
             fire: FirePolicy::new(FireSettings::default()).expect("validated default fire policy"),
             published: HashMap::new(),
+            packets: PacketBudget::default(),
             last_pose: None,
         }
     }
@@ -72,7 +116,9 @@ impl HazardPolicies {
         result: InferenceResult,
     ) -> HazardUpdates {
         if self.scope != frame.scope {
-            *self = Self::new(frame.scope);
+            let mut new = Self::new(frame.scope);
+            new.packets = std::mem::take(&mut self.packets);
+            *self = new;
         }
         let mut hazards = Vec::new();
         let mut recoveries = Vec::new();
@@ -154,30 +200,25 @@ impl HazardPolicies {
                     .snapshot()
                     .any(|episode| episode.episode_id == *id)
         });
+        let now = Instant::now();
+        let capture = frame.captured_at;
         hazards.retain_mut(|hazard| match self.published.entry(hazard.id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
+                let packet = self.packets.take(now, true);
                 entry.insert(Published {
-                    at,
+                    observed_at: at,
                     facts: hazard.facts,
-                    updates: 0,
+                    packet: packet.then_some((capture, hazard.facts, hazard.region)),
+                    retry_packet: None,
                     recovery_queued: false,
                 });
+                hazard.write = HazardWrite::Open { packet };
                 true
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let previous = entry.get_mut();
-                if previous.updates >= 2
-                    || at.saturating_sub(previous.at) < 500_000
-                    || !material_change(previous.facts, hazard.facts)
-                {
-                    false
-                } else {
-                    previous.at = at;
-                    previous.facts = hazard.facts;
-                    previous.updates += 1;
-                    hazard.update = true;
-                    true
-                }
+                entry
+                    .get_mut()
+                    .update(hazard, &mut self.packets, now, capture)
             }
         });
         HazardUpdates {
@@ -185,6 +226,67 @@ impl HazardPolicies {
             recoveries,
             fire_candidate,
         }
+    }
+
+    pub fn packet_committed(&mut self, scope: SourceScope, id: Uuid, result: PacketResult) {
+        if self.scope != scope {
+            return;
+        }
+        if let Some(state) = self.published.get_mut(&id) {
+            let at = match result {
+                PacketResult::Written { at, .. } | PacketResult::Unavailable { at } => at,
+            };
+            if state.packet.is_some_and(|(queued, _, _)| queued > at) {
+                return;
+            }
+            match result {
+                PacketResult::Written { at, facts, region } => {
+                    state.packet = Some((at, facts, region));
+                    state.retry_packet = None;
+                }
+                PacketResult::Unavailable { .. } => {
+                    state.packet = None;
+                    state.retry_packet = Some(Instant::now() + PACKET_RETRY);
+                }
+            }
+        }
+    }
+}
+
+impl Published {
+    fn update(
+        &mut self,
+        hazard: &mut Hazard,
+        budget: &mut PacketBudget,
+        now: Instant,
+        capture: Instant,
+    ) -> bool {
+        let at = hazard.source_us;
+        let material = material_change(self.facts, hazard.facts);
+        let (important, refresh) = match self.packet {
+            Some((previous, facts, region)) => (
+                material_change(facts, hazard.facts) || region.iou(hazard.region) < 0.35,
+                now.saturating_duration_since(previous) >= PACKET_REFRESH,
+            ),
+            None => (material, true),
+        };
+        if (important || self.retry_packet.is_none_or(|ready| now >= ready))
+            && (important || refresh)
+            && budget.take(now, important)
+        {
+            self.packet = Some((capture, hazard.facts, hazard.region));
+            self.observed_at = at;
+            self.facts = hazard.facts;
+            hazard.write = HazardWrite::Packet;
+            return true;
+        }
+        if material && at.saturating_sub(self.observed_at) >= 500_000 {
+            self.observed_at = at;
+            self.facts = hazard.facts;
+            hazard.write = HazardWrite::Observe;
+            return true;
+        }
+        false
     }
 }
 
@@ -216,7 +318,7 @@ impl Hazard {
             limited: candidate.limited
                 || motion.identity_uncertain
                 || motion.phase == MotionPhase::VisibilityLost,
-            update: false,
+            write: HazardWrite::Open { packet: false },
             facts: LocalFacts::Medical {
                 track_id: Counter(candidate.track_id),
                 episode_id: motion.episode_id,
@@ -250,7 +352,7 @@ impl Hazard {
             source_us: episode.source_us,
             region: episode.region,
             limited: facts.visibility != Visibility::Good,
-            update: false,
+            write: HazardWrite::Open { packet: false },
             facts: LocalFacts::Fire {
                 flame_visible: facts.flame_visible,
                 smoke_visible: facts.smoke_visible,
@@ -285,6 +387,8 @@ fn material_change(previous: LocalFacts, current: LocalFacts) -> bool {
                 smoke_growth: b,
                 escaped_controlled_region: c,
                 smoke_visible: d,
+                flame_visible: i,
+                visibility: vis_old,
                 ..
             },
             LocalFacts::Fire {
@@ -292,23 +396,52 @@ fn material_change(previous: LocalFacts, current: LocalFacts) -> bool {
                 smoke_growth: f,
                 escaped_controlled_region: g,
                 smoke_visible: h,
+                flame_visible: j,
+                visibility: vis_new,
                 ..
             },
-        ) => (!a && e) || (!b && f) || (!c && g) || (!d && h),
+        ) => {
+            (!a && e)
+                || (!b && f)
+                || (!c && g)
+                || (!d && h)
+                || (!i && j)
+                || (vis_old != EvidenceVisibility::Good && vis_new == EvidenceVisibility::Good)
+        }
         (
             LocalFacts::Medical {
                 identity_uncertain: a,
                 onset_observed: b,
+                clear_eligible: e,
                 ..
             },
             LocalFacts::Medical {
                 identity_uncertain: c,
                 onset_observed: d,
+                clear_eligible: f,
                 ..
             },
-        ) => (!a && c) || (!b && d),
+        ) => (a != c) || (!b && d) || (e != f),
         _ => false,
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PacketResult {
+    Written {
+        at: Instant,
+        facts: LocalFacts,
+        region: Box2d,
+    },
+    Unavailable {
+        at: Instant,
+    },
+}
+
+pub(crate) struct PacketCommit {
+    pub scope: SourceScope,
+    pub incident: Uuid,
+    pub result: PacketResult,
 }
 
 pub(crate) struct PendingHazards {
@@ -354,6 +487,30 @@ impl PendingHazards {
     }
 
     pub fn push(&mut self, frame: Arc<CameraFrame>, updates: HazardUpdates) {
+        // Only a more recent packet supersedes queued image work. Keep the
+        // earlier opening and material observations in the durable history.
+        for update in updates
+            .hazards
+            .iter()
+            .filter(|hazard| hazard.write == HazardWrite::Packet)
+        {
+            for batch in self
+                .queue
+                .iter_mut()
+                .filter(|batch| batch.frame.scope == frame.scope)
+            {
+                for pending in &mut batch.pending {
+                    if let Pending::Evidence(hazard) = pending
+                        && hazard.id == update.id
+                    {
+                        hazard.write = match hazard.write {
+                            HazardWrite::Open { .. } => HazardWrite::Open { packet: false },
+                            HazardWrite::Packet | HazardWrite::Observe => HazardWrite::Observe,
+                        };
+                    }
+                }
+            }
+        }
         let pending: VecDeque<_> = updates
             .hazards
             .into_iter()
@@ -365,12 +522,12 @@ impl PendingHazards {
         }
     }
 
-    pub async fn flush(&mut self) {
+    pub async fn flush(&mut self) -> Option<PacketCommit> {
         if self
             .retry_at
             .is_some_and(|time| time > tokio::time::Instant::now())
         {
-            return;
+            return None;
         }
         // One commit per iteration keeps camera scheduling responsive.
         if let Some(batch) = self.queue.front_mut()
@@ -399,21 +556,23 @@ impl PendingHazards {
                                 batch.frame.observation_time,
                             )
                             .await
+                            .map(|_| None)
                     }
-                    _ => Ok(()),
+                    _ => Ok(None),
                 },
             };
             match result {
-                Ok(())
+                outcome @ (Ok(_)
                 | Err(
                     StoreError::NotFound
                     | StoreError::Domain(DomainError::Resolved | DomainError::Stale),
-                ) => {
+                )) => {
                     self.retry_at = None;
                     batch.pending.pop_front();
                     if batch.pending.is_empty() {
                         self.queue.pop_front();
                     }
+                    return outcome.ok().flatten();
                 }
                 Err(_) => {
                     if self.retry_at.is_none() {
@@ -423,6 +582,7 @@ impl PendingHazards {
                 }
             }
         }
+        None
     }
 }
 
@@ -432,8 +592,7 @@ async fn persist(
     frame: &Arc<CameraFrame>,
     hazard: &Hazard,
     origin: &AnalysisOrigin,
-) -> Result<(), StoreError> {
-    let now = utc_ms();
+) -> Result<Option<PacketCommit>, StoreError> {
     let new = NewIncident {
         id: hazard.id,
         scope: frame.scope,
@@ -446,21 +605,37 @@ async fn persist(
         observed_host_utc: Some(frame.observation_time.observed_host_utc),
         assessment: hazard.assessment,
     };
-    let incident = if hazard.update {
-        store.observe_hazard(new, now).await?
-    } else {
-        store
-            .create_observed_hazard(new, frame.observation_time)
-            .await?
-    };
+    let opening = matches!(hazard.write, HazardWrite::Open { .. });
+    let incident = store
+        .record_hazard_observation(
+            new,
+            frame.observation_time,
+            hazard.facts,
+            hazard.region,
+            opening,
+        )
+        .await?;
     if incident.resolution.is_some()
-        || (hazard.update && incident.last_source_us != hazard.source_us)
-        || (!hazard.update
+        || incident.last_source_us != hazard.source_us
+        || (opening
             && (incident.evidence.is_some()
-                || incident.evidence_state == sw_domain::EvidenceState::Unavailable))
+                || incident.evidence_state == EvidenceState::Unavailable))
     {
-        return Ok(());
+        return Ok(None);
     }
+    if matches!(
+        hazard.write,
+        HazardWrite::Observe | HazardWrite::Open { packet: false }
+    ) {
+        return Ok(None);
+    }
+    let completed = |result| {
+        Some(PacketCommit {
+            scope: frame.scope,
+            incident: incident.id,
+            result,
+        })
+    };
     let evidence = evidence.clone();
     let onset = hazard.first_source_us;
     let region = hazard.region;
@@ -469,7 +644,12 @@ async fn persist(
         .await
         .map_err(|_| StoreError::Unavailable)?;
     if selected.images.is_empty() {
-        return store.evidence_unavailable(incident.id, utc_ms()).await;
+        if incident.evidence_state == EvidenceState::Pending {
+            store.evidence_unavailable(incident.id, utc_ms()).await?;
+        }
+        return Ok(completed(PacketResult::Unavailable {
+            at: frame.captured_at,
+        }));
     }
     let coverage = selected.coverage;
     let mut limitations = Vec::new();
@@ -520,6 +700,136 @@ async fn persist(
         context: Some(context),
         images: selected.images,
     };
-    store.persist_evidence(packet, time).await?;
-    Ok(())
+    let outcome = store.persist_evidence(packet, time).await?;
+    let result = if matches!(outcome, EvidenceOutcome::Persisted(_))
+        && frame
+            .observation_time
+            .evidence_fresh(utc_ms(), Instant::now())
+    {
+        PacketResult::Written {
+            at: frame.captured_at,
+            facts: hazard.facts,
+            region: hazard.region,
+        }
+    } else {
+        PacketResult::Unavailable {
+            at: frame.captured_at,
+        }
+    };
+    Ok(completed(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fire(flags: u8, visibility: EvidenceVisibility) -> Hazard {
+        Hazard {
+            id: Uuid::nil(),
+            assessment: Assessment::Concern,
+            reason: "visible_smoke",
+            first_source_us: 0,
+            source_us: 0,
+            region: Box2d {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 100.0,
+                y2: 100.0,
+            },
+            facts: LocalFacts::Fire {
+                flame_visible: flags & 1 != 0,
+                smoke_visible: true,
+                apparent_growth: flags & 2 != 0,
+                smoke_growth: flags & 4 != 0,
+                escaped_controlled_region: flags & 8 != 0,
+                controlled_region_overlap: None,
+                continuity_samples: 2,
+                detector_confidence: 0.6,
+                visibility,
+            },
+            limited: visibility != EvidenceVisibility::Good,
+            write: HazardWrite::Open { packet: false },
+        }
+    }
+
+    #[test]
+    fn material_changes_continue_after_two_updates_and_replenish_packet_budget() {
+        let initial = fire(0, EvidenceVisibility::Limited);
+        let start = Instant::now();
+        let mut budget = PacketBudget::default();
+        assert!(budget.take(start, true));
+        let mut published = Published {
+            observed_at: 0,
+            facts: initial.facts,
+            packet: Some((start, initial.facts, initial.region)),
+            retry_packet: None,
+            recovery_queued: false,
+        };
+        for (index, (flags, visibility)) in [
+            (4, EvidenceVisibility::Limited),
+            (5, EvidenceVisibility::Limited),
+            (7, EvidenceVisibility::Limited),
+            (15, EvidenceVisibility::Limited),
+            (15, EvidenceVisibility::Good),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = start + PACKET_PERIOD * (index as u32 + 1);
+            let mut hazard = fire(flags, visibility);
+            hazard.source_us = 4_000_000 * (index as i64 + 1);
+            assert!(published.update(&mut hazard, &mut budget, at, at));
+            assert_eq!(hazard.write, HazardWrite::Packet);
+        }
+    }
+
+    #[test]
+    fn unavailable_packet_retries_and_unresolved_episode_refreshes() {
+        let start = Instant::now();
+        let mut hazard = fire(0, EvidenceVisibility::Good);
+        let mut budget = PacketBudget::default();
+        let mut published = Published {
+            observed_at: 0,
+            facts: hazard.facts,
+            packet: None,
+            retry_packet: Some(start + PACKET_RETRY),
+            recovery_queued: false,
+        };
+        assert!(!published.update(&mut hazard, &mut budget, start, start));
+        let retry = start + PACKET_RETRY;
+        hazard.source_us = 2_000_000;
+        assert!(published.update(&mut hazard, &mut budget, retry, retry));
+        assert_eq!(hazard.write, HazardWrite::Packet);
+        let later = retry + PACKET_REFRESH;
+        hazard.source_us = 12_000_000;
+        assert!(published.update(&mut hazard, &mut budget, later, later));
+        assert_eq!(hazard.write, HazardWrite::Packet);
+    }
+
+    #[test]
+    fn flickering_updates_use_observation_path_when_image_tokens_are_spent() {
+        let start = Instant::now();
+        let initial = fire(0, EvidenceVisibility::Good);
+        let mut budget = PacketBudget::default();
+        for _ in 0..PACKET_BURST {
+            assert!(budget.take(start, true));
+        }
+        let mut published = Published {
+            observed_at: 0,
+            facts: initial.facts,
+            packet: Some((start, initial.facts, initial.region)),
+            retry_packet: None,
+            recovery_queued: false,
+        };
+        let flicker = start + Duration::from_secs(1);
+        let mut hazard = fire(1, EvidenceVisibility::Good);
+        hazard.source_us = 1_000_000;
+        assert!(published.update(&mut hazard, &mut budget, flicker, flicker));
+        assert_eq!(hazard.write, HazardWrite::Observe);
+        let again = start + PACKET_PERIOD;
+        hazard.source_us = 4_000_000;
+        assert!(published.update(&mut hazard, &mut budget, again, again));
+        assert_eq!(hazard.write, HazardWrite::Packet);
+        assert!(!budget.take(again, true));
+    }
 }

@@ -106,8 +106,12 @@ def run(args):
                 assert status == 200 and hashlib.sha256(body).hexdigest() == image["sha256"]
             with closing(sqlite3.connect(root / "data" / "stillwatch.sqlite3")) as db:
                 assert db.execute("select count(*) from notification_outbox").fetchone() == (0,)
-                row = db.execute("select state from incidents where id = ?", (uuid.UUID(incident["id"]).bytes,)).fetchone()
+                identifier = uuid.UUID(incident["id"]).bytes
+                row = db.execute("select state from incidents where id = ?", (identifier,)).fetchone()
                 assert json.loads(row[0])["analysis_origin"] == origin
+                facts, = db.execute("select facts from hazard_observations where incident_id = ? "
+                                    "order by source_us limit 1", (identifier,)).fetchone()
+                assert json.loads(facts)[0]["type"] == "fire"
             print(json.dumps({"native_ort": True, "supervised_worker": True, "sources": 2,
                               "people_observed": True, "fire_or_smoke_observed": True,
                               "persisted_evidence": True, "analysis_origin_persisted": True,

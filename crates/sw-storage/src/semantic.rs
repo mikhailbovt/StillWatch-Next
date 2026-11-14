@@ -203,6 +203,9 @@ impl Store {
                    AND c.scene_revision = json_extract(i.state, '$.scope.scene_revision')
                    AND p.version = json_extract(i.state, '$.evidence.version')
                    AND json_extract(i.state, '$.evidence_state') = 'persisted'
+                   AND EXISTS (SELECT 1 FROM evidence_images img WHERE img.packet_id = p.id
+                     AND img.kind = 'overview' AND NOT img.retired AND img.digest IS NOT NULL
+                     AND img.source_us >= json_extract(i.state, '$.last_source_us'))
                    AND coalesce(json_extract(i.state, '$.assessed_evidence_version'), 0) < p.version
                    AND (?2 OR json_extract(i.state, '$.live') = 1)
                    AND (?4 = 'local_only' OR json_type(c.config, '$.cloud_consent') IS 'true'
@@ -560,8 +563,15 @@ fn current(
         return Ok(None);
     }
     let incident = get_incident(conn, incident_id)?;
+    let evidence_source = conn.query_row(
+        "SELECT max(source_us) FROM evidence_images
+         WHERE packet_id = ? AND kind = 'overview' AND NOT retired AND digest IS NOT NULL",
+        [id(&stamp.packet_id)],
+        |row| row.get::<_, Option<i64>>(0),
+    )?;
     let eligible = incident.evidence == Some(stamp)
         && incident.evidence_state == EvidenceState::Persisted
+        && evidence_source.is_some_and(|source| source >= incident.last_source_us)
         && incident.assessed_evidence_version.unwrap_or(0) < stamp.version
         && incident.resolution.is_none();
     Ok(eligible.then_some(incident))

@@ -34,6 +34,7 @@ impl Store {
                 "DELETE FROM semantic_jobs WHERE packet_id IN (
                     SELECT id FROM evidence_packets WHERE incident_id IN (SELECT id FROM expired_incidents));
                  DELETE FROM semantic_attempts WHERE incident_id IN (SELECT id FROM expired_incidents);
+                 DELETE FROM hazard_observations WHERE incident_id IN (SELECT id FROM expired_incidents);
                  DELETE FROM alert_silences WHERE incident_id IN (SELECT id FROM expired_incidents);
                  DELETE FROM notification_outbox WHERE incident_id IN (SELECT id FROM expired_incidents);
                  DELETE FROM operator_actions WHERE incident_id IN (SELECT id FROM expired_incidents);
