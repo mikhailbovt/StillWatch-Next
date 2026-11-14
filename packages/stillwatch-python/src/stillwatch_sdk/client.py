@@ -170,9 +170,13 @@ class AsyncClient:
     async def analysis(self, camera: str) -> Json:
         return await self._object("GET", f"/api/v2/cameras/{uuid(camera)}/analysis-status")
 
-    async def probe(self, source: Json, masks: list[Json] | None = None) -> Json:
-        return await self._object("POST", "/api/v2/source-probes",
-                                  body={"source": source, "privacy_masks": masks or []}, timeout=CAMERA_SETUP)
+    async def probe(
+        self, source: Json, masks: list[Json] | None = None, *, camera_id: str | None = None,
+    ) -> Json:
+        body: Json = {"source": source, "privacy_masks": masks or []}
+        if camera_id is not None:
+            body["camera_id"] = uuid(camera_id)
+        return await self._object("POST", "/api/v2/source-probes", body=body, timeout=CAMERA_SETUP)
 
     async def capture_devices(self) -> list[Json]:
         return await self._list("/api/v2/capture-devices")

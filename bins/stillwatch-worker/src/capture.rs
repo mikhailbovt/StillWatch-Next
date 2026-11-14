@@ -10,10 +10,10 @@ use sw_capture::{Decoder, PtsQuality as SourceQuality, ReadLimits, RgbFrame, Sou
 use sw_protocol::RtspTransport;
 use sw_protocol::worker::{
     CONFIG_MAX_BYTES, CaptureRequest, CaptureSource, FrameHeader, MASK_UNITS, MaskRect, PtsQuality,
-    WINDOWS_RTSPS_OPEN_TIMEOUT,
+    WINDOWS_RTSPS_OPEN_TIMEOUT, encode_capture_codec,
 };
 
-pub fn run() -> Result<()> {
+pub fn run(with_codec: bool) -> Result<()> {
     let mut body = Vec::new();
     io::stdin()
         .lock()
@@ -69,6 +69,9 @@ pub fn run() -> Result<()> {
             frame.rgb.len() == header.byte_length()? as usize,
             "invalid RGB frame length"
         );
+        if with_codec && frame_id == 1 {
+            output.write_all(&encode_capture_codec(source.codec())?)?;
+        }
         output.write_all(&header.encode()?)?;
         output.write_all(&frame.rgb)?;
         output.flush()?;
@@ -88,7 +91,7 @@ pub fn devices() -> Result<()> {
     Ok(())
 }
 
-fn open(source: CaptureSource) -> Result<(impl SourceAdapter, bool)> {
+fn open(source: CaptureSource) -> Result<(Decoder, bool)> {
     let mut limits = ReadLimits::default();
     if source.uses_schannel() {
         limits.open_timeout = WINDOWS_RTSPS_OPEN_TIMEOUT;

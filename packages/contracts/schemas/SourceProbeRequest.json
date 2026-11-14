@@ -3,6 +3,14 @@
   "title": "SourceProbeRequest",
   "type": "object",
   "properties": {
+    "camera_id": {
+      "description": "Replace this camera's reservation in the capacity estimate.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
     "privacy_masks": {
       "type": "array",
       "default": [],

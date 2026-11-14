@@ -18,10 +18,45 @@ pub const MODEL_PACK_UNAVAILABLE: [u8; 4] = *b"SWIM";
 pub const MODEL_INITIALIZATION_FAILED: [u8; 4] = *b"SWIS";
 pub const RUNTIME_UNAVAILABLE: [u8; 4] = *b"SWIR";
 pub const HEADER_LEN: usize = 56;
+pub const CODEC_HEADER_LEN: usize = 36;
 pub const MAX_WIDTH: u32 = 3840;
 pub const MAX_HEIGHT: u32 = 2160;
 pub const MAX_FRAME_BYTES: u32 = MAX_WIDTH * MAX_HEIGHT * 3;
 const MISSING_PTS: i64 = i64::MIN;
+
+pub fn encode_capture_codec(codec: &str) -> io::Result<[u8; CODEC_HEADER_LEN]> {
+    let mut bytes = [0; CODEC_HEADER_LEN];
+    if codec.len() > CODEC_HEADER_LEN - 4 || !valid_capture_codec(codec.as_bytes()) {
+        return Err(invalid_codec());
+    }
+    bytes[..4].copy_from_slice(b"SWC1");
+    bytes[4..4 + codec.len()].copy_from_slice(codec.as_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_capture_codec(bytes: &[u8; CODEC_HEADER_LEN]) -> io::Result<&str> {
+    let (marker, name) = bytes.split_at(4);
+    let length = name
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(name.len());
+    let (codec, padding) = name.split_at(length);
+    if marker != b"SWC1" || !valid_capture_codec(codec) || padding.iter().any(|&byte| byte != 0) {
+        return Err(invalid_codec());
+    }
+    std::str::from_utf8(codec).map_err(|_| invalid_codec())
+}
+
+fn valid_capture_codec(name: &[u8]) -> bool {
+    !name.is_empty()
+        && name
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
+}
+
+fn invalid_codec() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "invalid capture codec header")
+}
 
 pub fn inference_startup_failure(marker: [u8; 4]) -> Option<InferenceFailure> {
     match marker {
@@ -282,6 +317,17 @@ fn invalid() -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_capture_codec_and_padding() {
+        let mut bytes = encode_capture_codec("h264").unwrap();
+        assert_eq!(decode_capture_codec(&bytes).unwrap(), "h264");
+        bytes[9] = b'x';
+        assert!(decode_capture_codec(&bytes).is_err());
+        assert!(encode_capture_codec("").is_err());
+        assert!(encode_capture_codec("rtsp://127.0.0.1").is_err());
+        assert!(encode_capture_codec(&"x".repeat(CODEC_HEADER_LEN - 3)).is_err());
+    }
 
     #[test]
     fn validates_dimensions_payload_length_and_pts_before_allocation() {

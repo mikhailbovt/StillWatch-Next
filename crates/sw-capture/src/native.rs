@@ -422,6 +422,10 @@ impl Decoder {
         })
     }
 
+    pub fn codec(&self) -> &'static str {
+        self.decoder.id().name()
+    }
+
     pub fn next_frame(&mut self) -> Result<Option<RgbFrame>, CaptureError> {
         self.input.interrupt.arm(self.limits.frame_timeout);
         loop {

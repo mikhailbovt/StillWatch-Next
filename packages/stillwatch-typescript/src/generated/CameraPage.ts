@@ -376,6 +376,7 @@ export interface Dimensions {
 }
 export interface CameraRuntime {
   analysis?: AnalysisStatus | null;
+  codec?: string | null;
   dropped: Counter;
   frame?: Counter | null;
   last_frame_age_ms?: Counter | null;

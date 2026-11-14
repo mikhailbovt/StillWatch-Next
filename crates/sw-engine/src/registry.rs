@@ -74,6 +74,7 @@ struct State {
     phase: CaptureState,
     dropped: u64,
     last: Option<(u64, Instant)>,
+    codec: Option<Arc<str>>,
     repeated_frame: bool,
     retrying: bool,
     clock_held: bool,
@@ -97,7 +98,6 @@ pub struct CameraRegistry {
     budget: FrameBudget,
     probes: Semaphore,
     pub(crate) uploads: ReplayUploads,
-    rtsp_confined: tokio::sync::OnceCell<bool>,
     onvif: Onvif,
     slots: RwLock<HashMap<Uuid, Slot>>,
 }
@@ -156,7 +156,6 @@ impl CameraRegistry {
             budget: FrameBudget::new(limits.raw_bytes)?,
             probes: Semaphore::new(2),
             uploads,
-            rtsp_confined: tokio::sync::OnceCell::new(),
             onvif,
             slots: RwLock::new(HashMap::new()),
         }))
@@ -179,6 +178,7 @@ impl CameraRegistry {
             },
             dropped: 0,
             last: None,
+            codec: None,
             repeated_frame: false,
             retrying: false,
             clock_held: false,
@@ -211,6 +211,7 @@ impl CameraRegistry {
                 frame,
                 dropped: Counter(state.dropped),
                 last_frame_age_ms,
+                codec: state.codec.as_deref().map(str::to_owned),
                 repeated_frame: state.repeated_frame,
                 analysis: None,
             },
@@ -358,6 +359,7 @@ impl CameraRegistry {
                 {
                     self.validate_source(&config.source)?;
                 }
+                let replacing = previous.as_ref().map(|camera| camera.id);
                 let retained_dimensions = previous
                     .filter(|previous| {
                         !confirm_scene
@@ -373,6 +375,17 @@ impl CameraRegistry {
                         let (probe, scene) = self
                             .probe_frame(&config.source, config.privacy_masks)
                             .await?;
+                        let Some(scene) = scene else {
+                            let capacity = self
+                                .store
+                                .camera_capacity(probe.dimensions, replacing, self.limits)
+                                .await?;
+                            return if capacity.fits {
+                                Err(RegistryError::Busy)
+                            } else {
+                                Err(StoreError::CameraCapacity.into())
+                            };
+                        };
                         let reference = (confirm_scene && scene.visibility == Visibility::Good)
                             .then(|| scene.fingerprint.to_vec());
                         (Some(probe.dimensions), reference)
@@ -393,15 +406,22 @@ impl CameraRegistry {
         &self,
         source: &CameraSource,
         masks: Vec<MaskRect>,
+        replacing: Option<Uuid>,
     ) -> Result<SourceProbe, RegistryError> {
-        Ok(self.probe_frame(source, masks).await?.0)
+        let (mut probe, _) = self.probe_frame(source, masks).await?;
+        probe.capture_capacity = Some(
+            self.store
+                .camera_capacity(probe.dimensions, replacing, self.limits)
+                .await?,
+        );
+        Ok(probe)
     }
 
     async fn probe_frame(
         &self,
         source: &CameraSource,
         masks: Vec<MaskRect>,
-    ) -> Result<(SourceProbe, scene::SceneSample), RegistryError> {
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let request = self.request(source, masks).await?;
         self.probe_request(request, source.is_live()).await
     }
@@ -410,7 +430,7 @@ impl CameraRegistry {
         &self,
         request: CaptureRequest,
         live: bool,
-    ) -> Result<(SourceProbe, scene::SceneSample), RegistryError> {
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
         let worker = self
             .worker
@@ -418,13 +438,14 @@ impl CameraRegistry {
             .ok_or(RegistryError::WorkerUnavailable)?;
         let mut process = worker.capture(&request).await?;
         let result = process.next(&self.budget, FRAME_TIMEOUT).await;
+        let codec = process.codec().map(|codec| codec.to_string());
         process.stop().await?;
-        let frame = match result? {
-            CaptureRead::Frame(frame) => frame,
-            CaptureRead::Dropped(_) => return Err(RegistryError::Busy),
+        let (header, sample) = match result? {
+            CaptureRead::Frame(frame) => (frame.header, Some(scene::measure(&frame))),
+            // A decoded frame with no Core buffer permit still supplies dimensions.
+            CaptureRead::Dropped(header) => (header, None),
             CaptureRead::End => return Err(RegistryError::Source),
         };
-        let header = frame.header;
         Ok((
             SourceProbe {
                 dimensions: Dimensions {
@@ -433,8 +454,10 @@ impl CameraRegistry {
                 },
                 live,
                 native_pts: header.pts_quality == PtsQuality::Native,
+                codec,
+                capture_capacity: None,
             },
-            scene::measure(&frame),
+            sample,
         ))
     }
 
@@ -472,11 +495,7 @@ impl CameraRegistry {
                     .worker
                     .as_ref()
                     .ok_or(RegistryError::WorkerUnavailable)?;
-                if !*self
-                    .rtsp_confined
-                    .get_or_try_init(|| worker.confined_rtsp())
-                    .await?
-                {
+                if !worker.confined_rtsp().await? {
                     return Err(WorkerError::NetworkPolicyUnavailable.into());
                 }
                 let credentials = self.source_credentials(*credential_ref).await?;
@@ -565,7 +584,8 @@ impl CameraRegistry {
             .map(|camera| {
                 let bytes = camera
                     .dimensions
-                    .map_or(u64::MAX, |d| u64::from(d.width) * u64::from(d.height) * 9);
+                    .and_then(CameraLimits::required_raw_bytes)
+                    .map_or(u64::MAX, u64::from);
                 let admit = active < self.limits.active
                     && reserved.saturating_add(bytes) <= u64::from(self.limits.raw_bytes);
                 if admit {
@@ -618,6 +638,7 @@ impl CameraRegistry {
                 phase,
                 dropped: 0,
                 last: None,
+                codec: None,
                 repeated_frame: false,
                 retrying: false,
                 clock_held: false,
@@ -770,6 +791,9 @@ impl CameraRegistry {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
                         state.repeated_frame = false;
+                        if state.codec.is_none() {
+                            state.codec = process.codec().cloned();
+                        }
                     });
                     continue;
                 }
@@ -834,6 +858,9 @@ impl CameraRegistry {
                 frame,
             })));
             state.send_modify(|state| {
+                if state.codec.is_none() {
+                    state.codec = process.codec().cloned();
+                }
                 state.phase = if usable {
                     if live {
                         CaptureState::Streaming
@@ -870,6 +897,9 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
         state.phase = phase;
         state.repeated_frame = false;
         state.clock_held = false;
+        if phase != CaptureState::Completed {
+            state.codec = None;
+        }
         if phase == CaptureState::Retrying {
             state.retrying = true;
         }

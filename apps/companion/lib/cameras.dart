@@ -314,57 +314,132 @@ class _CameraEditorState extends State<_CameraEditor> {
   Future<void> _save() => _perform(() async {
     final name = _name.text.trim();
     if (name.isEmpty || name.runes.length > 80) throw const FormatException();
+    final source = _source();
     final config = <String, Object?>{
       'name': name,
       'enabled': _enabled,
-      'source': _source(),
+      'source': source,
       if (widget.console.coreInfo?.cameraSampling == true &&
           (_initial['sampling'] != null ||
               _sampling.entries.any((e) => e.value != _defaultSampling[e.key])))
         'sampling': _sampling,
       if (_cloudConsent || _initial['cloud_consent'] == true)
         'cloud_consent': _cloudConsent,
-      'privacy_masks': _masks,
-      'controlled_fire_regions': _regions,
+      'privacy_masks': List<Json>.of(_masks),
+      'controlled_fire_regions': List<Json>.of(_regions),
     };
     final camera = widget.camera;
+    final patch = Map<String, Object?>.fromEntries(
+      config.entries.where((entry) {
+        final old =
+            _initial[entry.key] ??
+            (entry.key == 'controlled_fire_regions' ? const [] : null);
+        return _canonical(entry.value) != _canonical(old);
+      }),
+    );
+    if (_recheck) {
+      patch['controlled_fire_regions'] = config['controlled_fire_regions'];
+    }
+    if (camera != null &&
+        _regions.isNotEmpty &&
+        patch.containsKey('controlled_fire_regions') &&
+        (patch.containsKey('source') || patch.containsKey('privacy_masks'))) {
+      setState(() {
+        _error = true;
+        _status = 'Save the source or mask changes first, then review the regions on the updated camera.';
+      });
+      return;
+    }
+    if (_enabled &&
+        widget.console.coreInfo?.cameraProbeCapacity == true &&
+        (camera?.enabled != true ||
+            patch.containsKey('source') ||
+            patch.containsKey('privacy_masks')) &&
+        !await _confirmSource(source)) {
+      return;
+    }
+    if (!mounted) return;
     if (camera == null) {
       await widget.profile.client.createCamera(config, operationId());
-    } else {
-      final patch = Map<String, Object?>.fromEntries(
-        config.entries.where((entry) {
-          final old =
-              _initial[entry.key] ??
-              (entry.key == 'controlled_fire_regions' ? const [] : null);
-          return _canonical(entry.value) != _canonical(old);
-        }),
-      );
-      if (_recheck) patch['controlled_fire_regions'] = _regions;
-      if (_regions.isNotEmpty &&
-          patch.containsKey('controlled_fire_regions') &&
-          (patch.containsKey('source') || patch.containsKey('privacy_masks'))) {
-        setState(() {
-          _error = true;
-          _status = 'Save the source or mask changes first, then review the regions on the updated camera.';
-        });
-        return;
-      }
-      if (patch.isNotEmpty) {
-        await widget.profile.client.patchCamera(camera, patch, operationId());
-      }
+    } else if (patch.isNotEmpty) {
+      await widget.profile.client.patchCamera(camera, patch, operationId());
     }
     unawaited(widget.console.refreshCameras());
     if (mounted) Navigator.of(context).pop();
   });
 
-  Future<void> _probe() => _perform(() async {
-    final report = await widget.profile.client.probe(_source(), masks: _masks);
+  Future<Json> _probeSource(Json source) => widget.profile.client.probe(
+    source,
+    masks: _masks,
+    cameraId: widget.console.coreInfo?.cameraProbeCapacity == true
+        ? widget.camera?.id
+        : null,
+  );
+
+  String _describeProbe(Json report) {
     final dims = object(report['dimensions']);
+    final codec = report['codec'];
+    final source = [
+      if (codec is String) codec.toUpperCase(),
+      '${dims['width']} × ${dims['height']}',
+      if (report['native_pts'] == true)
+        'native timestamps'
+      else
+        'no native timestamps',
+    ].join(' · ');
+    final capacity = report['capture_capacity'];
+    if (capacity is! Map) return source;
+    final slots = capacity['available_camera_slots'];
+    final available = _mebibytes(capacity['available_raw_bytes'] as int);
+    final required = _mebibytes(capacity['required_raw_bytes'] as int);
+    return [
+      source,
+      if (capacity['fits'] == false) 'Capture capacity exceeded.',
+      '$slots camera slots available',
+      '$required MiB raw frame memory needed, $available MiB available',
+    ].join('\n');
+  }
+
+  String _mebibytes(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(2);
+
+  Future<bool> _confirmSource(Json source) async {
+    final report = await _probeSource(source);
+    if (!mounted) return false;
+    final capacity = object(report['capture_capacity']);
+    if (capacity['fits'] != true) {
+      setState(() {
+        _error = true;
+        _status = _describeProbe(report);
+      });
+      return false;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Save camera?'),
+        content: Text(_describeProbe(report)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialog).pop(true),
+            child: const Text('Save camera'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _probe() => _perform(() async {
+    final report = await _probeSource(_source());
     if (mounted) {
       setState(() {
-        _error = false;
-        _status =
-            '${dims['width']} × ${dims['height']} · ${report['native_pts'] == true ? 'native timestamps' : 'estimated timestamps'}';
+        final capacity = report['capture_capacity'];
+        _error = capacity is Map && capacity['fits'] == false;
+        _status = _describeProbe(report);
       });
     }
   });

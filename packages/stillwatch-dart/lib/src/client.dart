@@ -102,10 +102,18 @@ final class StillWatchClient {
   Future<Json> analysis(String id) =>
       _json('GET', '/api/v2/cameras/${uuid(id)}/analysis-status');
 
-  Future<Json> probe(Json source, {List<Json> masks = const []}) => _json(
+  Future<Json> probe(
+    Json source, {
+    List<Json> masks = const [],
+    String? cameraId,
+  }) => _json(
     'POST',
     '/api/v2/source-probes',
-    body: {'source': source, 'privacy_masks': masks},
+    body: {
+      'source': source,
+      'privacy_masks': masks,
+      if (cameraId != null) 'camera_id': uuid(cameraId),
+    },
     timeout: _cameraSetupTimeout,
   );
 

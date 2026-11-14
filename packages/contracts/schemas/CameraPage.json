@@ -255,6 +255,12 @@
             }
           ]
         },
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "dropped": {
           "$ref": "#/$defs/Counter"
         },

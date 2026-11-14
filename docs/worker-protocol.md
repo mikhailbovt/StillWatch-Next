@@ -10,6 +10,8 @@ Core starts its workers, MediaMTX and media encoder in Windows job objects or Li
 
 Core launches `stillwatch-worker capture`, sends one UTF-8 `CaptureRequest` from `packages/contracts/workers/v1/CaptureRequest.json`, and closes stdin. The limit is 16,384 bytes. Stdout is binary. An orderly exit closes stdout. Exit code 4 signals that the configured source could not be opened or decoded. Keep diagnostics on stderr and redact credentials. Core runs `capture-doctor` and requires `rtsp_peer_confined=true` before enabling the network capture adapter. This flag describes a decoder that rejects redirects and confines negotiated media to the authorized peer.
 
+When `capture-doctor` reports `capture_codec=true`, Core launches `capture-with-codec` with the same request. The worker sends one 36-byte header immediately before its first decoded frame. The first four bytes are ASCII `SWC1`. A codec name of 1 to 32 ASCII lowercase letters, digits or underscores follows with zero padding. The original `capture` command starts directly with its first frame.
+
 Each frame starts with a 56-byte header, followed immediately by interleaved RGB24 rows without padding. Numeric fields are little-endian.
 
 | Offset | Width in bytes | Value |

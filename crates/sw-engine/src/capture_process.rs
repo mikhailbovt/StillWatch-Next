@@ -9,14 +9,14 @@ use std::{
 use process_wrap::tokio::ChildWrapper;
 use sw_protocol::CaptureDevice;
 use sw_protocol::worker::{
-    CAPTURE_SOURCE_EXIT, CONFIG_MAX_BYTES, CaptureRequest, FrameHeader, HEADER_LEN,
-    WINDOWS_RTSPS_OPEN_TIMEOUT,
+    CAPTURE_SOURCE_EXIT, CODEC_HEADER_LEN, CONFIG_MAX_BYTES, CaptureRequest, FrameHeader,
+    HEADER_LEN, WINDOWS_RTSPS_OPEN_TIMEOUT, decode_capture_codec,
 };
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::ChildStdout,
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{OnceCell, OwnedSemaphorePermit, Semaphore},
 };
 use uuid::Uuid;
 
@@ -47,8 +47,18 @@ pub enum WorkerError {
     InferenceStartup(sw_protocol::InferenceFailure),
 }
 
+#[derive(Default, serde::Deserialize)]
+struct CaptureCapabilities {
+    rtsp_peer_confined: bool,
+    #[serde(default)]
+    capture_codec: bool,
+}
+
 #[derive(Clone)]
-pub struct WorkerBinary(PathBuf);
+pub struct WorkerBinary {
+    path: PathBuf,
+    capture_capabilities: Arc<OnceCell<CaptureCapabilities>>,
+}
 
 impl WorkerBinary {
     pub fn open(path: &Path) -> Result<Self, WorkerError> {
@@ -56,7 +66,10 @@ impl WorkerBinary {
         if !path.is_file() {
             return Err(WorkerError::Unavailable);
         }
-        Ok(Self(path))
+        Ok(Self {
+            path,
+            capture_capabilities: Arc::default(),
+        })
     }
 
     pub async fn capture(&self, config: &CaptureRequest) -> Result<CaptureProcess, WorkerError> {
@@ -64,7 +77,17 @@ impl WorkerBinary {
         if input.len() > CONFIG_MAX_BYTES {
             return Err(WorkerError::Config);
         }
-        let mut child = self.spawn("capture")?;
+        let with_codec = match self.capture_capabilities().await {
+            Ok(caps) => caps.capture_codec,
+            Err(WorkerError::Unreaped) => return Err(WorkerError::Unreaped),
+            // Older local adapters can use the original frame format.
+            Err(_) => false,
+        };
+        let mut child = self.spawn(if with_codec {
+            "capture-with-codec"
+        } else {
+            "capture"
+        })?;
         let stdout = child.stdout().take().ok_or(WorkerError::Unavailable)?;
         let mut stdin = child.stdin().take().ok_or(WorkerError::Unavailable)?;
         let process = CaptureProcess {
@@ -73,6 +96,8 @@ impl WorkerBinary {
             generation: Uuid::new_v4(),
             last_frame: 0,
             schannel: config.source.uses_schannel(),
+            with_codec,
+            codec: None,
         };
         let sent = tokio::time::timeout(CONFIG_DEADLINE, stdin.write_all(&input)).await;
         drop(stdin);
@@ -93,13 +118,19 @@ impl WorkerBinary {
     }
 
     pub async fn confined_rtsp(&self) -> Result<bool, WorkerError> {
-        #[derive(serde::Deserialize)]
-        struct CaptureCapabilities {
-            rtsp_peer_confined: bool,
-        }
-        let capabilities: CaptureCapabilities =
-            self.capture_metadata("capture-doctor", 1024).await?;
-        Ok(capabilities.rtsp_peer_confined)
+        Ok(self.capture_capabilities().await?.rtsp_peer_confined)
+    }
+
+    async fn capture_capabilities(&self) -> Result<&CaptureCapabilities, WorkerError> {
+        self.capture_capabilities
+            .get_or_try_init(|| async {
+                match self.capture_metadata("capture-doctor", 1024).await {
+                    // A legacy worker may omit this subcommand. RTSP stays disabled.
+                    Err(WorkerError::Exit) => Ok(CaptureCapabilities::default()),
+                    result => result,
+                }
+            })
+            .await
     }
 
     async fn capture_metadata<T: serde::de::DeserializeOwned>(
@@ -132,7 +163,7 @@ impl WorkerBinary {
     }
 
     pub(crate) fn spawn(&self, subcommand: &str) -> Result<Box<dyn ChildWrapper>, WorkerError> {
-        Ok(command(&self.0, |command| {
+        Ok(command(&self.path, |command| {
             command
                 .arg(subcommand)
                 .stdin(Stdio::piped())
@@ -185,11 +216,17 @@ pub struct CaptureProcess {
     generation: Uuid,
     last_frame: u64,
     schannel: bool,
+    with_codec: bool,
+    codec: Option<Arc<str>>,
 }
 
 impl CaptureProcess {
     pub fn generation(&self) -> Uuid {
         self.generation
+    }
+
+    pub fn codec(&self) -> Option<&Arc<str>> {
+        self.codec.as_ref()
     }
 
     pub async fn next(
@@ -221,7 +258,15 @@ impl CaptureProcess {
                 Err(WorkerError::Exit)
             };
         }
-        self.stdout.read_exact(&mut bytes[1..]).await?;
+        if self.with_codec && self.last_frame == 0 {
+            let mut codec_header = [0; CODEC_HEADER_LEN];
+            codec_header[0] = bytes[0];
+            self.stdout.read_exact(&mut codec_header[1..]).await?;
+            self.codec = Some(Arc::from(decode_capture_codec(&codec_header)?));
+            self.stdout.read_exact(&mut bytes).await?;
+        } else {
+            self.stdout.read_exact(&mut bytes[1..]).await?;
+        }
         let header = FrameHeader::decode(&bytes)?;
         if header.frame != self.last_frame.saturating_add(1) || self.last_frame == u64::MAX {
             return Err(WorkerError::Config);

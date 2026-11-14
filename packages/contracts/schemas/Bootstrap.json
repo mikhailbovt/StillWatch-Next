@@ -3,6 +3,9 @@
   "title": "Bootstrap",
   "type": "object",
   "properties": {
+    "camera_probe_capacity": {
+      "type": "boolean"
+    },
     "camera_sampling": {
       "type": "boolean"
     },

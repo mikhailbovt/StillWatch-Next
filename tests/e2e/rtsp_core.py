@@ -150,6 +150,7 @@ paths:
 
                         details = until(probe, 20)
                         assert details["live"] and details["dimensions"] == {"width": 192, "height": 144}
+                        assert details["codec"] == "h264" and details["capture_capacity"]["fits"], details
                         status, camera = client.call("POST", "/api/v2/cameras", {"name": transport, "source": source, "enabled": True}, key=transport)
                         assert status == 201 and camera["live"], (status, camera)
                         assert "fixture-password" not in json.dumps(camera)
@@ -158,6 +159,7 @@ paths:
                         cameras = [client.camera(camera_id) for camera_id in ids]
                         return cameras if all(c["runtime"]["state"] == "streaming" and int(c["runtime"]["frame"]) >= 3 for c in cameras) else None
                     initial = until(streaming, 15)
+                    assert all(camera["runtime"]["codec"] == "h264" for camera in initial)
                     if dpapi:
                         wrong_id = str(uuid.uuid4())
                         (credentials_dir / f"{wrong_id}.json").write_text(clear)

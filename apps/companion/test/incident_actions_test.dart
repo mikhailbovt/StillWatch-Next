@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -313,6 +314,77 @@ void main() {
       await tester.runAsync(core.close);
     }
   });
+
+  testWidgets('confirms capture resources before saving an enabled source', (
+    tester,
+  ) async {
+    final core = (await tester.runAsync(_CoreFixture.start))!;
+    final console = core.console..foreground = false;
+    try {
+      console.coreInfo = CoreInfo.fromJson({
+        'instance_id': _coreId,
+        'version': {'major': 2, 'minor': 0},
+        'camera_probe_capacity': true,
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => editCamera(context, console),
+                child: const Text('Open editor'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open editor'));
+      await tester.pumpAndSettle();
+      final fields = find.byType(TextField);
+      await tester.enterText(fields.at(0), 'RTSP QA');
+      await tester.enterText(fields.at(1), '127.0.0.1:8554');
+      await tester.ensureVisible(fields.at(3));
+      await tester.enterText(fields.at(3), '/camera');
+      final enabled = find.text('Monitoring enabled');
+      await tester.ensureVisible(enabled);
+      await tester.tap(enabled);
+      await tester.pumpAndSettle();
+
+      Future<void> press(String label, Future<void> handled) async {
+        await tester.tap(find.text(label));
+        for (var i = 0; i < 40; i++) {
+          final done = await tester.runAsync(
+            () => handled
+                .then((_) => true)
+                .timeout(
+                  const Duration(milliseconds: 30),
+                  onTimeout: () => false,
+                ),
+          );
+          await tester.pump();
+          if (done == true) break;
+        }
+        await tester.pumpAndSettle();
+      }
+
+      core.probeHandled = Completer<void>();
+      await press('Save', core.probeHandled!.future);
+      expect(find.textContaining('Capture capacity exceeded'), findsOneWidget);
+      expect(find.text('Save camera'), findsNothing);
+      expect(core.cameraSaves, 0);
+
+      core.cameraFits = true;
+      core.probeHandled = Completer<void>();
+      await press('Save', core.probeHandled!.future);
+      expect(find.textContaining('H264 · 640 × 360'), findsOneWidget);
+      expect(core.cameraSaves, 0);
+      await press('Save camera', core.saveHandled.future);
+      expect(core.cameraSaves, 1);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(core.close);
+    }
+  });
 }
 
 final class _CoreFixture {
@@ -324,6 +396,10 @@ final class _CoreFixture {
   Json incident = _incident;
   bool failWrites = false;
   bool omitFromSnapshot = false;
+  bool cameraFits = false;
+  int cameraSaves = 0;
+  Completer<void>? probeHandled;
+  final saveHandled = Completer<void>();
   final writes = <({String path, String key, String revision, String body})>[];
 
   static Future<_CoreFixture> start() =>
@@ -364,7 +440,35 @@ final class _CoreFixture {
     final response = request.response;
     final path = request.uri.path;
     response.headers.contentType = ContentType.json;
-    if (request.method == 'POST') {
+    if (request.method == 'POST' && path == '/api/v2/source-probes') {
+      final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+      expect(body['source']['stream_path'], '/camera');
+      response.write(
+        jsonEncode({
+          'codec': 'h264',
+          'native_pts': true,
+          'dimensions': {'width': 640, 'height': 360},
+          'capture_capacity': {
+            'fits': cameraFits,
+            'available_camera_slots': cameraFits ? 1 : 0,
+            'available_raw_bytes': 16 * 1024 * 1024,
+            'required_raw_bytes': 640 * 360 * 9,
+          },
+        }),
+      );
+      await response.close();
+      probeHandled?.complete();
+      return;
+    } else if (request.method == 'POST' && path == '/api/v2/cameras') {
+      final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
+      expect(body['enabled'], true);
+      cameraSaves += 1;
+      response.statusCode = 201;
+      response.write(jsonEncode({..._camera, 'config': body}));
+      await response.close();
+      saveHandled.complete();
+      return;
+    } else if (request.method == 'POST') {
       writes.add((
         path: path,
         key: request.headers.value('idempotency-key')!,

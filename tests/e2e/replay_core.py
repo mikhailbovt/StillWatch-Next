@@ -13,6 +13,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -142,6 +143,8 @@ def run(core, worker, ffmpeg):
                             f"testsrc2=size={width}x120:rate=20:duration=24", "-c:v", "libx264", "-threads", "1",
                             str(sources / f"camera-{index}.mp4")], check=True)
         data = root / "data"
+        source = {"type": "replay", "file": "camera-0.mp4", "pace": True}
+        probe_path = "/api/v2/source-probes"
         with run_core(core, worker, data, sources, root / "core.log") as (process, client):
             assert client.call("GET", "/api/v2/cameras", authorized=False)[0] == 401
             assert client.call("GET", "/health/ready") == (200, {"state": "ready", "api": {"major": 2, "minor": 0}})
@@ -155,9 +158,17 @@ def run(core, worker, ffmpeg):
             assert code == 201, uploaded
             assert uploaded["bytes"] == str(len(fixture))
             assert uploaded["source_probe"] == {
-                "dimensions": {"width": 160, "height": 120}, "live": False, "native_pts": True,
+                "dimensions": {"width": 160, "height": 120}, "live": False, "native_pts": True, "codec": "h264",
             }
             assert (sources / uploaded["file"]).read_bytes() == fixture
+            assert client.call("GET", "/bootstrap/info", authorized=False)[1]["camera_probe_capacity"]
+            status, report = client.call("POST", probe_path, {"source": source})
+            assert status == 200 and report["codec"] == "h264", (status, report)
+            assert report["capture_capacity"] == {
+                "fits": True, "available_camera_slots": 4,
+                "available_raw_bytes": 128 * 1024 * 1024,
+                "required_raw_bytes": 160 * 120 * 9,
+            }
 
             def add(index):
                 file = uploaded["file"] if index == 0 else f"camera-{index}.mp4"
@@ -183,13 +194,29 @@ def run(core, worker, ffmpeg):
             assert [c["dimensions"]["width"] for c in initial] == [160, 176, 192, 208]
             assert {c["source_epoch"] for c in initial} == {"1"}
             assert all(c["runtime"]["dropped"] == "0" for c in initial)
+            assert all(c["runtime"]["codec"] == "h264" for c in initial)
 
-            source = {"type": "replay", "file": "camera-0.mp4", "pace": True}
+            def capacity(camera_id=None):
+                request = {"source": source}
+                if camera_id:
+                    request["camera_id"] = camera_id
+                status, report = client.call("POST", probe_path, request)
+                assert status == 200, (status, report)
+                return report["capture_capacity"]
+
+            full = capacity()
+            assert not full["fits"] and full["available_camera_slots"] == 0
+            replacement = capacity(ids[0])
+            assert replacement["fits"] and replacement["available_camera_slots"] == 1
+            assert replacement["available_raw_bytes"] - full["available_raw_bytes"] == 160 * 120 * 9
+            assert client.call("POST", probe_path, {"source": source, "camera_id": str(uuid.uuid4())})[0] == 404
             overflow = {"name": "Fifth", "enabled": True, "source": source}
             assert client.call("POST", "/api/v2/cameras", overflow, key="over-capacity")[1]["code"] == "capacity_exceeded"
-            assert client.call("POST", "/api/v2/cameras", overflow | {"enabled": False}, key="disabled")[0] == 201
+            status, disabled = client.call("POST", "/api/v2/cameras", overflow | {"enabled": False}, key="disabled")
+            assert status == 201, (status, disabled)
+            assert capacity(disabled["id"]) == full
             rejected = source | {"file": "../unlisted.mp4"}
-            assert client.call("POST", "/api/v2/source-probes", {"source": rejected})[0] == 400
+            assert client.call("POST", probe_path, {"source": rejected})[0] == 400
 
             path = f"/api/v2/cameras/{ids[0]}"
             assert client.call("PATCH", path, {"source": source | {"file": "missing.mp4"}}, key="missing", revision=1)[0] == 400
@@ -228,8 +255,33 @@ def run(core, worker, ffmpeg):
             revision = restarted[0]["revision"]
             assert client.call("DELETE", f"/api/v2/cameras/{ids[0]}", key="delete", revision=revision)[0] == 204
             assert client.call("GET", f"/api/v2/cameras/{ids[0]}")[0] == 404
+        with run_core(core, worker, root / "one-slot", sources, root / "one-slot.log",
+                      "--active-cameras", "1") as (_, client):
+            drafts = [overflow | {"name": f"Draft {index}"} for index in range(2)]
+            for draft in drafts:
+                status, report = client.call("POST", probe_path, {"source": draft["source"]})
+                assert status == 200 and report["capture_capacity"]["fits"], (status, report)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                saves = [
+                    pool.submit(client.call, "POST", "/api/v2/cameras", draft, key=f"draft-{index}")
+                    for index, draft in enumerate(drafts)
+                ]
+                results = [save.result() for save in saves]
+            assert sorted(status for status, _ in results) == [201, 503], results
+            assert next(report for status, report in results if status == 503)["code"] == "capacity_exceeded"
+        with run_core(core, worker, root / "small-budget", sources, root / "small-budget.log",
+                      "--raw-frame-bytes", "16384") as (_, client):
+            status, report = client.call("POST", probe_path, {"source": source})
+            assert status == 200 and report["codec"] == "h264", (status, report)
+            assert report["capture_capacity"] == {
+                "fits": False, "available_camera_slots": 4,
+                "available_raw_bytes": 16384, "required_raw_bytes": 160 * 120 * 9,
+            }
+            status, report = client.call("POST", "/api/v2/cameras", overflow, key="raw-memory-cap")
+            assert status == 503 and report["code"] == "capacity_exceeded", (status, report)
         print(json.dumps({"platform": os.name, "concurrent_replays": 4, "worker_restart_isolated": True,
-                          "persisted_registry_restarted": True, "worker_cleanup": True, "capacity_and_revision_checks": True}))
+                          "persisted_registry_restarted": True, "worker_cleanup": True,
+                          "codec_and_capture_preflight": True, "capacity_and_revision_checks": True}))
 
 
 if __name__ == "__main__":

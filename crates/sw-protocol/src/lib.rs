@@ -273,6 +273,8 @@ pub struct Bootstrap {
     pub version: ApiVersion,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_sampling: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub camera_probe_capacity: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

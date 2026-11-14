@@ -2,7 +2,10 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sw_domain::{SourceScope, UnixMillis};
-use sw_protocol::{CameraConfig, CameraPatch, Dimensions, IdempotencyKey};
+use sw_protocol::{
+    CameraConfig, CameraPatch, CaptureCapacity, Dimensions, IdempotencyKey,
+    worker::{MAX_HEIGHT, MAX_WIDTH},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -67,6 +70,15 @@ pub struct CameraLimits {
     pub raw_bytes: u32,
 }
 
+impl CameraLimits {
+    pub fn required_raw_bytes(dims: Dimensions) -> Option<u32> {
+        if !(1..=MAX_WIDTH).contains(&dims.width) || !(1..=MAX_HEIGHT).contains(&dims.height) {
+            return None;
+        }
+        Some(dims.width * dims.height * 3 * 3)
+    }
+}
+
 impl Store {
     pub async fn current_camera_scopes(
         &self,
@@ -100,6 +112,21 @@ impl Store {
 
     pub async fn camera(&self, id: Uuid) -> Result<CameraRecord, StoreError> {
         self.call(move |db| get(&db.conn, id)).await
+    }
+
+    pub async fn camera_capacity(
+        &self,
+        dims: Dimensions,
+        replacing: Option<Uuid>,
+        limits: CameraLimits,
+    ) -> Result<CaptureCapacity, StoreError> {
+        self.call(move |db| {
+            if let Some(camera) = replacing {
+                get(&db.conn, camera)?;
+            }
+            capture_capacity(&db.conn, dims, replacing, limits)
+        })
+        .await
     }
 
     pub async fn cameras(
@@ -202,17 +229,11 @@ impl Store {
             }
             let reserved = if camera.config.enabled {
                 let dims = camera.dimensions.ok_or(StoreError::Invalid)?;
-                let bytes = u64::from(dims.width) * u64::from(dims.height);
-                if dims.width == 0 || dims.height == 0 || dims.width > 3840 || dims.height > 2160 { return Err(StoreError::Invalid); }
-                let reserve = bytes * 3 * 3;
-                let (active, occupied) = tx.query_row(
-                    "SELECT count(*), coalesce(sum(bytes_reserved), 0) FROM cameras WHERE enabled = 1 AND deleted = 0 AND id != ?",
-                    [id(&camera.id)], |row| Ok((row_counter(row, 0)?, row_counter(row, 1)?)),
-                )?;
-                if active >= u64::from(limits.active) || occupied.saturating_add(reserve) > u64::from(limits.raw_bytes) {
+                let capacity = capture_capacity(&tx, dims, Some(camera.id), limits)?;
+                if !capacity.fits {
                     return Err(StoreError::CameraCapacity);
                 }
-                reserve
+                capacity.required_raw_bytes
             } else { 0 };
             let config = serde_json::to_string(&camera.config)?;
             let revision = sql_counter(camera.revision)?;
@@ -224,7 +245,7 @@ impl Store {
                    enabled = excluded.enabled, deleted = excluded.deleted, bytes_reserved = excluded.bytes_reserved,
                    config = excluded.config, width = excluded.width, height = excluded.height, reviewed_scene = excluded.reviewed_scene",
                 params![id(&camera.id), revision, sql_counter(camera.scene_revision)?, sql_counter(camera.epoch)?, camera.config.enabled,
-                    deleted, sql_counter(reserved)?, config, camera.dimensions.map(|d| d.width), camera.dimensions.map(|d| d.height),
+                    deleted, reserved, config, camera.dimensions.map(|d| d.width), camera.dimensions.map(|d| d.height),
                     camera.reviewed_scene],
             )?;
             tx.execute("INSERT INTO camera_config_versions VALUES (?, ?, ?, ?, ?, ?)", params![id(&camera.id), revision, id(&command.actor), now, config, deleted])?;
@@ -307,6 +328,33 @@ pub(crate) fn camera_filter(allowed: Option<Vec<Uuid>>) -> Result<Option<String>
             Ok(serde_json::to_string(&hex)?)
         })
         .transpose()
+}
+
+fn capture_capacity(
+    conn: &Connection,
+    dims: Dimensions,
+    replacing: Option<Uuid>,
+    limits: CameraLimits,
+) -> Result<CaptureCapacity, StoreError> {
+    let required_raw_bytes = CameraLimits::required_raw_bytes(dims).ok_or(StoreError::Invalid)?;
+    let (active, occupied) = conn.query_row(
+        "SELECT count(*), coalesce(sum(bytes_reserved), 0) FROM cameras
+         WHERE enabled = 1 AND deleted = 0 AND (?1 IS NULL OR id != ?1)",
+        [replacing.as_ref().map(id)],
+        |row| Ok((row_counter(row, 0)?, row_counter(row, 1)?)),
+    )?;
+    let available_camera_slots = limits
+        .active
+        .saturating_sub(u32::try_from(active).unwrap_or(u32::MAX));
+    let available_raw_bytes = limits
+        .raw_bytes
+        .saturating_sub(u32::try_from(occupied).unwrap_or(u32::MAX));
+    Ok(CaptureCapacity {
+        fits: available_camera_slots > 0 && available_raw_bytes >= required_raw_bytes,
+        available_camera_slots,
+        available_raw_bytes,
+        required_raw_bytes,
+    })
 }
 
 pub(crate) fn get(conn: &Connection, camera: Uuid) -> Result<CameraRecord, StoreError> {

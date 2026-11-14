@@ -207,6 +207,7 @@ paths:
   /api/v2/source-probes:
     post:
       operationId: probeSource
+      description: Owner checks a decodable source and the current limits on active cameras and raw frame memory. Include camera_id when editing an existing camera to exclude its current reservation.
       requestBody:
         required: true
         content:
@@ -214,7 +215,7 @@ paths:
             schema: { $ref: schemas/SourceProbeRequest.json }
       responses:
         '200':
-          description: First decoded frame metadata from the configured host source.
+          description: Decoded frame metadata and a capture capacity estimate. Creating or updating a camera checks capacity again at commit.
           content:
             application/json:
               schema: { $ref: schemas/SourceProbe.json }

@@ -109,7 +109,7 @@ impl CameraRegistry {
             },
             masks: vec![],
         };
-        let (source_probe, _) = self.probe_request(request, false).await.map_err(|error| {
+        let (source_probe, sample) = self.probe_request(request, false).await.map_err(|error| {
             if matches!(
                 error,
                 RegistryError::Worker(crate::WorkerError::Exit | crate::WorkerError::Deadline)
@@ -119,6 +119,9 @@ impl CameraRegistry {
                 error
             }
         })?;
+        if sample.is_none() {
+            return Err(RegistryError::Busy);
+        }
         let name = format!("{}.video", Uuid::new_v4());
         let destination = self.uploads.root.join(&name);
         let file = format!("{DIRECTORY}/{name}");

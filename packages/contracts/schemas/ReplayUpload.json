@@ -19,6 +19,35 @@
     "source_probe"
   ],
   "$defs": {
+    "CaptureCapacity": {
+      "type": "object",
+      "properties": {
+        "available_camera_slots": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "available_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fits": {
+          "type": "boolean"
+        },
+        "required_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "fits",
+        "available_camera_slots",
+        "available_raw_bytes",
+        "required_raw_bytes"
+      ]
+    },
     "Counter": {
       "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
       "type": "string",
@@ -46,6 +75,22 @@
     "SourceProbe": {
       "type": "object",
       "properties": {
+        "capture_capacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptureCapacity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "dimensions": {
           "$ref": "#/$defs/Dimensions"
         },

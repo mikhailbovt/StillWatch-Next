@@ -347,6 +347,8 @@ pub struct CameraRuntime {
     pub frame: Option<Counter>,
     pub dropped: Counter,
     pub last_frame_age_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeated_frame: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -367,6 +369,9 @@ pub struct SourceProbeRequest {
     pub source: CameraSource,
     #[serde(default)]
     pub privacy_masks: Vec<MaskRect>,
+    /// Replace this camera's reservation in the capacity estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -375,6 +380,19 @@ pub struct SourceProbe {
     pub dimensions: Dimensions,
     pub live: bool,
     pub native_pts: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_capacity: Option<CaptureCapacity>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CaptureCapacity {
+    pub fits: bool,
+    pub available_camera_slots: u32,
+    pub available_raw_bytes: u32,
+    pub required_raw_bytes: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

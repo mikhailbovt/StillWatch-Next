@@ -3,6 +3,22 @@
   "title": "SourceProbe",
   "type": "object",
   "properties": {
+    "capture_capacity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CaptureCapacity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "codec": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "dimensions": {
       "$ref": "#/$defs/Dimensions"
     },
@@ -19,6 +35,35 @@
     "native_pts"
   ],
   "$defs": {
+    "CaptureCapacity": {
+      "type": "object",
+      "properties": {
+        "available_camera_slots": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "available_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fits": {
+          "type": "boolean"
+        },
+        "required_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "fits",
+        "available_camera_slots",
+        "available_raw_bytes",
+        "required_raw_bytes"
+      ]
+    },
     "Dimensions": {
       "type": "object",
       "properties": {

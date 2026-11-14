@@ -19,19 +19,21 @@ use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig, ModelSelection};
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
-        [command] if command == "capture" => match capture::run() {
-            Err(error) if error.is::<sw_capture::CaptureError>() => {
-                eprintln!("Capture source is unavailable");
-                std::process::exit(CAPTURE_SOURCE_EXIT);
+        [command] if command == "capture" || command == "capture-with-codec" => {
+            match capture::run(command == "capture-with-codec") {
+                Err(error) if error.is::<sw_capture::CaptureError>() => {
+                    eprintln!("Capture source is unavailable");
+                    std::process::exit(CAPTURE_SOURCE_EXIT);
+                }
+                result => result,
             }
-            result => result,
-        },
+        }
         [command] if command == "capture-devices" => capture::devices(),
         [command] if command == "infer" => inference::run(),
         [command] if command == "capture-doctor" => {
             println!(
                 "{}",
-                json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available()})
+                json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available(), "capture_codec": true})
             );
             Ok(())
         }

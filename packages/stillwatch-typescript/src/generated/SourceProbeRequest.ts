@@ -22,6 +22,10 @@ export type CameraSource =
 export type RtspTransport = "tcp" | "udp";
 
 export interface SourceProbeRequest {
+  /**
+   * Replace this camera's reservation in the capacity estimate.
+   */
+  camera_id?: string | null;
   privacy_masks?: MaskRect[];
   source: CameraSource;
 }
