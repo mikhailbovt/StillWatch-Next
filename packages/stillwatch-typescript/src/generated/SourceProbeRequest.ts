@@ -30,7 +30,9 @@ export interface SourceProbeRequest {
    * Replace this camera's reservation in the capacity estimate.
    */
   camera_id?: string | null;
+  execution_profile_id?: string | null;
   privacy_masks?: MaskRect[];
+  sampling?: CameraSampling | null;
   source: CameraSource;
 }
 export interface MaskRect {
@@ -38,4 +40,9 @@ export interface MaskRect {
   left: number;
   right: number;
   top: number;
+}
+export interface CameraSampling {
+  evidence_fps: number;
+  fire_fps: number;
+  pose_fps: number;
 }

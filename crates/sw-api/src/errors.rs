@@ -148,6 +148,12 @@ impl From<StoreError> for ApiError {
                 "Capacity exceeded",
                 None,
             ),
+            StoreError::AnalysisCapacity { reason } => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ProblemCode::CapacityExceeded,
+                "Analysis capacity exceeded",
+                Some(reason),
+            ),
             StoreError::Invalid => Self::invalid("The storage request is invalid"),
             StoreError::Credential => Self::unauthorized(),
             StoreError::DeviceCapacity => Self::rate_limited("Device or pairing capacity reached"),

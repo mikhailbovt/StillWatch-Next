@@ -13,7 +13,7 @@ use sw_protocol::worker::{
     WINDOWS_RTSPS_OPEN_TIMEOUT, encode_capture_codec,
 };
 
-pub fn run(with_codec: bool) -> Result<()> {
+pub fn run(with_codec: bool, with_rate: bool) -> Result<()> {
     let mut body = Vec::new();
     io::stdin()
         .lock()
@@ -71,6 +71,14 @@ pub fn run(with_codec: bool) -> Result<()> {
         );
         if with_codec && frame_id == 1 {
             output.write_all(&encode_capture_codec(source.codec())?)?;
+            if with_rate {
+                output.write_all(
+                    &source
+                        .advertised_millifps()
+                        .unwrap_or_default()
+                        .to_le_bytes(),
+                )?;
+            }
         }
         output.write_all(&header.encode()?)?;
         output.write_all(&frame.rgb)?;

@@ -121,6 +121,7 @@ final class CoreInfo {
     : id = uuid(value['instance_id']),
       cameraSampling = value['camera_sampling'] == true,
       cameraProbeCapacity = value['camera_probe_capacity'] == true,
+      analysisCapacityProbe = value['analysis_capacity_probe'] == true,
       cameraPriority = value['camera_priority'] == true,
       cameraMainStream = value['camera_main_stream'] == true,
       version = object(value['version']) {
@@ -132,6 +133,7 @@ final class CoreInfo {
   final String id;
   final bool cameraSampling;
   final bool cameraProbeCapacity;
+  final bool analysisCapacityProbe;
   final bool cameraPriority;
   final bool cameraMainStream;
   final Json version;

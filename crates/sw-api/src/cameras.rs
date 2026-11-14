@@ -120,7 +120,13 @@ pub async fn probe(
     let request = json(body)?;
     Ok(Json(
         registry(&state)?
-            .probe(&request.source, request.privacy_masks, request.camera_id)
+            .probe(
+                &request.source,
+                request.privacy_masks,
+                request.camera_id,
+                request.sampling,
+                request.execution_profile_id,
+            )
             .await?,
     ))
 }

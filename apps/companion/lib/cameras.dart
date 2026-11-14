@@ -390,6 +390,9 @@ class _CameraEditorState extends State<_CameraEditor> {
     cameraId: widget.console.coreInfo?.cameraProbeCapacity == true
         ? widget.camera?.id
         : null,
+    sampling: widget.console.coreInfo?.analysisCapacityProbe == true
+        ? _sampling
+        : null,
   );
 
   String _describeProbe(Json report) {
@@ -399,24 +402,42 @@ class _CameraEditorState extends State<_CameraEditor> {
         ? 'Analysis  $source\nLive detail  ${_describeStream(object(main))}'
         : source;
     final capacity = report['capture_capacity'];
-    if (capacity is! Map) return streams;
-    final slots = capacity['available_camera_slots'];
-    final available = _mebibytes(capacity['available_raw_bytes'] as int);
-    final required = _mebibytes(capacity['required_raw_bytes'] as int);
-    return [
-      streams,
-      if (capacity['fits'] == false) 'Capture capacity exceeded.',
-      '$slots camera slots available',
-      '$required MiB raw frame memory needed, $available MiB available',
-    ].join('\n');
+    final analysis = report['analysis_capacity'];
+    final messages = [streams];
+    if (capacity is Map) {
+      final slots = capacity['available_camera_slots'];
+      final available = _mebibytes(capacity['available_raw_bytes'] as int);
+      final required = _mebibytes(capacity['required_raw_bytes'] as int);
+      messages.addAll([
+        if (capacity['fits'] == false) 'Capture capacity exceeded.',
+        '$slots capture slots available',
+        '$required MiB raw frame memory needed, $available MiB available',
+      ]);
+    }
+    if (analysis is Map) {
+      final id = analysis['profile_id'];
+      final reason = analysis['reason'];
+      if (analysis['state'] == 'verified' && id is String) {
+        messages.add('Analysis fits profile $id');
+      } else if (reason is String) {
+        messages.add(reason);
+      }
+    }
+    return messages.join('\n');
   }
 
   String _describeStream(Json report) {
     final dims = object(report['dimensions']);
     final codec = report['codec'];
+    final timing = report['source_rate'];
+    final millifps = timing is Map && timing['quality'] == 'observed'
+        ? timing['observed_millifps']
+        : null;
     return [
       if (codec is String) codec.toUpperCase(),
       '${dims['width']} × ${dims['height']}',
+      if (millifps is int)
+        '${(millifps / 1000).toStringAsFixed(2)} fps observed',
       if (report['native_pts'] == true)
         'native timestamps'
       else
@@ -430,7 +451,9 @@ class _CameraEditorState extends State<_CameraEditor> {
     final report = await _probeSource(source);
     if (!mounted) return false;
     final capacity = object(report['capture_capacity']);
-    if (capacity['fits'] != true) {
+    final analysis = report['analysis_capacity'];
+    if (capacity['fits'] != true ||
+        analysis is Map && analysis['state'] == 'insufficient') {
       setState(() {
         _error = true;
         _status = _describeProbe(report);
@@ -462,7 +485,10 @@ class _CameraEditorState extends State<_CameraEditor> {
     if (mounted) {
       setState(() {
         final capacity = report['capture_capacity'];
-        _error = capacity is Map && capacity['fits'] == false;
+        final analysis = report['analysis_capacity'];
+        _error =
+            capacity is Map && capacity['fits'] == false ||
+            analysis is Map && analysis['state'] == 'insufficient';
         _status = _describeProbe(report);
       });
     }

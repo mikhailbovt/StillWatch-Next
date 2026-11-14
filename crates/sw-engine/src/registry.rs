@@ -9,15 +9,15 @@ use std::{
 
 use sw_domain::{SourceScope, UnixMillis, Visibility};
 use sw_protocol::{
-    Camera, CameraConfig, CameraPriority, CameraRuntime, CameraSampling, CameraSource,
-    CaptureState, ControlledFireRegion, Counter, Dimensions, MainStreamProbe, MaskRect,
-    OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest, SceneReview,
-    SourceProbe,
+    AnalysisCapacity, Camera, CameraConfig, CameraPriority, CameraRuntime, CameraSampling,
+    CameraSource, CaptureState, ControlledFireRegion, Counter, Dimensions, MainStreamProbe,
+    MaskRect, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest,
+    SceneReview, SourceProbe, SourceRate, SourceRateQuality,
     worker::{CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality},
 };
 use sw_storage::{
-    CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult, ObservationTime, Store,
-    StoreError,
+    AnalysisAdmission, CameraAction, CameraAdmission, CameraCommand, CameraLimits, CameraRecord,
+    CameraResult, CameraSourceMeasurements, ObservationTime, Store, StoreError,
 };
 use thiserror::Error;
 use tokio::{
@@ -110,6 +110,7 @@ pub struct CameraRegistry {
     rtsp_peers: HashSet<SocketAddr>,
     credentials_root: Option<PathBuf>,
     limits: CameraLimits,
+    analysis_admission: Option<Arc<AnalysisAdmission>>,
     pub(crate) inference_lanes: usize,
     budget: FrameBudget,
     probes: Semaphore,
@@ -137,6 +138,84 @@ pub struct CameraHealth {
     pub last_frame_age_ms: Option<Counter>,
 }
 
+pub(crate) struct SourceRateSample {
+    dimensions: (u32, u32),
+    first: Option<i64>,
+    last: Option<i64>,
+    min_gap: i64,
+    max_gap: i64,
+    intervals: u32,
+    variable: bool,
+}
+
+impl SourceRateSample {
+    pub(crate) fn new(header: FrameHeader) -> Self {
+        let first = Self::native_pts(header);
+        Self {
+            dimensions: (header.width, header.height),
+            first,
+            last: first,
+            min_gap: i64::MAX,
+            max_gap: 0,
+            intervals: 0,
+            variable: false,
+        }
+    }
+
+    fn native_pts(header: FrameHeader) -> Option<i64> {
+        (header.pts_quality == PtsQuality::Native && !header.corrupt)
+            .then_some(header.source_micros)
+            .flatten()
+    }
+
+    pub(crate) fn add(&mut self, header: FrameHeader) -> bool {
+        let Some(pts) = Self::native_pts(header) else {
+            self.variable = true;
+            return true;
+        };
+        if self.dimensions != (header.width, header.height)
+            || self.last.is_some_and(|last| pts <= last)
+        {
+            self.variable = true;
+            return true;
+        }
+        let first = *self.first.get_or_insert(pts);
+        if let Some(last) = self.last.replace(pts) {
+            let gap = pts.saturating_sub(last);
+            self.min_gap = self.min_gap.min(gap);
+            self.max_gap = self.max_gap.max(gap);
+            self.intervals += 1;
+        }
+        pts.saturating_sub(first) >= 800_000 && self.intervals >= 5
+    }
+
+    pub(crate) fn measure(&self, advertised_millifps: Option<u32>) -> SourceRate {
+        let mut rate = SourceRate {
+            advertised_millifps,
+            ..SourceRate::default()
+        };
+        if self.variable {
+            rate.quality = SourceRateQuality::Variable;
+            return rate;
+        }
+        if let Some((first, last)) = self.first.zip(self.last) {
+            let span = last.saturating_sub(first);
+            if self.intervals >= 5 && span >= 400_000 {
+                let observed =
+                    (u64::from(self.intervals) * 1_000_000_000 + span as u64 / 2) / span as u64;
+                rate.observed_millifps = u32::try_from(observed).ok();
+                rate.quality =
+                    if self.max_gap.saturating_sub(self.min_gap) > 2_000.max(self.min_gap / 5) {
+                        SourceRateQuality::Variable
+                    } else {
+                        SourceRateQuality::Observed
+                    };
+            }
+        }
+        rate
+    }
+}
+
 impl CameraRegistry {
     pub fn new(
         store: Store,
@@ -144,6 +223,7 @@ impl CameraRegistry {
         mut sources: SourceConfig,
         limits: CameraLimits,
         inference_lanes: usize,
+        analysis_admission: Option<Arc<AnalysisAdmission>>,
     ) -> Result<Arc<Self>, RegistryError> {
         sources.replay_root = sources
             .replay_root
@@ -170,6 +250,7 @@ impl CameraRegistry {
             rtsp_peers: sources.rtsp_peers,
             credentials_root: sources.credentials_root,
             limits,
+            analysis_admission,
             inference_lanes,
             budget: FrameBudget::new(limits.raw_bytes)?,
             probes: Semaphore::new(2),
@@ -300,6 +381,33 @@ impl CameraRegistry {
             .unwrap_or_default()
     }
 
+    pub fn analysis_capacity(&self) -> AnalysisCapacity {
+        use sw_protocol::CapacityState;
+        let Some(profile) = &self.analysis_admission else {
+            return AnalysisCapacity {
+                state: CapacityState::Unknown,
+                profile_id: None,
+                profile_sha256: None,
+                admissible_workload: None,
+                available_camera_slots: None,
+                limiting_resource: Some("execution_profile".into()),
+                reason: "No matching verified execution profile is loaded".into(),
+            };
+        };
+        let active = self.slots.read().map_or(profile.workload.cameras, |slots| {
+            slots
+                .values()
+                .filter(|slot| slot.inference_lane.is_some())
+                .count() as u32
+        });
+        profile.status(
+            CapacityState::Verified,
+            profile.workload.cameras.saturating_sub(active),
+            None,
+            "A verified execution profile matches this host and configuration",
+        )
+    }
+
     pub async fn devices(&self) -> Result<Vec<sw_protocol::CaptureDevice>, RegistryError> {
         let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
         let worker = self
@@ -382,7 +490,7 @@ impl CameraRegistry {
             }
             CameraAction::Delete { .. } => (None, None, false),
         };
-        let (dimensions, reviewed_scene) = match config {
+        let (dimensions, reviewed_scene, measured) = match config {
             Some(config) => {
                 if !config.valid() {
                     return Err(RegistryError::Invalid);
@@ -394,20 +502,24 @@ impl CameraRegistry {
                     self.validate_source(&config.source)?;
                 }
                 let replacing = previous.as_ref().map(|camera| camera.id);
-                let retained_dimensions = previous
-                    .filter(|previous| {
-                        !confirm_scene
-                            && previous.config.enabled
-                            && previous.config.source == config.source
-                            && previous.config.privacy_masks == config.privacy_masks
-                    })
-                    .and_then(|previous| previous.dimensions);
+                let retained = previous.filter(|previous| {
+                    !confirm_scene
+                        && previous.config.enabled
+                        && previous.config.source == config.source
+                        && previous.config.privacy_masks == config.privacy_masks
+                        && (self.analysis_admission.is_none()
+                            || previous.source_measurements.is_some())
+                });
                 if config.enabled {
-                    if let Some(dimensions) = retained_dimensions {
-                        (Some(dimensions), None)
+                    if let Some(dimensions) = retained.and_then(|previous| previous.dimensions) {
+                        (Some(dimensions), None, None)
                     } else {
                         let (probe, scene) = self
-                            .probe_frame(&config.source, config.privacy_masks)
+                            .probe_frame(
+                                &config.source,
+                                config.privacy_masks,
+                                self.analysis_admission.is_some(),
+                            )
                             .await?;
                         let Some(scene) = scene else {
                             let capacity = self
@@ -422,17 +534,28 @@ impl CameraRegistry {
                         };
                         let reference = (confirm_scene && scene.visibility == Visibility::Good)
                             .then(|| scene.fingerprint.to_vec());
-                        (Some(probe.dimensions), reference)
+                        let measurements = Self::measurements(&probe);
+                        (Some(probe.dimensions), reference, Some(measurements))
                     }
                 } else {
-                    (None, None)
+                    (None, None, None)
                 }
             }
-            None => (None, None),
+            None => (None, None, None),
         };
         Ok(self
             .store
-            .mutate_camera(command, dimensions, reviewed_scene, self.limits, now)
+            .mutate_camera_admitted(
+                command,
+                CameraAdmission {
+                    dimensions,
+                    reviewed_scene,
+                    source_measurements: measured,
+                    analysis: self.analysis_admission.clone(),
+                },
+                self.limits,
+                now,
+            )
             .await?)
     }
 
@@ -441,24 +564,68 @@ impl CameraRegistry {
         source: &CameraSource,
         masks: Vec<MaskRect>,
         replacing: Option<Uuid>,
+        sampling: Option<CameraSampling>,
+        profile_id: Option<String>,
     ) -> Result<SourceProbe, RegistryError> {
-        let (mut probe, _) = self.probe_frame(source, masks).await?;
+        let sampling = sampling.unwrap_or_default();
+        if !sampling.valid()
+            || profile_id
+                .as_ref()
+                .is_some_and(|id| id.is_empty() || id.len() > 64)
+        {
+            return Err(RegistryError::Invalid);
+        }
+        let (mut probe, _) = self.probe_frame(source, masks, true).await?;
         probe.capture_capacity = Some(
             self.store
                 .camera_capacity(probe.dimensions, replacing, self.limits)
                 .await?,
         );
+        let capacity = match &self.analysis_admission {
+            Some(profile) if profile_id.as_deref().is_none_or(|id| id == profile.id) => {
+                self.store
+                    .analysis_capacity(
+                        source.clone(),
+                        sampling,
+                        Self::measurements(&probe),
+                        replacing,
+                        profile.clone(),
+                    )
+                    .await?
+            }
+            _ => AnalysisCapacity {
+                state: sw_protocol::CapacityState::Unknown,
+                profile_id,
+                profile_sha256: None,
+                admissible_workload: None,
+                available_camera_slots: None,
+                limiting_resource: Some("execution_profile".into()),
+                reason: "No matching verified execution profile is loaded".into(),
+            },
+        };
+        probe.analysis_capacity = Some(capacity);
         Ok(probe)
+    }
+
+    fn measurements(probe: &SourceProbe) -> CameraSourceMeasurements {
+        CameraSourceMeasurements {
+            analysis: probe.measurement(),
+            detail: probe.main_stream.as_ref().map(MainStreamProbe::measurement),
+        }
     }
 
     async fn probe_frame(
         &self,
         source: &CameraSource,
         masks: Vec<MaskRect>,
+        measure_rate: bool,
     ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let Some(main) = source.main_stream() else {
             let request = self.request(source, masks).await?;
-            return self.probe_request(request, source.is_live()).await;
+            let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
+            return self
+                .inspect_source(request, source.is_live(), true, measure_rate)
+                .await;
         };
         let masked = !masks.is_empty();
         let _slots = self
@@ -468,8 +635,8 @@ impl CameraRegistry {
         let main = self.request(&main, masks.clone()).await?;
         let request = self.request(source, masks).await?;
         let (analysis, detail) = tokio::join!(
-            self.inspect_source(request, true, true),
-            self.inspect_source(main, true, false),
+            self.inspect_source(request, true, true, measure_rate),
+            self.inspect_source(main, true, false, measure_rate),
         );
         let (mut analysis, sample) = analysis?;
         let (detail, _) = detail?;
@@ -480,6 +647,7 @@ impl CameraRegistry {
             dimensions: detail.dimensions,
             codec: detail.codec,
             native_pts: detail.native_pts,
+            source_rate: detail.source_rate,
         });
         Ok((analysis, sample))
     }
@@ -490,7 +658,7 @@ impl CameraRegistry {
         live: bool,
     ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
-        self.inspect_source(request, live, true).await
+        self.inspect_source(request, live, true, false).await
     }
 
     async fn inspect_source(
@@ -498,6 +666,7 @@ impl CameraRegistry {
         request: CaptureRequest,
         live: bool,
         measure_scene: bool,
+        measure_rate: bool,
     ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
         let worker = self
             .worker
@@ -511,10 +680,16 @@ impl CameraRegistry {
                     .flatten()
             })
             .await;
-        let codec = process.codec().map(|codec| codec.to_string());
-        process.stop().await?;
-        let (header, sample) = match result? {
-            CaptureRead::Frame(frame) => {
+        let (header, sample) = match result {
+            Err(error) => {
+                process.stop().await?;
+                return Err(error.into());
+            }
+            Ok(CaptureRead::End) => {
+                process.stop().await?;
+                return Err(RegistryError::Source);
+            }
+            Ok(CaptureRead::Frame(frame)) => {
                 let header = frame.header;
                 let masks = scene::pixel_masks(&request.masks, header.width, header.height);
                 (
@@ -528,9 +703,33 @@ impl CameraRegistry {
                 )
             }
             // A decoded frame with no Core buffer permit still supplies dimensions.
-            CaptureRead::Dropped(header) => (header, None),
-            CaptureRead::End => return Err(RegistryError::Source),
+            Ok(CaptureRead::Dropped(header)) => (header, None),
         };
+        let codec = process.codec().map(|codec| codec.to_string());
+        let mut rate = sw_protocol::SourceRate {
+            advertised_millifps: process.advertised_millifps(),
+            ..Default::default()
+        };
+        if measure_rate {
+            let mut sample = SourceRateSample::new(header);
+            // Dropping RGB after reading its header preserves the native timestamp
+            // sequence without using the analysis frame allocation budget.
+            let _ = tokio::time::timeout(Duration::from_millis(1_400), async {
+                for _ in 0..180 {
+                    let Ok(CaptureRead::Dropped(header)) =
+                        process.next_with(FRAME_TIMEOUT, |_| None).await
+                    else {
+                        break;
+                    };
+                    if sample.add(header) {
+                        break;
+                    }
+                }
+            })
+            .await;
+            rate = sample.measure(rate.advertised_millifps);
+        }
+        process.stop().await?;
         Ok((
             SourceProbe {
                 dimensions: Dimensions {
@@ -541,6 +740,8 @@ impl CameraRegistry {
                 native_pts: header.pts_quality == PtsQuality::Native,
                 codec,
                 capture_capacity: None,
+                source_rate: measure_rate.then_some(rate),
+                analysis_capacity: None,
                 main_stream: None,
             },
             sample,
@@ -720,7 +921,13 @@ impl CameraRegistry {
                     .dimensions
                     .and_then(CameraLimits::required_raw_bytes)
                     .map_or(u64::MAX, u64::from);
-                let admit = active < self.limits.active
+                let compute_fits = self.analysis_admission.as_ref().is_none_or(|profile| {
+                    active < profile.workload.cameras
+                        && profile
+                            .matches_camera(&camera.config, camera.source_measurements.as_ref())
+                });
+                let admit = compute_fits
+                    && active < self.limits.active
                     && reserved.saturating_add(bytes) <= u64::from(self.limits.raw_bytes);
                 if admit {
                     active += 1;
@@ -950,6 +1157,11 @@ impl CameraRegistry {
                     set_phase(state, CaptureState::Completed);
                     return Ok(CameraOutcome::Completed);
                 }
+                Ok(CaptureState::CapacityExceeded) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::CapacityExceeded);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
                 Err(
                     RegistryError::Store(
                         StoreError::NotFound | StoreError::Revision { .. } | StoreError::Invalid,
@@ -996,6 +1208,9 @@ impl CameraRegistry {
         let mut moved_since = None;
         let mut mask_dimensions = (0, 0);
         let mut masks: Arc<[scene::PixelMask]> = Arc::from([]);
+        let mut rate_sample: Option<SourceRateSample> = None;
+        let mut qualified_rate = self.analysis_admission.is_none();
+        let source_kind = sw_protocol::SourceKind::from(&camera.config.source);
         loop {
             let read = tokio::select! {
                 _ = stop.wait_for(|value| *value) => return Ok(CaptureState::Disabled),
@@ -1023,6 +1238,41 @@ impl CameraRegistry {
             let observed_utc = sw_storage::utc_ms();
             let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
             let dimensions = (frame.header.width, frame.header.height);
+            if let Some(profile) = &self.analysis_admission {
+                let expected = &profile.workload.source;
+                if (expected.dimensions.width, expected.dimensions.height) != dimensions
+                    || process
+                        .codec()
+                        .is_none_or(|name| name.as_ref() != expected.codec)
+                    || process.advertised_millifps().is_none_or(|fps| {
+                        !(expected.min_millifps..=expected.max_millifps).contains(&fps)
+                    })
+                {
+                    return Ok(CaptureState::CapacityExceeded);
+                }
+                if reset || !has_native_time {
+                    qualified_rate = false;
+                    rate_sample = None;
+                }
+                if has_native_time {
+                    if let Some(sample) = &mut rate_sample {
+                        if sample.add(frame.header) {
+                            let measured = sw_protocol::SourceMeasurement {
+                                dimensions: expected.dimensions,
+                                codec: Some(expected.codec.clone()),
+                                rate: sample.measure(process.advertised_millifps()),
+                            };
+                            if !expected.admits_source(source_kind, &measured) {
+                                return Ok(CaptureState::CapacityExceeded);
+                            }
+                            rate_sample = None;
+                            qualified_rate = true;
+                        }
+                    } else {
+                        rate_sample = Some(SourceRateSample::new(frame.header));
+                    }
+                }
+            }
             if dimensions != mask_dimensions {
                 mask_dimensions = dimensions;
                 masks =
@@ -1035,7 +1285,7 @@ impl CameraRegistry {
             if live && has_native_time {
                 content.observe(&frame.rgb, sample.fingerprint, now);
             }
-            let usable = has_native_time && !content.unconfirmed(now);
+            let usable = has_native_time && qualified_rate && !content.unconfirmed(now);
             let moved = camera.reviewed_scene.as_ref().is_some_and(|reference| {
                 usable
                     && sample.visibility == Visibility::Good
@@ -1365,6 +1615,39 @@ mod tests {
         assert_eq!(
             progress.observe(2, Some(2_700_000), restarted + Duration::from_millis(2550)),
             Some(50)
+        );
+    }
+
+    #[test]
+    fn source_probe_measures_pts_and_flags_variable_or_missing_rates() {
+        let frame = |source_micros, frame| FrameHeader {
+            width: 640,
+            height: 360,
+            frame,
+            raw_pts: source_micros,
+            source_micros,
+            time_base_num: 1,
+            time_base_den: 1_000_000,
+            pts_quality: PtsQuality::Native,
+            corrupt: false,
+        };
+        let mut sample = SourceRateSample::new(frame(Some(0), 1));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Unknown
+        );
+        for i in 1..=12 {
+            sample.add(frame(Some(i * 1_000_000 / 15), i as u64 + 1));
+        }
+        assert_eq!(sample.measure(Some(15_000)).observed_millifps, Some(15_000));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Observed
+        );
+        sample.add(frame(Some(960_000), 14));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Variable
         );
     }
 

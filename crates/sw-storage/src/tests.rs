@@ -20,6 +20,167 @@ const BLACK: &[u8] = include_bytes!("../../../tests/fixtures/evidence/black.jpg"
 const WHITE: &[u8] = include_bytes!("../../../tests/fixtures/evidence/white.jpg");
 
 #[tokio::test]
+async fn compute_admission_reserves_once_inside_camera_transaction() {
+    use crate::{AnalysisAdmission, CameraAdmission, CameraSourceMeasurements};
+    use std::sync::Arc;
+    use sw_protocol::{
+        AnalysisWorkload, CameraPatch, CapacityState, MediaWorkloadLimits, SourceKind,
+        SourceMeasurement, SourceRate, SourceRateQuality, SourceWorkload,
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let dimensions = Dimensions {
+        width: 640,
+        height: 360,
+    };
+    let config = CameraConfig {
+        name: "Replay".into(),
+        source: CameraSource::Replay {
+            file: "reference.mp4".into(),
+            pace: true,
+            repeat: true,
+        },
+        enabled: true,
+        sampling: Default::default(),
+        priority: Default::default(),
+        cloud_consent: false,
+        privacy_masks: Vec::new(),
+        controlled_fire_regions: Vec::new(),
+    };
+    let profile = Arc::new(AnalysisAdmission {
+        id: "admission-test".into(),
+        sha256: "a".repeat(64),
+        workload: AnalysisWorkload {
+            source: SourceWorkload {
+                kind: SourceKind::PacedReplay,
+                codec: "h264".into(),
+                dimensions,
+                min_millifps: 14_900,
+                max_millifps: 15_100,
+            },
+            sampling: config.sampling,
+            cameras: 1,
+            min_pose_per_wall_minute: 285,
+            min_fire_per_wall_minute: 114,
+            detail_source: None,
+            media: MediaWorkloadLimits::DEFAULT_LIMITS,
+        },
+    });
+    let measured = CameraSourceMeasurements {
+        analysis: SourceMeasurement {
+            dimensions,
+            codec: Some("h264".into()),
+            rate: SourceRate {
+                advertised_millifps: Some(15_000),
+                observed_millifps: Some(15_000),
+                quality: SourceRateQuality::Observed,
+            },
+        },
+        detail: None,
+    };
+    let evaluated = |observed: bool| CameraAdmission {
+        dimensions: Some(dimensions),
+        analysis: Some(profile.clone()),
+        source_measurements: observed.then(|| measured.clone()),
+        reviewed_scene: None,
+    };
+    let actor = Uuid::new_v4();
+    let create = |key: &str| CameraCommand {
+        actor,
+        key: key.parse().unwrap(),
+        action: CameraAction::Create(config.clone()),
+    };
+    let limits = CameraLimits {
+        active: 4,
+        raw_bytes: 16_000_000,
+    };
+    let apply = |command, inspected| store.mutate_camera_admitted(command, inspected, limits, 900);
+    assert_eq!(
+        store
+            .analysis_capacity(
+                config.source.clone(),
+                config.sampling,
+                measured.clone(),
+                None,
+                profile.clone()
+            )
+            .await
+            .unwrap()
+            .state,
+        CapacityState::Verified
+    );
+    assert!(matches!(
+        apply(create("unknown"), evaluated(false)).await,
+        Err(StoreError::AnalysisCapacity { .. })
+    ));
+    let (first, second) = tokio::join!(
+        apply(create("first"), evaluated(true)),
+        apply(create("second"), evaluated(true)),
+    );
+    let ((key, saved), rejected) = match first {
+        Ok(saved) => (("first", saved), second),
+        Err(error) => (("second", second.unwrap()), Err(error)),
+    };
+    assert!(matches!(rejected, Err(StoreError::AnalysisCapacity { .. })));
+    let first = saved.camera;
+    let retry = apply(create(key), evaluated(false)).await.unwrap();
+    assert_eq!(retry.camera.id, first.id);
+    let patch = |key: &str, value| CameraCommand {
+        actor,
+        key: key.parse().unwrap(),
+        action: CameraAction::Patch {
+            id: first.id,
+            revision: first.revision,
+            patch: value,
+        },
+    };
+    let changed = sw_protocol::CameraSampling {
+        fire_fps: 1,
+        ..config.sampling
+    };
+    assert!(matches!(
+        apply(
+            patch(
+                "sampling",
+                CameraPatch {
+                    sampling: Some(changed),
+                    ..Default::default()
+                }
+            ),
+            evaluated(false)
+        )
+        .await,
+        Err(StoreError::AnalysisCapacity { .. })
+    ));
+    apply(
+        patch(
+            "disable",
+            CameraPatch {
+                enabled: Some(false),
+                ..Default::default()
+            },
+        ),
+        CameraAdmission {
+            analysis: Some(profile.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let replacement = apply(create("replacement"), evaluated(true))
+        .await
+        .unwrap()
+        .camera;
+    drop(store);
+    let restored = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let active = restored.enabled_cameras().await.unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, replacement.id);
+    assert_eq!(active[0].source_measurements, Some(measured));
+}
+
+#[tokio::test]
 async fn a_cancelled_queued_command_does_not_mutate_and_retry_is_idempotent() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::open(

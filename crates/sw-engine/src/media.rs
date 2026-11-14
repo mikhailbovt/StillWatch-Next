@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     fs::{self, File},
     io::{self, Read, Write},
     net::{IpAddr, SocketAddr},
@@ -15,8 +15,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sw_domain::SourceScope;
 use sw_protocol::{
-    CameraConfig, CameraSource, Counter, Dimensions, IceServer, MediaStatus, StreamGrant,
-    StreamProfile, StreamRequest, UtcTimestamp, worker::FrameHeader,
+    CameraConfig, CameraSource, Counter, Dimensions, IceServer, MediaStatus, MediaWorkloadLimits,
+    SourceKind, SourceMeasurement, StreamGrant, StreamProfile, StreamRequest, UtcTimestamp,
+    worker::FrameHeader,
 };
 use sw_storage::{CameraRecord, Store};
 use tempfile::TempDir;
@@ -33,13 +34,11 @@ use crate::{
     CameraFrame, CameraRegistry, CaptureProcess, CaptureRead, Frame, FrameBudget,
     capture_process::reap,
     child_process::command,
-    registry::{FRAME_TIMEOUT, FrameClock, same_aspect_ratio},
+    registry::{FRAME_TIMEOUT, FrameClock, SourceRateSample, same_aspect_ratio},
 };
 
 const SDP_LIMIT: usize = 48 * 1024;
-const MAX_SESSIONS: usize = 32;
-const MAX_ENCODERS: usize = 8;
-const MAX_SNAPSHOT_ENCODERS: usize = 4;
+const SNAPSHOT_WINDOW: Duration = Duration::from_secs(60);
 const STAGE_PREFIX: &str = ".stillwatch-media-";
 const STAGE_SUFFIX_LEN: usize = 6;
 const ROUTER_CONFIG: &str = "mediamtx.json";
@@ -77,6 +76,8 @@ pub struct MediaConfig {
     pub ice_tcp: Option<SocketAddr>,
     pub advertised_ip: IpAddr,
     pub detail_frame_bytes: u32,
+    pub workload_limits: MediaWorkloadLimits,
+    pub qualified_workload: Option<sw_protocol::AnalysisWorkload>,
     pub turn: Option<TurnConfig>,
 }
 
@@ -193,6 +194,54 @@ struct State {
     publishers: HashMap<StreamKey, Publisher>,
 }
 
+struct PublisherBudget {
+    preview: Arc<Semaphore>,
+    detail: Arc<Semaphore>,
+    decoders: Arc<Semaphore>,
+    units: Arc<Semaphore>,
+    limits: MediaWorkloadLimits,
+}
+
+impl PublisherBudget {
+    fn new(limits: MediaWorkloadLimits) -> Self {
+        let semaphore = |count| Arc::new(Semaphore::new(usize::from(count)));
+        Self {
+            preview: semaphore(limits.preview_publishers),
+            detail: semaphore(limits.detail_publishers),
+            decoders: semaphore(limits.detail_decoders),
+            units: semaphore(limits.publisher_units),
+            limits,
+        }
+    }
+
+    fn reserve(
+        &self,
+        profile: StreamProfile,
+        main: bool,
+    ) -> Result<[Option<OwnedSemaphorePermit>; 3], MediaError> {
+        let (publishers, cost) = match profile {
+            StreamProfile::Preview => (&self.preview, self.limits.preview_units),
+            StreamProfile::Detail => (&self.detail, self.limits.detail_units),
+        };
+        let acquire = |semaphore: &Arc<Semaphore>, count| {
+            semaphore
+                .clone()
+                .try_acquire_many_owned(count)
+                .map_err(|_| MediaError::Capacity)
+        };
+        let publisher = acquire(publishers, 1)?;
+        let decoder = main.then(|| acquire(&self.decoders, 1)).transpose()?;
+        let cost = u32::from(cost)
+            + if main {
+                u32::from(self.limits.detail_decoder_units)
+            } else {
+                0
+            };
+        let work = acquire(&self.units, cost)?;
+        Ok([Some(publisher), decoder, Some(work)])
+    }
+}
+
 pub struct MediaAnswer {
     pub sdp: Vec<u8>,
     pub etag: Option<String>,
@@ -209,7 +258,8 @@ pub struct MediaService {
     read_secret: String,
     http: reqwest::Client,
     snapshots: Arc<Semaphore>,
-    encoders: Arc<Semaphore>,
+    snapshot_starts: Mutex<VecDeque<Instant>>,
+    publishers: PublisherBudget,
     detail_frames: FrameBudget,
     state: Mutex<State>,
 }
@@ -260,6 +310,7 @@ impl MediaService {
             router_ready: self.state.lock().is_ok_and(|state| state.ready),
             video_codec: "h264".into(),
             redacted_transcode: true,
+            workload_limits: Some(self.config.workload_limits),
         }
     }
 
@@ -269,7 +320,8 @@ impl MediaService {
         cameras: Arc<CameraRegistry>,
         store: Store,
     ) -> Result<Arc<Self>, MediaError> {
-        if config.ice_udp.port() < 1024
+        if !config.workload_limits.valid()
+            || config.ice_udp.port() < 1024
             || config.ice_udp.ip() != config.advertised_ip
             || config
                 .ice_tcp
@@ -300,6 +352,7 @@ impl MediaService {
             .map_err(io::Error::other)?;
         let detail_frames =
             FrameBudget::new(config.detail_frame_bytes).map_err(|_| MediaError::Invalid)?;
+        let limits = config.workload_limits;
         let service = Arc::new(Self {
             config,
             encoder,
@@ -310,8 +363,9 @@ impl MediaService {
             ingest,
             read_secret,
             http,
-            snapshots: Arc::new(Semaphore::new(MAX_SNAPSHOT_ENCODERS)),
-            encoders: Arc::new(Semaphore::new(MAX_ENCODERS)),
+            snapshots: Arc::new(Semaphore::new(usize::from(limits.snapshot_encoders))),
+            snapshot_starts: Mutex::new(VecDeque::new()),
+            publishers: PublisherBudget::new(limits),
             detail_frames,
             state: Mutex::new(State {
                 ready: false,
@@ -446,6 +500,23 @@ impl MediaService {
                     ..
                 }
             );
+        if let Some(workload) = &self.config.qualified_workload
+            && main
+            && !workload
+                .detail_source
+                .as_ref()
+                .zip(
+                    current
+                        .source_measurements
+                        .as_ref()
+                        .and_then(|measured| measured.detail.as_ref()),
+                )
+                .is_some_and(|(expected, measured)| {
+                    expected.admits_source(SourceKind::from(&current.config.source), measured)
+                })
+        {
+            return Err(MediaError::Capacity);
+        }
         let key = StreamKey {
             scope,
             profile: request.profile,
@@ -454,7 +525,7 @@ impl MediaService {
         if !state.ready {
             return Err(MediaError::Unavailable);
         }
-        if state.viewers.len() >= MAX_SESSIONS
+        if state.viewers.len() >= usize::from(self.config.workload_limits.viewer_sessions)
             || state
                 .viewers
                 .values()
@@ -465,9 +536,7 @@ impl MediaService {
             return Err(MediaError::Capacity);
         }
         if let Entry::Vacant(entry) = state.publishers.entry(key) {
-            let encoder = Arc::clone(&self.encoders)
-                .try_acquire_owned()
-                .map_err(|_| MediaError::Capacity)?;
+            let reservation = self.publishers.reserve(request.profile, main)?;
             let (stop, shutdown) = watch::channel(false);
             let service = self.clone();
             let path = format!("cam-{}", random_token()?);
@@ -479,7 +548,7 @@ impl MediaService {
                 (None, None)
             };
             let task = tokio::spawn(async move {
-                let _encoder = encoder;
+                let _reservation = reservation;
                 if let Some(status) = startup_status {
                     service
                         .publish_main(key, &target, current.config, status, shutdown)
@@ -763,14 +832,34 @@ impl MediaService {
     }
 
     pub async fn snapshot(&self, camera: Uuid) -> Result<(Vec<u8>, u64), MediaError> {
-        let permit = Arc::clone(&self.snapshots)
-            .try_acquire_owned()
-            .map_err(|_| MediaError::Capacity)?;
         let frame = self
             .cameras
             .latest(camera)
             .filter(|frame| usable(frame))
             .ok_or(MediaError::Unavailable)?;
+        let permit = self
+            .snapshots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| MediaError::Capacity)?;
+        let limit = self.config.workload_limits.snapshot_requests_per_minute as usize;
+        if limit > 0 {
+            let mut starts = self
+                .snapshot_starts
+                .lock()
+                .map_err(|_| MediaError::Unavailable)?;
+            let now = Instant::now();
+            while starts
+                .front()
+                .is_some_and(|start| now - *start >= SNAPSHOT_WINDOW)
+            {
+                starts.pop_front();
+            }
+            if starts.len() >= limit {
+                return Err(MediaError::Capacity);
+            }
+            starts.push_back(now);
+        }
         let captured_at = frame.captured_at;
         let scope = frame.scope;
         let jpeg = tokio::task::spawn_blocking(move || {
@@ -950,14 +1039,7 @@ impl MediaService {
         // Keep the global reservation until the encoder drops its last frame.
         let mut allocation = None;
         tokio::join!(
-            self.read_main_frames(
-                key,
-                !config.privacy_masks.is_empty(),
-                &mut process,
-                &mut allocation,
-                startup,
-                latest
-            ),
+            self.read_main_frames(key, &config, &mut process, &mut allocation, startup, latest),
             self.publish(key, path, Some(frames), stop),
         );
         let _ = process.stop().await;
@@ -966,13 +1048,15 @@ impl MediaService {
     async fn read_main_frames(
         &self,
         key: StreamKey,
-        masked: bool,
+        config: &CameraConfig,
         process: &mut CaptureProcess,
         allocation: &mut Option<(OwnedSemaphorePermit, FrameBudget)>,
         startup: watch::Sender<MainStartup>,
         latest: watch::Sender<Option<(Instant, Arc<Frame>)>>,
     ) {
         let mut clock = FrameClock::default();
+        let mut rate_sample: Option<SourceRateSample> = None;
+        let mut qualified_rate = false;
         loop {
             let read = tokio::select! {
                 biased;
@@ -1001,12 +1085,44 @@ impl MediaService {
             if !advances {
                 continue;
             }
-            if masked
+            if !config.privacy_masks.is_empty()
                 && self.camera_frame(key).is_none_or(|analysis| {
                     !same_aspect_ratio(dimensions(analysis.frame.header), dimensions(frame.header))
                 })
             {
                 return;
+            }
+            if let Some(expected) = self
+                .config
+                .qualified_workload
+                .as_ref()
+                .and_then(|work| work.detail_source.as_ref())
+            {
+                let header = frame.header;
+                let mut ready = false;
+                if let Some(sample) = &mut rate_sample {
+                    if sample.add(header) {
+                        let measured = SourceMeasurement {
+                            dimensions: dimensions(header),
+                            codec: process.codec().map(|codec| codec.to_string()),
+                            rate: sample.measure(process.advertised_millifps()),
+                        };
+                        if !expected.admits_source(SourceKind::from(&config.source), &measured) {
+                            startup.send_replace(MainStartup::Capacity);
+                            return;
+                        }
+                        ready = true;
+                        qualified_rate = true;
+                    }
+                } else {
+                    rate_sample = Some(SourceRateSample::new(header));
+                }
+                if ready {
+                    rate_sample = None;
+                }
+                if !qualified_rate {
+                    continue;
+                }
             }
             latest.send_replace(Some((now, Arc::new(frame))));
             startup.send_if_modified(|state| {
@@ -1262,4 +1378,43 @@ fn valid_route(path: &str, route: &str) -> Option<String> {
     let suffix = route.strip_prefix(&prefix)?;
     Uuid::parse_str(suffix).ok()?;
     Some(route.to_owned())
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn failed_weighted_admission_releases_all_partially_acquired_permits() {
+        let mut limits = MediaWorkloadLimits::DEFAULT_LIMITS;
+        limits.publisher_units = 5;
+        limits.detail_units = 2;
+        limits.detail_decoder_units = 2;
+        limits.detail_decoders = 1;
+        limits.preview_publishers = 2;
+        let budget = PublisherBudget::new(limits);
+        let preview_a = budget.reserve(StreamProfile::Preview, false).unwrap();
+        let preview_b = budget.reserve(StreamProfile::Preview, false).unwrap();
+        assert!(matches!(
+            budget.reserve(StreamProfile::Preview, false),
+            Err(MediaError::Capacity)
+        ));
+        assert!(matches!(
+            budget.reserve(StreamProfile::Detail, true),
+            Err(MediaError::Capacity)
+        ));
+        drop(preview_a);
+        let main = budget.reserve(StreamProfile::Detail, true).unwrap();
+        assert!(matches!(
+            budget.reserve(StreamProfile::Detail, true),
+            Err(MediaError::Capacity)
+        ));
+        assert!(matches!(
+            budget.reserve(StreamProfile::Preview, false),
+            Err(MediaError::Capacity)
+        ));
+        drop((main, preview_b));
+        assert_eq!(budget.units.available_permits(), 5);
+        assert_eq!(budget.decoders.available_permits(), 1);
+    }
 }

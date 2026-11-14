@@ -279,6 +279,7 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
         version: ApiVersion::CURRENT,
         camera_sampling: state.cameras.is_some(),
         camera_probe_capacity: state.cameras.is_some(),
+        analysis_capacity_probe: state.cameras.is_some(),
         camera_priority: state.cameras.is_some(),
         camera_main_stream: state.cameras.is_some(),
     })
@@ -303,6 +304,14 @@ async fn core_status(
             |vision| vision.inference_status(principal.owner().is_ok()),
         ),
         media: state.media.as_ref().map(|media| media.status()),
+        analysis_capacity: if principal.owner().is_ok() {
+            state
+                .cameras
+                .as_ref()
+                .map(|registry| registry.analysis_capacity())
+        } else {
+            None
+        },
         writer: if local {
             state.store.writer_status()
         } else {

@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use sw_protocol::{Bootstrap, Counter, Health, HealthEventPage, Snapshot};
+use sw_protocol::{
+    Bootstrap, Counter, Health, HealthEventPage, Snapshot, SourceProbe, SourceProbeRequest,
+};
 use uuid::Uuid;
 
 use crate::{Error, PairedEndpoint, endpoint_url, health_events_path, valid_token};
@@ -69,13 +71,31 @@ impl Client {
     pub fn incident(&self, id: Uuid) -> Result<sw_protocol::Incident, Error> {
         self.get(&format!("/api/v2/incidents/{id}"))
     }
+    pub fn probe_source(&self, request: &SourceProbeRequest) -> Result<SourceProbe, Error> {
+        let url = self
+            .endpoint
+            .join("/api/v2/source-probes")
+            .map_err(|_| Error::Endpoint)?;
+        self.send(
+            self.http
+                .post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(serde_json::to_vec(request).map_err(|_| Error::Protocol)?)
+                .timeout(super::CAMERA_SETUP_TIMEOUT),
+        )
+    }
 
     fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
-        use std::io::Read;
         let url = self.endpoint.join(path).map_err(|_| Error::Endpoint)?;
-        let response = self
-            .http
-            .get(url)
+        self.send(self.http.get(url))
+    }
+
+    fn send<T: DeserializeOwned>(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> Result<T, Error> {
+        use std::io::Read;
+        let response = request
             .bearer_auth(&self.token)
             .send()
             .map_err(Error::transport)?;

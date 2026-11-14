@@ -1,14 +1,17 @@
+use std::sync::Arc;
+
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sw_domain::{SourceScope, UnixMillis};
 use sw_protocol::{
-    CameraConfig, CameraPatch, CaptureCapacity, Dimensions, IdempotencyKey, MAX_HEIGHT, MAX_WIDTH,
+    AnalysisCapacity, CameraConfig, CameraPatch, CameraSampling, CameraSource, CapacityState,
+    CaptureCapacity, Dimensions, IdempotencyKey, MAX_HEIGHT, MAX_WIDTH,
 };
 use uuid::Uuid;
 
 use crate::{
-    MAX_PAGE, Store, StoreError,
+    AnalysisAdmission, CameraSourceMeasurements, MAX_PAGE, Store, StoreError,
     db::{id, row_counter, sql_counter},
 };
 
@@ -24,6 +27,8 @@ pub struct CameraRecord {
     pub dimensions: Option<Dimensions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewed_scene: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_measurements: Option<CameraSourceMeasurements>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,6 +83,14 @@ impl CameraLimits {
     }
 }
 
+#[derive(Default)]
+pub struct CameraAdmission {
+    pub dimensions: Option<Dimensions>,
+    pub reviewed_scene: Option<Vec<u8>>,
+    pub source_measurements: Option<CameraSourceMeasurements>,
+    pub analysis: Option<Arc<AnalysisAdmission>>,
+}
+
 impl Store {
     pub async fn current_camera_scopes(
         &self,
@@ -128,6 +141,21 @@ impl Store {
         .await
     }
 
+    pub async fn analysis_capacity(
+        &self,
+        source: CameraSource,
+        sampling: CameraSampling,
+        measured: CameraSourceMeasurements,
+        replacing: Option<Uuid>,
+        profile: Arc<AnalysisAdmission>,
+    ) -> Result<AnalysisCapacity, StoreError> {
+        self.call(move |db| {
+            let slots = available_compute_slots(&db.conn, replacing, &profile)?;
+            Ok(profile.source_capacity(&source, sampling, Some(&measured), slots))
+        })
+        .await
+    }
+
     pub async fn cameras(
         &self,
         after: Option<Uuid>,
@@ -148,7 +176,7 @@ impl Store {
         self.call(move |db| {
             let allowed = camera_filter(allowed)?;
             let mut statement = db.conn.prepare(
-                "SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene FROM cameras
+                "SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene, source_measurements FROM cameras
                  WHERE deleted = 0 AND (?1 IS NULL OR id > ?1)
                  AND (?3 IS NULL OR lower(hex(id)) IN (SELECT value FROM json_each(?3))) ORDER BY id LIMIT ?2",
             )?;
@@ -161,7 +189,7 @@ impl Store {
     pub async fn enabled_cameras(&self) -> Result<Vec<CameraRecord>, StoreError> {
         self.call(|db| {
             let mut statement = db.conn.prepare(
-                "SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene FROM cameras WHERE enabled = 1 AND deleted = 0 ORDER BY id",
+                "SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene, source_measurements FROM cameras WHERE enabled = 1 AND deleted = 0 ORDER BY id",
             )?;
             Ok(statement.query_map([], record)?.collect::<Result<Vec<_>, _>>()?)
         }).await
@@ -183,13 +211,34 @@ impl Store {
         limits: CameraLimits,
         now: UnixMillis,
     ) -> Result<CameraResult, StoreError> {
+        self.mutate_camera_admitted(
+            command,
+            CameraAdmission {
+                dimensions,
+                reviewed_scene,
+                ..CameraAdmission::default()
+            },
+            limits,
+            now,
+        )
+        .await
+    }
+
+    pub async fn mutate_camera_admitted(
+        &self,
+        command: CameraCommand,
+        evaluated: CameraAdmission,
+        limits: CameraLimits,
+        now: UnixMillis,
+    ) -> Result<CameraResult, StoreError> {
         self.call(move |db| {
+            let CameraAdmission { dimensions, reviewed_scene, source_measurements, analysis } = evaluated;
             let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if let Some(result) = cached(&tx, &command, now)? { return Ok(result); }
             let (camera, deleted) = match &command.action {
                 CameraAction::Create(config) => (CameraRecord {
                     id: Uuid::new_v4(), revision: 1, scene_revision: 1, epoch: 0,
-                    config: config.clone(), dimensions, reviewed_scene,
+                    config: config.clone(), dimensions, reviewed_scene, source_measurements,
                 }, false),
                 CameraAction::Patch { id, revision, patch } => {
                     let previous = check_revision(&tx, *id, *revision)?;
@@ -199,6 +248,12 @@ impl Store {
                         || (dimensions.is_some() && dimensions != previous.dimensions)
                         || patch.controlled_fire_regions.is_some();
                     let reviewed_scene = if scene_changed { reviewed_scene } else { previous.reviewed_scene.clone() };
+                    let source_measurements = if config.enabled && config.source == previous.config.source
+                        && dimensions == previous.dimensions {
+                        source_measurements.or_else(|| previous.source_measurements.clone())
+                    } else {
+                        source_measurements
+                    };
                     // Invalidate frames when consent, sampling or availability changes.
                     // The commit precedes the capture worker's restart.
                     let epoch = if config.cloud_consent != previous.config.cloud_consent
@@ -210,7 +265,7 @@ impl Store {
                         previous.epoch
                     };
                     (CameraRecord {
-                        config, dimensions, reviewed_scene, epoch, revision: next(previous.revision)?,
+                        config, dimensions, reviewed_scene, source_measurements, epoch, revision: next(previous.revision)?,
                         scene_revision: if scene_changed { next(previous.scene_revision)? } else { previous.scene_revision },
                         ..previous
                     }, false)
@@ -233,20 +288,33 @@ impl Store {
                 if !capacity.fits {
                     return Err(StoreError::CameraCapacity);
                 }
+                if let Some(profile) = analysis {
+                    let available = available_compute_slots(&tx, Some(camera.id), &profile)?;
+                    let capacity = profile.camera_capacity(&camera.config, camera.source_measurements.as_ref(), available);
+                    if capacity.state != CapacityState::Verified {
+                        return Err(StoreError::AnalysisCapacity {
+                            reason: format!("{}. Profile {} admits up to {} cameras at Pose {} fps and Fire {} fps.",
+                                capacity.reason, profile.id, profile.workload.cameras,
+                                profile.workload.sampling.pose_fps, profile.workload.sampling.fire_fps),
+                        });
+                    }
+                }
                 capacity.required_raw_bytes
             } else { 0 };
             let config = serde_json::to_string(&camera.config)?;
             let revision = sql_counter(camera.revision)?;
+            let measurements = camera.source_measurements.as_ref().map(serde_json::to_string).transpose()?;
             tx.execute(
-                "INSERT INTO cameras(id, revision, scene_revision, source_epoch, enabled, deleted, bytes_reserved, config, width, height, reviewed_scene)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO cameras(id, revision, scene_revision, source_epoch, enabled, deleted, bytes_reserved, config, width, height, reviewed_scene, source_measurements)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, scene_revision = excluded.scene_revision,
                    source_epoch = excluded.source_epoch,
                    enabled = excluded.enabled, deleted = excluded.deleted, bytes_reserved = excluded.bytes_reserved,
-                   config = excluded.config, width = excluded.width, height = excluded.height, reviewed_scene = excluded.reviewed_scene",
+                   config = excluded.config, width = excluded.width, height = excluded.height, reviewed_scene = excluded.reviewed_scene,
+                   source_measurements = excluded.source_measurements",
                 params![id(&camera.id), revision, sql_counter(camera.scene_revision)?, sql_counter(camera.epoch)?, camera.config.enabled,
                     deleted, reserved, config, camera.dimensions.map(|d| d.width), camera.dimensions.map(|d| d.height),
-                    camera.reviewed_scene],
+                    camera.reviewed_scene, measurements],
             )?;
             tx.execute("INSERT INTO camera_config_versions VALUES (?, ?, ?, ?, ?, ?)", params![id(&camera.id), revision, id(&command.actor), now, config, deleted])?;
             if !camera.config.enabled {
@@ -360,8 +428,34 @@ fn capture_capacity(
     })
 }
 
+fn available_compute_slots(
+    conn: &Connection,
+    replacing: Option<Uuid>,
+    profile: &AnalysisAdmission,
+) -> Result<u32, StoreError> {
+    let mut query = conn.prepare(
+        "SELECT config, source_measurements FROM cameras
+         WHERE enabled = 1 AND deleted = 0 AND (?1 IS NULL OR id != ?1)",
+    )?;
+    let mut rows = query.query([replacing.as_ref().map(id)])?;
+    let mut active = 0;
+    while let Some(row) = rows.next()? {
+        let config: CameraConfig =
+            serde_json::from_str(row.get_ref(0)?.as_str().map_err(|_| StoreError::Schema)?)?;
+        let measured: Option<String> = row.get(1)?;
+        let measured = measured.as_deref().map(serde_json::from_str).transpose()?;
+        if profile.matches_camera(&config, measured.as_ref()) {
+            active += 1;
+            if active == profile.workload.cameras {
+                return Ok(0);
+            }
+        }
+    }
+    Ok(profile.workload.cameras.saturating_sub(active))
+}
+
 pub(crate) fn get(conn: &Connection, camera: Uuid) -> Result<CameraRecord, StoreError> {
-    conn.query_row("SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene FROM cameras WHERE id = ? AND deleted = 0", [id(&camera)], record)
+    conn.query_row("SELECT id, revision, scene_revision, source_epoch, config, width, height, reviewed_scene, source_measurements FROM cameras WHERE id = ? AND deleted = 0", [id(&camera)], record)
         .optional()?.ok_or(StoreError::NotFound)
 }
 
@@ -370,6 +464,7 @@ fn record(row: &Row<'_>) -> rusqlite::Result<CameraRecord> {
     let config: String = row.get(4)?;
     let width: Option<u32> = row.get(5)?;
     let height: Option<u32> = row.get(6)?;
+    let measurements: Option<String> = row.get(8)?;
     Ok(CameraRecord {
         id: Uuid::from_slice(&camera).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(e))
@@ -384,6 +479,16 @@ fn record(row: &Row<'_>) -> rusqlite::Result<CameraRecord> {
             .zip(height)
             .map(|(width, height)| Dimensions { width, height }),
         reviewed_scene: row.get(7)?,
+        source_measurements: measurements
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?,
     })
 }
 

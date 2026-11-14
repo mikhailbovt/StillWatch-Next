@@ -3,6 +3,7 @@
 mod alerts;
 mod analysis_metrics;
 mod cameras;
+mod capacity;
 mod evidence;
 mod health;
 mod media;
@@ -19,6 +20,7 @@ use uuid::Uuid;
 pub use alerts::*;
 pub use analysis_metrics::*;
 pub use cameras::*;
+pub use capacity::*;
 pub use evidence::*;
 pub use health::*;
 pub use media::*;
@@ -291,6 +293,8 @@ pub struct Bootstrap {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_probe_capacity: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub analysis_capacity_probe: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_priority: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub camera_main_stream: bool,
@@ -356,6 +360,56 @@ pub struct MediaStatus {
     pub router_ready: bool,
     pub video_codec: String,
     pub redacted_transcode: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_limits: Option<MediaWorkloadLimits>,
+}
+
+/// Simultaneous allowances on the host, including both encoder and decoder work.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct MediaWorkloadLimits {
+    pub preview_publishers: u16,
+    pub detail_publishers: u16,
+    pub detail_decoders: u16,
+    pub viewer_sessions: u16,
+    pub publisher_units: u16,
+    pub preview_units: u16,
+    pub detail_units: u16,
+    pub detail_decoder_units: u16,
+    pub snapshot_encoders: u16,
+    pub snapshot_requests_per_minute: u32,
+}
+
+impl MediaWorkloadLimits {
+    pub const DEFAULT_LIMITS: Self = Self {
+        preview_publishers: 8,
+        detail_publishers: 8,
+        detail_decoders: 8,
+        viewer_sessions: 32,
+        publisher_units: 8,
+        preview_units: 1,
+        detail_units: 1,
+        detail_decoder_units: 0,
+        snapshot_encoders: 4,
+        snapshot_requests_per_minute: 0,
+    };
+
+    pub fn valid(self) -> bool {
+        self.viewer_sessions <= 128
+            && self.preview_publishers <= 32
+            && self.detail_publishers <= 32
+            && self.detail_decoders <= self.detail_publishers
+            && self.snapshot_encoders <= 16
+            && self.snapshot_requests_per_minute <= 3_600
+            && self.preview_units > 0
+            && self.detail_units > 0
+            && (self.preview_publishers == 0 || self.preview_units <= self.publisher_units)
+            && (self.detail_publishers == 0 || self.detail_units <= self.publisher_units)
+            && (self.detail_decoders == 0
+                || u32::from(self.detail_units) + u32::from(self.detail_decoder_units)
+                    <= u32::from(self.publisher_units))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -369,6 +423,8 @@ pub struct CoreStatus {
     /// Bounded local snapshot sized by the camera registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_coverage: Option<Vec<CameraCoverage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_capacity: Option<AnalysisCapacity>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

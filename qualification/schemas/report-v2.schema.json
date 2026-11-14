@@ -9,6 +9,7 @@
     "run_id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
     "candidate_digest": {"$ref": "#/$defs/digest"},
     "profile_digest": {"$ref": "#/$defs/digest"},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
     "run_manifest_digest": {"$ref": "#/$defs/digest"},
     "native_wall_seconds": {"$ref": "#/$defs/duration"},
     "source_video_seconds": {"$ref": "#/$defs/duration"},

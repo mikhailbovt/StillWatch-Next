@@ -11,12 +11,28 @@
       ],
       "format": "uuid"
     },
+    "execution_profile_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "privacy_masks": {
       "type": "array",
       "default": [],
       "items": {
         "$ref": "#/$defs/MaskRect"
       }
+    },
+    "sampling": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CameraSampling"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "source": {
       "$ref": "#/$defs/CameraSource"
@@ -27,6 +43,35 @@
     "source"
   ],
   "$defs": {
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
+      ]
+    },
     "CameraSource": {
       "oneOf": [
         {

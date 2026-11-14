@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod admission;
 mod alerts;
 mod backup;
 mod budget;
@@ -36,9 +37,12 @@ use uuid::Uuid;
 
 use db::Database;
 
+pub use admission::{AnalysisAdmission, CameraSourceMeasurements};
 pub use backup::{BackupLimits, restore_backup, restore_backup_with_limits};
 pub use budget::DEFAULT_DATABASE_QUOTA_BYTES;
-pub use cameras::{CameraAction, CameraCommand, CameraLimits, CameraRecord, CameraResult};
+pub use cameras::{
+    CameraAction, CameraAdmission, CameraCommand, CameraLimits, CameraRecord, CameraResult,
+};
 pub use evidence::{
     EvidenceFailure, EvidenceImage, EvidenceOutcome, EvidenceResult, EvidenceWrite, ObservationTime,
 };
@@ -94,6 +98,8 @@ pub enum StoreError {
     CursorExpired,
     #[error("camera configuration exceeds active capture capacity")]
     CameraCapacity,
+    #[error("{reason}")]
+    AnalysisCapacity { reason: String },
     #[error("invalid storage request")]
     Invalid,
     #[error("the device credential or pairing challenge is invalid, expired or revoked")]

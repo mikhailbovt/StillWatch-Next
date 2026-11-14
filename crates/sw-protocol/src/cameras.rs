@@ -436,6 +436,10 @@ pub struct SourceProbeRequest {
     /// Replace this camera's reservation in the capacity estimate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<CameraSampling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -449,6 +453,10 @@ pub struct SourceProbe {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_capacity: Option<CaptureCapacity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_rate: Option<crate::SourceRate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_capacity: Option<crate::AnalysisCapacity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_stream: Option<MainStreamProbe>,
 }
 
@@ -459,6 +467,28 @@ pub struct MainStreamProbe {
     pub native_pts: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_rate: Option<crate::SourceRate>,
+}
+
+impl SourceProbe {
+    pub fn measurement(&self) -> crate::SourceMeasurement {
+        crate::SourceMeasurement {
+            dimensions: self.dimensions,
+            codec: self.codec.clone(),
+            rate: self.source_rate.unwrap_or_default(),
+        }
+    }
+}
+
+impl MainStreamProbe {
+    pub fn measurement(&self) -> crate::SourceMeasurement {
+        crate::SourceMeasurement {
+            dimensions: self.dimensions,
+            codec: self.codec.clone(),
+            rate: self.source_rate.unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

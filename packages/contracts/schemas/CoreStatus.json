@@ -3,6 +3,16 @@
   "title": "CoreStatus",
   "type": "object",
   "properties": {
+    "analysis_capacity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisCapacity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "camera_coverage": {
       "description": "Bounded local snapshot sized by the camera registry.",
       "type": [
@@ -45,6 +55,57 @@
     "inference"
   ],
   "$defs": {
+    "AnalysisCapacity": {
+      "type": "object",
+      "properties": {
+        "admissible_workload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available_camera_slots": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "limiting_resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CapacityState"
+        }
+      },
+      "required": [
+        "state",
+        "reason"
+      ]
+    },
     "AnalysisCoverage": {
       "type": "object",
       "properties": {
@@ -91,6 +152,54 @@
         "starting",
         "ready",
         "degraded"
+      ]
+    },
+    "AnalysisWorkload": {
+      "type": "object",
+      "properties": {
+        "cameras": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "detail_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media": {
+          "$ref": "#/$defs/MediaWorkloadLimits"
+        },
+        "min_fire_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_pose_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sampling": {
+          "$ref": "#/$defs/CameraSampling"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceWorkload"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "sampling",
+        "cameras",
+        "min_pose_per_wall_minute",
+        "min_fire_per_wall_minute",
+        "media"
       ]
     },
     "CameraCoverage": {
@@ -143,6 +252,43 @@
         "analysis"
       ]
     },
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
+      ]
+    },
+    "CapacityState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unknown",
+        "insufficient"
+      ]
+    },
     "CaptureState": {
       "type": "string",
       "enum": [
@@ -161,6 +307,25 @@
       "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "Dimensions": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
     },
     "InferenceBackend": {
       "type": "string",
@@ -263,12 +428,144 @@
         },
         "video_codec": {
           "type": "string"
+        },
+        "workload_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaWorkloadLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "router_ready",
         "video_codec",
         "redacted_transcode"
+      ]
+    },
+    "MediaWorkloadLimits": {
+      "description": "Simultaneous allowances on the host, including both encoder and decoder work.",
+      "type": "object",
+      "properties": {
+        "detail_decoder_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_decoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "publisher_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_encoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_requests_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "viewer_sessions": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "preview_publishers",
+        "detail_publishers",
+        "detail_decoders",
+        "viewer_sessions",
+        "publisher_units",
+        "preview_units",
+        "detail_units",
+        "detail_decoder_units",
+        "snapshot_encoders",
+        "snapshot_requests_per_minute"
+      ]
+    },
+    "SourceKind": {
+      "type": "string",
+      "enum": [
+        "paced_replay",
+        "unpaced_replay",
+        "rtsp_tcp",
+        "rtsp_udp",
+        "rtsps",
+        "usb"
+      ]
+    },
+    "SourceWorkload": {
+      "description": "Named profiles admit only sources whose decoder workload matches this class.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "max_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "codec",
+        "dimensions",
+        "min_millifps",
+        "max_millifps"
       ]
     },
     "TaskCounts": {

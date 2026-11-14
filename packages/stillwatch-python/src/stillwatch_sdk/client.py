@@ -173,10 +173,15 @@ class AsyncClient:
 
     async def probe(
         self, source: Json, masks: list[Json] | None = None, *, camera_id: str | None = None,
+        sampling: Json | None = None, execution_profile_id: str | None = None,
     ) -> Json:
         body: Json = {"source": source, "privacy_masks": masks or []}
         if camera_id is not None:
             body["camera_id"] = uuid(camera_id)
+        if sampling is not None:
+            body["sampling"] = sampling
+        if execution_profile_id is not None:
+            body["execution_profile_id"] = execution_profile_id
         return await self._object("POST", "/api/v2/source-probes", body=body, timeout=CAMERA_SETUP)
 
     async def capture_devices(self) -> list[Json]:

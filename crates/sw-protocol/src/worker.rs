@@ -21,6 +21,7 @@ pub const MODEL_INITIALIZATION_FAILED: [u8; 4] = *b"SWIS";
 pub const RUNTIME_UNAVAILABLE: [u8; 4] = *b"SWIR";
 pub const HEADER_LEN: usize = 56;
 pub const CODEC_HEADER_LEN: usize = 36;
+pub const MAX_SOURCE_MILLIFPS: u32 = 240_000;
 pub const MAX_FRAME_BYTES: u32 = MAX_WIDTH * MAX_HEIGHT * 3;
 const MISSING_PTS: i64 = i64::MIN;
 

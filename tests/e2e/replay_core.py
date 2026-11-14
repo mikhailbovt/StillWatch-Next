@@ -162,8 +162,14 @@ def run(core, worker, ffmpeg):
             }
             assert (sources / uploaded["file"]).read_bytes() == fixture
             assert client.call("GET", "/bootstrap/info", authorized=False)[1]["camera_probe_capacity"]
-            status, report = client.call("POST", probe_path, {"source": source})
+            assert client.call("GET", "/bootstrap/info", authorized=False)[1]["analysis_capacity_probe"]
+            status, report = client.call("POST", probe_path, {
+                "source": source, "sampling": {"pose_fps": 3, "fire_fps": 1, "evidence_fps": 2},
+            })
             assert status == 200 and report["codec"] == "h264", (status, report)
+            assert report["analysis_capacity"]["state"] == "unknown", report
+            assert report["source_rate"]["quality"] == "observed", report
+            assert report["source_rate"]["advertised_millifps"] == report["source_rate"]["observed_millifps"], report
             assert report["capture_capacity"] == {
                 "fits": True, "available_camera_slots": 4,
                 "available_raw_bytes": 128 * 1024 * 1024,

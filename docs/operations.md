@@ -17,6 +17,14 @@ sudo -u stillwatch stillwatch-cli doctor --data-dir /var/lib/stillwatch
 
 The Core can start without models and report its capture and storage state. To enable analysis, provision a verified model pack and configure its manifest digest. In the Linux service environment, use STILLWATCH_MODEL_DIR and STILLWATCH_MODEL_SHA256. In Windows core.json, set model_pack, model_manifest_sha256, ort_library, and ort_library_sha256. The installed manifest provides the expected ORT digest. An administrator provides the trusted model digest separately.
 
+## Analysis and viewing capacity
+
+The camera probe reports raw capture memory and measured source rate. Its analysis capacity estimate is `unknown` until Core loads a matching qualified execution profile. The owner status reports the active profile and allowance. A verified profile reserves compute when an enabled camera is committed. A probe can include the camera ID when replacing a reservation and the intended Pose, Fire and evidence sampling. Restart reapplies the profile to enabled cameras.
+
+Use `stillwatch-core --data-dir DATA --execution-host` to collect the current fingerprint. Supply the same model settings to include the configured CUDA device. The capture worker's `capture-doctor` reports the decoder identity. To activate a verified execution profile, set `execution_profile` in the protected Core settings file with `profile_file`, `profile_sha256`, `report_file`, and `report_sha256`. Use absolute paths and SHA-256 hex. The profile digest must be the validator report's `execution_profile_digest`. Core checks the report, fingerprint, runtime pins, role hashes, tensor shape and operating settings at startup. A mismatch reports unknown capacity and preserves locally configured operation.
+
+Without a matching profile, optional `media_workload_limits` in Core settings controls preview and detail publishers, additional detail decoder permits, total weighted publisher units, concurrent viewers, concurrent JPEG encoders and the trailing-minute JPEG request budget. A matching profile sets these allowances. Viewers share the publisher for the same camera scope and stream profile. Closing the last viewer releases resources after the publisher stops. Additional viewers or JPEG work can receive HTTP 429 while local analysis continues.
+
 The packaged worker's capture-doctor command reports whether the loaded libav build can confine RTSP connections. Its doctor command also checks that the provided ORT runtime can open all three pinned ONNX graphs.
 
 ~~~text

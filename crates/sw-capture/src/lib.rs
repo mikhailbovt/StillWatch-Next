@@ -7,7 +7,7 @@ use std::io;
 use thiserror::Error;
 
 pub use native::{Decoder, ReadLimits};
-pub use native::{confined_rtsp_available, devices};
+pub use native::{confined_rtsp_available, decoder_identity, devices};
 
 pub struct CaptureDevice {
     pub device_id: String,

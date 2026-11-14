@@ -370,6 +370,15 @@ def run(args):
             ]
             if args.detail_budget_test:
                 media_flags.extend(["--media-detail-frame-bytes", str(640 * 480 * 3 * 3 - 1)])
+            if args.media_admission:
+                settings = root / "media-limits.json"
+                settings.write_text(json.dumps({"media_workload_limits": {
+                    "preview_publishers": 1, "detail_publishers": 1, "detail_decoders": 1,
+                    "viewer_sessions": 4, "publisher_units": 3, "preview_units": 1,
+                    "detail_units": 2, "detail_decoder_units": 1, "snapshot_encoders": 1,
+                    "snapshot_requests_per_minute": 16,
+                }}), encoding="utf-8")
+                media_flags.extend(["--settings-file", str(settings)])
             if args.model_pack:
                 media_flags.extend(["--model-pack", str(args.model_pack),
                                     "--model-manifest-sha256", sha(args.model_pack / "models.lock.json"),
@@ -392,6 +401,9 @@ def run(args):
                 assert report["dimensions"] == {"width": 320, "height": 240}
                 assert report["main_stream"]["dimensions"] == {"width": 640, "height": 480}, report
                 assert report["main_stream"]["codec"] == args.input_codec, report
+                for stream in (report, report["main_stream"]):
+                    assert stream["source_rate"]["quality"] == "observed", report
+                    assert stream["source_rate"]["observed_millifps"] == 12_000, report
                 for path in ("rtsp://127.0.0.1:1/detail", source["stream_path"], "/wrong_geometry"):
                     status, problem = local.call("POST", "/api/v2/source-probes", {
                         "source": source | {"main_stream_path": path}, "privacy_masks": masks,
@@ -445,7 +457,43 @@ def run(args):
                     finally:
                         await peer.close()
                 asyncio.run(restart_detail())
-            asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
+            if args.media_admission:
+                async def reject_excess():
+                    peer, track, grant = await connect(lan, session, camera_id, turn_url, turn_certificate,
+                                                       profile="detail", dimensions=(640, 480))
+                    token = session["access_token"]
+                    try:
+                        _, limits = local.call("GET", "/api/v2/status")
+                        assert limits["media"]["workload_limits"]["publisher_units"] == 3
+                        status, problem = lan.request("POST", "/api/v2/stream-sessions",
+                                                      {"camera_id": camera_id, "profile": "preview"}, token)
+                        assert status == 429, (status, problem)
+                        before = local.camera(camera_id)["runtime"]["analysis"]
+                        await asyncio.wait_for(track.recv(), 3)
+                        if args.model_pack:
+                            def accepted():
+                                current = local.camera(camera_id)["runtime"]["analysis"]
+                                return all(int(current[key]) > int(before[key]) for key in ("pose_frames", "fire_frames"))
+                            await asyncio.to_thread(until, accepted, 8)
+                        jpeg = f"/api/v2/cameras/{camera_id}/snapshot.jpg"
+                        for _ in range(16):
+                            status, headers, data = await asyncio.to_thread(request, lan, token, "GET", jpeg)
+                            assert status == 200 and data.startswith(b"\xff\xd8"), status
+                            assert {name.lower(): value for name, value in headers.items()}.get("cache-control") == "no-store", headers
+                        assert (await asyncio.to_thread(request, lan, token, "GET", jpeg))[0] == 429
+                    finally:
+                        assert request(lan, token, "DELETE", grant["whep_path"])[0] == 204
+                        await peer.close()
+                    def available():
+                        status, response = lan.request("POST", "/api/v2/stream-sessions",
+                                                       {"camera_id": camera_id, "profile": "preview"}, token)
+                        assert status in (201, 429), (status, response)
+                        return response if status == 201 else None
+                    preview = await asyncio.to_thread(until, available, 8)
+                    assert request(lan, token, "DELETE", preview["whep_path"])[0] == 204
+                asyncio.run(reject_excess())
+            if not args.media_admission:
+                asyncio.run(viewers(lan, session, camera_id, local, turn_url, turn_certificate))
             if args.crash_restart:
                 old_epoch = int(local.camera(camera_id)["source_epoch"])
                 children = capture_children(process.pid)
@@ -472,12 +520,13 @@ def run(args):
                     assert int(restored.camera(camera_id)["source_epoch"]) > old_epoch
                     assert not config_file.exists()
         print(json.dumps({"native_mediamtx": True, "input_codec": args.input_codec, "whep_h264": True, "viewers": 2,
-                          "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": True,
+                          "privacy_mask_verified_on_decoded_video": True, "revoke_stops_stream": not args.media_admission,
                           "router_config_has_no_cleartext_credentials": True, "ignores_inherited_router_settings": True,
                           "mask_change_retires_previous_stream": args.mask_change and not args.detail_budget_test,
                           "dual_rtsp_shared_detail_and_independent_analysis": args.dual_rtsp and not args.detail_budget_test,
                           "actual_inference_continues": bool(args.model_pack) and args.dual_rtsp and not args.detail_budget_test,
                           "detail_frame_budget_rejects_without_blocking_preview": args.detail_budget_test,
+                          "media_workload_rejects_excess_and_releases_budget": args.media_admission,
                           "viewer_turn_over_tcp": bool(turn_url), "turn_tls": bool(turn_certificate),
                           "https_proxy": bool(args.nginx), "foreground_crash_restart": args.crash_restart}))
 
@@ -491,6 +540,7 @@ if __name__ == "__main__":
     parser.add_argument("--mask-change", action="store_true")
     parser.add_argument("--dual-rtsp", action="store_true")
     parser.add_argument("--detail-budget-test", action="store_true")
+    parser.add_argument("--media-admission", action="store_true")
     parser.add_argument("--model-pack", type=lambda path: Path(path).resolve(strict=True))
     parser.add_argument("--ort-runtime", type=lambda path: Path(path).resolve(strict=True))
     parser.add_argument("--encoder", type=lambda path: Path(path).resolve(strict=True),
@@ -509,6 +559,8 @@ if __name__ == "__main__":
         parser.error("--crash-restart requires Linux")
     if args.detail_budget_test and not args.dual_rtsp:
         parser.error("--detail-budget-test requires --dual-rtsp")
+    if args.media_admission and (not args.dual_rtsp or args.detail_budget_test):
+        parser.error("--media-admission requires --dual-rtsp with an available detail budget")
     if bool(args.model_pack) != bool(args.ort_runtime):
         parser.error("--model-pack and --ort-runtime must be used together")
     run(args)

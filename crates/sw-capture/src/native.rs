@@ -215,6 +215,7 @@ pub struct Decoder {
     input: Input,
     stream_index: usize,
     time_base: Rational,
+    advertised_millifps: Option<u32>,
     decoder: ffmpeg::decoder::Video,
     decoded: Video,
     converter: Option<Converter>,
@@ -243,6 +244,15 @@ pub fn confined_rtsp_available() -> bool {
         )
         .is_null()
     }
+}
+
+pub fn decoder_identity() -> String {
+    format!(
+        "libavcodec-{}-libavformat-{}-libswscale-{}",
+        ffmpeg::codec::version(),
+        ffmpeg::format::version(),
+        ffmpeg::software::scaling::version()
+    )
 }
 
 impl Decoder {
@@ -397,6 +407,15 @@ impl Decoder {
             .ok_or(CaptureError::NoVideo)?;
         let stream_index = stream.index();
         let time_base = stream.time_base();
+        let rate = stream.avg_frame_rate();
+        let advertised_millifps = if rate.numerator() > 0 && rate.denominator() > 0 {
+            let rate = u64::try_from(rate.numerator()).unwrap() * 1_000 / rate.denominator() as u64;
+            u32::try_from(rate)
+                .ok()
+                .filter(|rate| (1..=240_000).contains(rate))
+        } else {
+            None
+        };
         let mut decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())?.decoder();
         let codec = ffmpeg::decoder::find(decoder.id()).ok_or(CaptureError::NoVideo)?;
         decoder.set_packet_time_base(time_base);
@@ -414,6 +433,7 @@ impl Decoder {
             input,
             stream_index,
             time_base,
+            advertised_millifps,
             decoder,
             decoded: alloc_frame()?,
             converter: None,
@@ -424,6 +444,10 @@ impl Decoder {
 
     pub fn codec(&self) -> &'static str {
         self.decoder.id().name()
+    }
+
+    pub fn advertised_millifps(&self) -> Option<u32> {
+        self.advertised_millifps
     }
 
     pub fn next_frame(&mut self) -> Result<Option<RgbFrame>, CaptureError> {

@@ -10,7 +10,7 @@ use process_wrap::tokio::ChildWrapper;
 use sw_protocol::CaptureDevice;
 use sw_protocol::worker::{
     CAPTURE_SOURCE_EXIT, CODEC_HEADER_LEN, CONFIG_MAX_BYTES, CaptureRequest, FrameHeader,
-    HEADER_LEN, WINDOWS_RTSPS_OPEN_TIMEOUT, decode_capture_codec,
+    HEADER_LEN, MAX_SOURCE_MILLIFPS, WINDOWS_RTSPS_OPEN_TIMEOUT, decode_capture_codec,
 };
 use thiserror::Error;
 use tokio::{
@@ -53,9 +53,13 @@ struct CaptureCapabilities {
     #[serde(default)]
     capture_codec: bool,
     #[serde(default)]
+    capture_source_metadata: bool,
+    #[serde(default)]
     inference_timing_v2: bool,
     #[serde(default)]
     fire_proposals: bool,
+    #[serde(default)]
+    decoder_identity: Option<String>,
 }
 
 #[derive(Clone)]
@@ -81,13 +85,18 @@ impl WorkerBinary {
         if input.len() > CONFIG_MAX_BYTES {
             return Err(WorkerError::Config);
         }
-        let with_codec = match self.capture_capabilities().await {
-            Ok(caps) => caps.capture_codec,
+        let (with_codec, with_rate) = match self.capture_capabilities().await {
+            Ok(caps) => (
+                caps.capture_codec || caps.capture_source_metadata,
+                caps.capture_source_metadata,
+            ),
             Err(WorkerError::Unreaped) => return Err(WorkerError::Unreaped),
             // Older local adapters can use the original frame format.
-            Err(_) => false,
+            Err(_) => (false, false),
         };
-        let mut child = self.spawn(if with_codec {
+        let mut child = self.spawn(if with_rate {
+            "capture-with-source-metadata"
+        } else if with_codec {
             "capture-with-codec"
         } else {
             "capture"
@@ -101,7 +110,9 @@ impl WorkerBinary {
             last_frame: 0,
             schannel: config.source.uses_schannel(),
             with_codec,
+            with_rate,
             codec: None,
+            advertised_millifps: None,
         };
         let sent = tokio::time::timeout(CONFIG_DEADLINE, stdin.write_all(&input)).await;
         drop(stdin);
@@ -123,6 +134,18 @@ impl WorkerBinary {
 
     pub async fn confined_rtsp(&self) -> Result<bool, WorkerError> {
         Ok(self.capture_capabilities().await?.rtsp_peer_confined)
+    }
+
+    pub async fn decoder_identity(&self) -> Result<Option<&str>, WorkerError> {
+        Ok(self
+            .capture_capabilities()
+            .await?
+            .decoder_identity
+            .as_deref())
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub(crate) async fn inference_capabilities(&self) -> Result<(bool, bool), WorkerError> {
@@ -234,7 +257,9 @@ pub struct CaptureProcess {
     last_frame: u64,
     schannel: bool,
     with_codec: bool,
+    with_rate: bool,
     codec: Option<Arc<str>>,
+    advertised_millifps: Option<u32>,
 }
 
 impl CaptureProcess {
@@ -244,6 +269,10 @@ impl CaptureProcess {
 
     pub fn codec(&self) -> Option<&Arc<str>> {
         self.codec.as_ref()
+    }
+
+    pub fn advertised_millifps(&self) -> Option<u32> {
+        self.advertised_millifps
     }
 
     pub async fn next(
@@ -292,6 +321,13 @@ impl CaptureProcess {
             codec_header[0] = bytes[0];
             self.stdout.read_exact(&mut codec_header[1..]).await?;
             self.codec = Some(Arc::from(decode_capture_codec(&codec_header)?));
+            if self.with_rate {
+                let rate = self.stdout.read_u32_le().await?;
+                if rate > MAX_SOURCE_MILLIFPS {
+                    return Err(WorkerError::Config);
+                }
+                self.advertised_millifps = (rate != 0).then_some(rate);
+            }
             self.stdout.read_exact(&mut bytes).await?;
         } else {
             self.stdout.read_exact(&mut bytes[1..]).await?;

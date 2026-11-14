@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod execution_profile;
 mod health;
 mod lan;
 mod network;
@@ -21,7 +22,7 @@ use sw_engine::{
     SourceConfig, TurnConfig, VisionScheduler, WorkerBinary,
 };
 use sw_protocol::{
-    PairingProfile, SemanticRoute,
+    MediaWorkloadLimits, PairingProfile, SemanticRoute,
     worker::{CudaConfig, InferenceConfig, MODEL_SELECTION_MAX_BYTES, ModelSelection},
 };
 use sw_storage::{CameraLimits, DEFAULT_DATABASE_QUOTA_BYTES, Store, StoreConfig};
@@ -95,6 +96,11 @@ struct Config {
     /// JSON settings from the installation administrator.
     #[arg(long)]
     settings_file: Option<PathBuf>,
+    /// Print the local execution fingerprint, including the configured GPU when present.
+    #[arg(long)]
+    execution_host: bool,
+    #[arg(skip)]
+    execution_profile: Option<execution_profile::Selection>,
     #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(1..=64))]
     inference_threads: u8,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=8))]
@@ -138,6 +144,8 @@ struct MediaArgs {
     /// Separate Core RGB buffer budget for on-demand RTSP detail streams.
     #[arg(long, requires = "mediamtx")]
     media_detail_frame_bytes: Option<u32>,
+    #[arg(skip)]
+    workload_limits: Option<MediaWorkloadLimits>,
     #[arg(long, requires_all = ["mediamtx", "media_turn_secret_file"])]
     media_turn: Option<String>,
     #[arg(long, requires = "media_turn")]
@@ -230,6 +238,12 @@ fn main() -> Result<()> {
         println!("StillWatch inference workers are ready ({lanes})");
         return Ok(());
     }
+    if config.execution_host {
+        let host = runtime()?.block_on(sw_engine::execution_host(config.cuda_device))?;
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &host)?;
+        println!();
+        return Ok(());
+    }
     #[cfg(windows)]
     if config.service {
         return scm::start(config);
@@ -244,6 +258,7 @@ struct Settings {
     lan_advertise: Option<bool>,
     https_proxy: Option<proxy::ProxySettings>,
     model_selection_file: Option<PathBuf>,
+    execution_profile: Option<execution_profile::Selection>,
     model_pack: Option<PathBuf>,
     model_manifest_sha256: Option<String>,
     ort_library: Option<PathBuf>,
@@ -263,6 +278,7 @@ struct Settings {
     media_ice_udp: Option<SocketAddr>,
     media_ice_tcp: Option<SocketAddr>,
     media_detail_frame_bytes: Option<u32>,
+    media_workload_limits: Option<MediaWorkloadLimits>,
     media_turn: Option<String>,
     media_turn_secret_file: Option<PathBuf>,
     semantic_worker: Option<SocketAddr>,
@@ -279,6 +295,7 @@ impl Settings {
         config.lan_listen = config.lan_listen.or(self.lan_listen);
         config.lan_advertise |= self.lan_advertise.unwrap_or(false);
         config.https_proxy = self.https_proxy;
+        config.execution_profile = self.execution_profile;
         config.model_selection_file = config
             .model_selection_file
             .take()
@@ -326,6 +343,7 @@ impl Settings {
             .media
             .media_detail_frame_bytes
             .or(self.media_detail_frame_bytes);
+        config.media.workload_limits = self.media_workload_limits;
         config.media.media_turn = config.media.media_turn.take().or(self.media_turn);
         config.media.media_turn_secret_file = config
             .media
@@ -386,7 +404,7 @@ async fn foreground(config: Config) -> Result<()> {
 }
 
 async fn serve(
-    config: Config,
+    mut config: Config,
     mut shutdown: watch::Receiver<bool>,
     ready: impl FnOnce() -> Result<()> + Send,
     stopping: impl FnOnce() + Send + 'static,
@@ -424,6 +442,31 @@ async fn serve(
     };
     let inference_workers = usize::from(config.inference_workers);
     let inference = inference_config(&config)?;
+    let admission = if let Some(selection) = &config.execution_profile {
+        let verified = async {
+            execution_profile::verify(
+                selection,
+                &config,
+                worker.as_ref().context("worker required")?,
+                inference.as_ref().context("inference required")?,
+            )
+            .await
+        }
+        .await;
+        match verified {
+            Ok(profile) => {
+                config.media.workload_limits = Some(profile.workload.media);
+                Some(profile)
+            }
+            Err(error) => {
+                eprintln!("StillWatch execution capacity is unknown: {error:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let qualified_workload = admission.as_ref().map(|profile| profile.workload.clone());
     let dir = config.data_dir;
     let media_root = dir.clone();
     let storage_root = dir.clone();
@@ -475,6 +518,7 @@ async fn serve(
                 sources,
                 limits,
                 inference_workers,
+                admission,
             )?;
             let lan = lan_options
                 .map(|(address, advertise)| lan::Lan::open(&dir, address, advertise))
@@ -538,6 +582,11 @@ async fn serve(
                 .media
                 .media_detail_frame_bytes
                 .unwrap_or(128 * 1024 * 1024),
+            workload_limits: config
+                .media
+                .workload_limits
+                .unwrap_or(MediaWorkloadLimits::DEFAULT_LIMITS),
+            qualified_workload,
             turn: config
                 .media
                 .media_turn

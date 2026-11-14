@@ -20,8 +20,15 @@ use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig, ModelSelection};
 fn main() -> Result<()> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
-        [command] if command == "capture" || command == "capture-with-codec" => {
-            match capture::run(command == "capture-with-codec") {
+        [command]
+            if command == "capture"
+                || command == "capture-with-codec"
+                || command == "capture-with-source-metadata" =>
+        {
+            match capture::run(
+                command != "capture",
+                command == "capture-with-source-metadata",
+            ) {
                 Err(error) if error.is::<sw_capture::CaptureError>() => {
                     eprintln!("Capture source is unavailable");
                     std::process::exit(CAPTURE_SOURCE_EXIT);
@@ -38,7 +45,8 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available(), "capture_codec": true,
-                    "inference_timing_v2": true, "fire_proposals": true})
+                    "inference_timing_v2": true, "fire_proposals": true, "capture_source_metadata": true,
+                    "decoder_identity": sw_capture::decoder_identity()})
             );
             Ok(())
         }

@@ -4,6 +4,7 @@ mod camera_credentials;
 mod capture_process;
 mod child_process;
 mod evidence;
+mod execution_host;
 mod hazards;
 mod inference_process;
 mod media;
@@ -26,6 +27,7 @@ mod windows_credentials;
 pub use capture_process::{
     CaptureProcess, CaptureRead, Frame, FrameBudget, WorkerBinary, WorkerError,
 };
+pub use execution_host::execution_host;
 pub use inference_process::verify_inference_startup;
 pub use media::{MediaAnswer, MediaConfig, MediaError, MediaService, TurnConfig};
 pub use onvif::{OnvifConfig, OnvifError};

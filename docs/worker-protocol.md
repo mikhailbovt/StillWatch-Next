@@ -32,6 +32,8 @@ Each frame starts with a 56-byte header, followed immediately by interleaved RGB
 
 Use the minimum signed 64-bit value for absent timestamps. For a native clock both timestamps are present, the time base is positive, and conversion uses integer division toward zero. For an estimated clock the source time is present and the raw timestamp is absent. Missing quality has no usable microsecond timestamp. Core bounds raw-frame memory across sources, drops a frame when its permit budget is exhausted and supervises the capture process deadline. The first frame may have a longer deadline on Windows RTSPS while Schannel validates its certificate.
 
+Workers advertising `capture_source_metadata` support `capture-with-source-metadata`. The stream starts with the existing `SWC1` codec record followed by one little-endian u32 for the demuxer's advertised rate in milliframes per second. Zero denotes unknown. Published frames retain the same header, RGB format and sequence. Core observes successive native PTS values separately when it probes a source. Older workers can continue using the original modes.
+
 ## Inference
 
 Core launches `stillwatch-worker infer` and sends a little-endian u32 byte count followed by `InferenceConfig.json` UTF-8. The payload limit is 16,384 bytes. The worker replies with four bytes. `SWI1` means both live models are ready. `SWIM`, `SWIS` and `SWIR` report pack, session and runtime failures respectively. Startup is bounded to 30 seconds on CPU and 60 seconds on CUDA.

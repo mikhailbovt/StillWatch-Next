@@ -107,6 +107,8 @@ final class StillWatchClient {
     Json source, {
     List<Json> masks = const [],
     String? cameraId,
+    Json? sampling,
+    String? executionProfileId,
   }) => _json(
     'POST',
     '/api/v2/source-probes',
@@ -114,6 +116,9 @@ final class StillWatchClient {
       'source': source,
       'privacy_masks': masks,
       if (cameraId != null) 'camera_id': uuid(cameraId),
+      if (sampling != null) 'sampling': sampling,
+      if (executionProfileId != null)
+        'execution_profile_id': executionProfileId,
     },
     timeout: _cameraSetupTimeout,
   );

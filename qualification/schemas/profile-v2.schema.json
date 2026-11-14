@@ -18,6 +18,7 @@
       }
     },
     "candidate_digest": {"$ref": "#/$defs/digest"},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
     "host": {
       "type": "object",
       "additionalProperties": false,
