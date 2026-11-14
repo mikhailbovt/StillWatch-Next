@@ -1,4 +1,4 @@
-"""Compare three Fire geometries on identical native development frames."""
+"""Compare Fire geometries or one detector on identical native development frames."""
 
 import argparse
 from contextlib import ExitStack
@@ -51,7 +51,7 @@ def p95(values):
     return sorted(values)[math.ceil(0.95 * len(values)) - 1]
 
 
-def evaluate(args, clip, window, annotation, min_iou, workers, policies):
+def evaluate(args, clip, window, annotation, min_iou, workers, policies, alternative):
     path = (args.media / clip["file"]).resolve(strict=True)
     if not path.is_relative_to(args.media) or digest(path) != clip["sha256"]:
         raise ValueError("clip does not match the pinned manifest")
@@ -61,10 +61,10 @@ def evaluate(args, clip, window, annotation, min_iou, workers, policies):
     frames = []
     clock = []
     dimensions = set()
-    rows = {name: [] for name in VARIANTS}
+    rows = {name: [] for name in policies}
     target = {"smoke": "smoke", "flame": "fire"}[annotation["class"]] if annotation else None
     target_fact = "smoke_visible" if target == "smoke" else "flame_visible"
-    names = list(VARIANTS)
+    names = list(policies)
     for header, rgb, width, height, pts, elapsed in samples(args.worker, path, *window, args.fps):
         source_hash.update(header)
         source_hash.update(rgb)
@@ -79,7 +79,10 @@ def evaluate(args, clip, window, annotation, min_iou, workers, policies):
         offset = (len(frames) - 1) % len(names)
         for name in names[offset:] + names[:offset]:
             start = perf_counter_ns()
-            result, timing = call_inference(workers[name], header, rgb, timings=True)
+            if name == "alternative":
+                result, timing = alternative.evaluate(rgb, width, height, pts)
+            else:
+                result, timing = call_inference(workers[name], header, rgb, timings=True)
             round_trip_us = (perf_counter_ns() - start) // 1000
             trace = call_policy(policies[name], header, rgb, result)
             if int(trace["source_us"]) != pts:
@@ -131,9 +134,17 @@ def run(args):
         shared = args.runtime.with_name("libonnxruntime_providers_shared.so")
         config["cuda"] = {"device": 0, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
     reports = []
+    variants = VARIANTS
+    alternative = None
+    if args.alternative is not None:
+        from compare_fire_model import Candidate
+
+        variants = {"rect640": VARIANTS["rect640"]}
+        alternative = Candidate(args.alternative, args.threads, args.cuda)
     with ExitStack() as stack:
-        workers = {name: stack.enter_context(process(args.worker, *command)) for name, command in VARIANTS.items()}
-        policies = {name: stack.enter_context(process(args.core, "trace-fire-policy")) for name in VARIANTS}
+        workers = {name: stack.enter_context(process(args.worker, *command)) for name, command in variants.items()}
+        names = [*variants, "alternative"] if alternative is not None else list(variants)
+        policies = {name: stack.enter_context(process(args.core, "trace-fire-policy")) for name in names}
         for worker in workers.values():
             payload = json.dumps(config).encode()
             worker.stdin.write(struct.pack("<I", len(payload)) + payload)
@@ -154,7 +165,7 @@ def run(args):
             if not window or not 0 <= window[0] < window[1] <= limit or window[1] - window[0] > 30:
                 raise ValueError("invalid or excessive test window")
             annotation = regions["clips"].get(filename)
-            row = evaluate(args, clip, window, annotation, regions["limits"]["minimum_iou"], workers, policies)
+            row = evaluate(args, clip, window, annotation, regions["limits"]["minimum_iou"], workers, policies, alternative)
             reports.append(row)
             print(filename, row["samples"], [(name, data["first_matching_review_us"], data["review_samples"])
                                              for name, data in row["variants"].items()], flush=True)
@@ -164,7 +175,8 @@ def run(args):
         "roi_match_iou": regions["limits"]["minimum_iou"],
         "manifest_sha256": manifest_sha, "regions_sha256": digest(args.regions), "windows_sha256": digest(args.windows),
         "worker_sha256": digest(args.worker), "core_sha256": digest(args.core), "model_manifest_sha256": pack_digest,
-        "runtime_sha256": config["library_sha256"], "cuda": config.get("cuda"), "clips": reports,
+        "runtime_sha256": config["library_sha256"], "cuda": config.get("cuda"),
+        "alternative": alternative.provenance if alternative else None, "clips": reports,
     }, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
@@ -176,4 +188,5 @@ if __name__ == "__main__":
     parser.add_argument("--fps", type=int, choices=(2, 3, 5), default=2)
     parser.add_argument("--threads", type=int, choices=range(1, 9), default=4)
     parser.add_argument("--cuda", action="store_true")
+    parser.add_argument("--alternative", type=Path, help="compare the pinned development ONNX against native 640")
     run(parser.parse_args())
