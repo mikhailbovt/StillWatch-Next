@@ -200,6 +200,40 @@ fn bounded_text(value: &str, limit: usize) -> bool {
     !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control)
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct CameraSampling {
+    #[cfg_attr(feature = "schema", schemars(range(min = 3, max = 5)))]
+    pub pose_fps: u8,
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 2)))]
+    pub fire_fps: u8,
+    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 5)))]
+    pub evidence_fps: u8,
+}
+
+impl Default for CameraSampling {
+    fn default() -> Self {
+        Self {
+            pose_fps: 5,
+            fire_fps: 2,
+            evidence_fps: 5,
+        }
+    }
+}
+
+impl CameraSampling {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn valid(self) -> bool {
+        (3..=5).contains(&self.pose_fps)
+            && (1..=2).contains(&self.fire_fps)
+            && (1..=5).contains(&self.evidence_fps)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -207,6 +241,9 @@ pub struct CameraConfig {
     pub name: String,
     pub enabled: bool,
     pub source: CameraSource,
+    /// Omit to use 5 pose, 2 fire and 5 evidence frames per second.
+    #[serde(default, skip_serializing_if = "CameraSampling::is_default")]
+    pub sampling: CameraSampling,
     /// Allows semantic evidence from this camera to be sent to Firebase AI Logic.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cloud_consent: bool,
@@ -223,6 +260,7 @@ impl CameraConfig {
             && self.name.chars().count() <= 80
             && !self.name.chars().any(char::is_control)
             && self.source.valid()
+            && self.sampling.valid()
             && self.privacy_masks.len() <= 32
             && self.privacy_masks.iter().all(|region| region.valid())
             && self.controlled_fire_regions.len() <= 16
@@ -241,6 +279,8 @@ pub struct CameraPatch {
     pub enabled: Option<bool>,
     pub source: Option<CameraSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<CameraSampling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_consent: Option<bool>,
     pub privacy_masks: Option<Vec<MaskRect>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +293,7 @@ impl CameraPatch {
             name: self.name.clone().unwrap_or(current.name),
             enabled: self.enabled.unwrap_or(current.enabled),
             source: self.source.clone().unwrap_or(current.source),
+            sampling: self.sampling.unwrap_or(current.sampling),
             cloud_consent: self.cloud_consent.unwrap_or(current.cloud_consent),
             privacy_masks: self.privacy_masks.clone().unwrap_or(current.privacy_masks),
             controlled_fire_regions: self

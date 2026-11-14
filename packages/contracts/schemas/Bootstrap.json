@@ -3,6 +3,9 @@
   "title": "Bootstrap",
   "type": "object",
   "properties": {
+    "camera_sampling": {
+      "type": "boolean"
+    },
     "instance_id": {
       "type": "string",
       "format": "uuid"

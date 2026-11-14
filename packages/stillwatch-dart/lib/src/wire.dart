@@ -119,6 +119,7 @@ final class Cursor {
 final class CoreInfo {
   CoreInfo.fromJson(Json value)
     : id = uuid(value['instance_id']),
+      cameraSampling = value['camera_sampling'] == true,
       version = object(value['version']) {
     if (version['major'] != 2 || version['minor'] is! int) {
       throw const StillWatchException('identity');
@@ -126,6 +127,7 @@ final class CoreInfo {
   }
 
   final String id;
+  final bool cameraSampling;
   final Json version;
 }
 

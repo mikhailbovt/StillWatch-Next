@@ -11,9 +11,8 @@ use sw_storage::EvidenceImage;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use uuid::Uuid;
 
-use crate::{CameraFrame, CameraRegistry};
+use crate::{CameraFrame, CameraRegistry, MICROS_PER_SECOND};
 
-const INTERVAL_US: i64 = 200_000;
 const HISTORY_US: i64 = 8_000_000;
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
 const MAX_SIDE: usize = 720;
@@ -93,6 +92,7 @@ impl EvidenceSampler {
             let Some(at) = frame.frame.header.source_micros else {
                 continue;
             };
+            let interval = MICROS_PER_SECOND / i64::from(frame.sampling.evidence_fps);
             if self
                 .rings
                 .lock()
@@ -102,7 +102,7 @@ impl EvidenceSampler {
                         .get(&frame.scope.camera_id)
                         .and_then(|ring| ring.samples.back().map(|sample| sample.at))
                 })
-                .is_some_and(|last| at.saturating_sub(last) < INTERVAL_US * 3 / 4)
+                .is_some_and(|last| at.div_euclid(interval) <= last.div_euclid(interval))
             {
                 continue;
             }
@@ -213,8 +213,9 @@ impl EvidenceSampler {
             .max()
             .unwrap_or(0);
         let received = sampled.len().min(u16::MAX as usize) as u16;
+        let interval = MICROS_PER_SECOND / i64::from(frame.sampling.evidence_fps);
         let expected =
-            (at.saturating_sub(start) / INTERVAL_US + 1).clamp(1, i64::from(u16::MAX)) as u16;
+            (at.saturating_sub(start) / interval + 1).clamp(1, i64::from(u16::MAX)) as u16;
         EvidenceSelection {
             images,
             has_pre_event,

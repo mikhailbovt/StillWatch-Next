@@ -271,6 +271,8 @@ pub enum ProblemCode {
 pub struct Bootstrap {
     pub instance_id: Uuid,
     pub version: ApiVersion,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub camera_sampling: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

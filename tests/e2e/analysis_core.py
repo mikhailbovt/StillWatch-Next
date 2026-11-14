@@ -119,6 +119,8 @@ def run(args):
             verify_corrupt_model(args, root, model_options)
         if args.cadence:
             verify_cadence(args, root, model_options)
+        if args.camera_sampling:
+            verify_camera_sampling(args, root, model_options)
 
 
 def verify_cadence(args, root, model_options):
@@ -175,6 +177,64 @@ def verify_cadence(args, root, model_options):
         active = client.camera(slow)["runtime"]["analysis"]
         assert active["state"] == "ready" and not active["cadence"]["below_target"]
         print(json.dumps({"sustained_cadence_issue_recorded_and_ended": True}))
+
+
+def verify_camera_sampling(args, root, model_options):
+    # Delay the fire scene to give the evidence ring several seconds to warm up.
+    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", "40",
+                    "-i", str(args.demo), "-t", "25", "-an", "-c:v", "libx264", "-threads", "1",
+                    "-vf", "scale=640:360,fps=15,tpad=start_duration=5:start_mode=add",
+                    str(root / "sampling.mp4")], check=True)
+    data = root / "sampling-data"
+    config = {
+        "name": "Configured sampling", "enabled": True,
+        "source": {"type": "replay", "file": "sampling.mp4", "pace": True},
+        "sampling": {"pose_fps": 3, "fire_fps": 1, "evidence_fps": 2},
+    }
+    with run_core(args.core, args.worker, data, root, root / "sampling.log", *model_options) as (_, client):
+        assert client.call("GET", "/bootstrap/info", authorized=False)[1]["camera_sampling"] is True
+        invalid = config | {"sampling": config["sampling"] | {"fire_fps": 0}}
+        assert client.call("POST", "/api/v2/cameras", invalid, key="sampling-invalid")[0] == 400
+        status, camera = client.call("POST", "/api/v2/cameras", config, key="sampling-create")
+        assert status == 201 and camera["config"]["sampling"] == config["sampling"], camera
+        path = f"/api/v2/cameras/{camera['id']}"
+
+        def cadence():
+            current = client.camera(camera["id"])
+            return current["runtime"]["analysis"].get("cadence")
+
+        reduced = until(cadence, 25)
+        assert 144 <= reduced["pose_frames_per_minute"] <= 180, reduced
+        assert 45 <= reduced["fire_frames_per_minute"] <= 60, reduced
+        assert reduced["pose_target_per_minute"] == 144 and reduced["fire_target_per_minute"] == 45, reduced
+        assert not reduced["below_target"], reduced
+
+        def evidence():
+            _, page = client.call("GET", "/api/v2/incidents")
+            return next((item for item in page["incidents"] if item["camera_id"] == camera["id"]
+                         and item["evidence_state"] == "persisted"), None)
+
+        incident = until(evidence, 10)
+        status, packet = client.call("GET", f"/api/v2/incidents/{incident['id']}/evidence/{incident['evidence_packet_id']}")
+        assert status == 200, packet
+        coverage = packet["context"]["coverage"]
+        assert 3 <= coverage["received_samples"] <= coverage["expected_samples"] <= 17, coverage
+        assert coverage["max_gap_ms"] >= 400, coverage
+
+    with run_core(args.core, args.worker, data, root, root / "sampling-restart.log", *model_options) as (_, client):
+        current = client.camera(camera["id"])
+        assert current["config"]["sampling"] == config["sampling"]
+        status, updated = client.call("PATCH", path, {
+            "sampling": {"pose_fps": 5, "fire_fps": 2, "evidence_fps": 5},
+        }, key="sampling-default", revision=current["revision"])
+        assert status == 200 and "sampling" not in updated["config"], updated
+        assert int(updated["source_epoch"]) > int(current["source_epoch"]), updated
+        restored = until(cadence, 25)
+        assert restored["pose_target_per_minute"] == 240 and restored["fire_target_per_minute"] == 90, restored
+        assert restored["pose_frames_per_minute"] > reduced["pose_frames_per_minute"], restored
+        assert restored["fire_frames_per_minute"] > reduced["fire_frames_per_minute"], restored
+    print(json.dumps({"camera_sampling_persisted": True, "configured_cadence": reduced,
+                      "configured_evidence_coverage": coverage, "restored_default_cadence": restored}))
 
 
 def inference_worker(parent):
@@ -462,6 +522,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-fault", action="store_true", help="Reject a corrupted, disposable copy of the model pack")
     parser.add_argument("--source-freeze", action="store_true", help="Verify repeated RTSP pixels with advancing PTS")
     parser.add_argument("--cadence", action="store_true", help="Verify measured rates for 2 fps and 15 fps replay cameras")
+    parser.add_argument("--camera-sampling", action="store_true", help="Verify camera-specific sampling, evidence and restart")
     options = parser.parse_args()
     if options.worker_faults and not Path("/proc/self/task").is_dir():
         parser.error("--worker-faults requires Linux procfs")

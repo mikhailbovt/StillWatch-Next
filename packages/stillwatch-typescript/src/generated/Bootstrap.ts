@@ -1,6 +1,7 @@
 // Generated from sw-protocol schemas. Regenerate with npm run generate.
 
 export interface Bootstrap {
+  camera_sampling?: boolean;
   instance_id: string;
   version: ApiVersion;
   [k: string]: unknown;

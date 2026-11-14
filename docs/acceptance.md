@@ -44,6 +44,8 @@ On Ubuntu, `whep_core.py --crash-restart` killed the foreground Core after live 
 
 `whep_core.py --mask-change` changed a mask while a viewer was connected. The previous WHEP session became unavailable and the replacement session showed the new mask in decoded pixels. Windows used direct ICE on a private interface. Ubuntu used an HEVC input, H.264 playback and Coturn TLS.
 
+`analysis_core.py --camera-sampling` exercised per-camera pose, fire and evidence rates through the API on Windows and Ubuntu. It rejected an out-of-range setting, measured the lower inference cadence, checked persisted evidence coverage and restored the defaults after restarting the Core and reloading the saved configuration.
+
 `tests/e2e/storage_budget.py` verified SQLite metadata exhaustion and backpressure on the WAL with an external reader on Windows and Ubuntu. The API kept committed state readable, returned 507 for blocked writes, and accepted a retry after headroom returned. The maintenance CLI produced a redacted report while readiness returned 503. A storage test restarted with pending evidence in a full database and completed reconciliation after freeing pages.
 
 The backup and restore CLI rejected a small byte budget on both systems and insufficient destination headroom on a 48 MiB Ubuntu tmpfs. Failed operations left no published directory. A subsequent restore preserved the incident and camera and changed the stream generation. The CPU Compose profile verified its mounted temporary filesystem size and the driver settings for log rotation.

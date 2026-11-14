@@ -173,9 +173,10 @@ impl Store {
                         || (dimensions.is_some() && dimensions != previous.dimensions)
                         || patch.controlled_fire_regions.is_some();
                     let reviewed_scene = if scene_changed { reviewed_scene } else { previous.reviewed_scene.clone() };
-                    // Invalidate frames in the same transaction as a consent change
-                    // or disable, before the capture worker has been stopped.
+                    // Invalidate frames when consent, sampling or availability changes.
+                    // The commit precedes the capture worker's restart.
                     let epoch = if config.cloud_consent != previous.config.cloud_consent
+                        || config.sampling != previous.config.sampling
                         || (!config.enabled && previous.config.enabled) {
                         next(previous.epoch)?
                     } else {

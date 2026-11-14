@@ -184,6 +184,7 @@ export interface CameraConfig {
   enabled: boolean;
   name: string;
   privacy_masks?: MaskRect[];
+  sampling?: CameraSampling;
   source: CameraSource;
 }
 export interface ControlledFireRegion {
@@ -326,4 +327,12 @@ export interface MaskRect {
   left: number;
   right: number;
   top: number;
+}
+/**
+ * Omit to use 5 pose, 2 fire and 5 evidence frames per second.
+ */
+export interface CameraSampling {
+  evidence_fps: number;
+  fire_fps: number;
+  pose_fps: number;
 }

@@ -273,6 +273,7 @@ async fn bootstrap(State(state): State<Api>) -> Json<Bootstrap> {
     Json(Bootstrap {
         instance_id: state.store.identity().instance_id,
         version: ApiVersion::CURRENT,
+        camera_sampling: state.cameras.is_some(),
     })
 }
 

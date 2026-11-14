@@ -29,6 +29,7 @@ export interface CameraPatch {
   enabled?: boolean | null;
   name?: string | null;
   privacy_masks?: MaskRect[] | null;
+  sampling?: CameraSampling | null;
   source?: CameraSource | null;
 }
 export interface ControlledFireRegion {
@@ -171,4 +172,9 @@ export interface MaskRect {
   left: number;
   right: number;
   top: number;
+}
+export interface CameraSampling {
+  evidence_fps: number;
+  fire_fps: number;
+  pose_fps: number;
 }

@@ -156,6 +156,7 @@ final class ConsoleState extends ChangeNotifier {
 
   List<CoreProfile> profiles = const [];
   CoreProfile? selected;
+  CoreInfo? coreInfo;
   LinkState link = LinkState.connecting;
   List<Camera> cameras = const [];
   List<Incident> incidents = const [];
@@ -240,6 +241,7 @@ final class ConsoleState extends ChangeNotifier {
     final generation = ++_generation;
     _cancelTimers();
     selected = profile;
+    coreInfo = null;
     cameras = const [];
     incidents = const [];
     hasOlderOpenIncidents = false;
@@ -289,7 +291,7 @@ final class ConsoleState extends ChangeNotifier {
     link = LinkState.connecting;
     notifyListeners();
     try {
-      await profile.client.core();
+      final info = await profile.client.core();
       final snapshot = await profile.client.snapshot();
       final results = await Future.wait<Object>([
         profile.client.cameras(),
@@ -300,6 +302,7 @@ final class ConsoleState extends ChangeNotifier {
         }),
       ]);
       if (!_current(generation)) return;
+      coreInfo = info;
       cameras = (results[0] as Page<Camera>).items;
       final history = results[1] as Page<Incident>;
       final merged = <String, Incident>{

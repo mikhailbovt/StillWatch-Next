@@ -206,6 +206,10 @@
             "$ref": "#/$defs/MaskRect"
           }
         },
+        "sampling": {
+          "description": "Omit to use 5 pose, 2 fire and 5 evidence frames per second.",
+          "$ref": "#/$defs/CameraSampling"
+        },
         "source": {
           "$ref": "#/$defs/CameraSource"
         }
@@ -263,6 +267,35 @@
       "required": [
         "state",
         "dropped"
+      ]
+    },
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
       ]
     },
     "CameraSource": {

@@ -166,7 +166,18 @@ class _CameraEditor extends StatefulWidget {
 }
 
 class _CameraEditorState extends State<_CameraEditor> {
+  static const _defaultSampling = {
+    'pose_fps': 5,
+    'fire_fps': 2,
+    'evidence_fps': 5,
+  };
   late final Json _initial = widget.camera?.configuration ?? {};
+  late final _sampling = Map<String, int>.of(_defaultSampling)
+    ..updateAll((key, value) {
+      final saved = _initial['sampling'];
+      final fps = saved is Map ? saved[key] : null;
+      return fps is int ? fps : value;
+    });
   late final Json _initialSource = _initial['source'] == null
       ? {}
       : object(_initial['source']);
@@ -307,6 +318,10 @@ class _CameraEditorState extends State<_CameraEditor> {
       'name': name,
       'enabled': _enabled,
       'source': _source(),
+      if (widget.console.coreInfo?.cameraSampling == true &&
+          (_initial['sampling'] != null ||
+              _sampling.entries.any((e) => e.value != _defaultSampling[e.key])))
+        'sampling': _sampling,
       if (_cloudConsent || _initial['cloud_consent'] == true)
         'cloud_consent': _cloudConsent,
       'privacy_masks': _masks,
@@ -562,6 +577,35 @@ class _CameraEditorState extends State<_CameraEditor> {
                 value: _enabled,
                 onChanged: (value) => setState(() => _enabled = value),
               ),
+              if (widget.console.coreInfo?.cameraSampling == true)
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('Analysis sampling'),
+                  children: [
+                    for (final (key, title, min, max) in const [
+                      ('pose_fps', 'Pose', 3, 5),
+                      ('fire_fps', 'Fire and smoke', 1, 2),
+                      ('evidence_fps', 'Evidence frames', 1, 5),
+                    ]) ...[
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<int>(
+                        initialValue: _sampling[key],
+                        decoration: InputDecoration(labelText: title),
+                        items: [
+                          for (var fps = min; fps <= max; fps++)
+                            DropdownMenuItem(
+                              value: fps,
+                              child: Text('$fps fps'),
+                            ),
+                        ],
+                        onChanged: _busy
+                            ? null
+                            : (fps) => setState(() => _sampling[key] = fps!),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                  ],
+                ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Allow Firebase cloud analysis'),

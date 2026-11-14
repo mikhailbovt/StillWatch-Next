@@ -13,6 +13,8 @@ mod replay_upload;
 mod scene;
 mod semantic;
 mod vision;
+
+const MICROS_PER_SECOND: i64 = 1_000_000;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows_credentials;

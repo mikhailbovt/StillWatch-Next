@@ -6,8 +6,8 @@ use std::{
 
 use sw_domain::{ObservationLabel, SourceScope};
 use sw_protocol::{
-    AnalysisCadence, AnalysisState, AnalysisStatus, Counter, InferenceBackend, InferenceFailure,
-    InferenceStatus,
+    AnalysisCadence, AnalysisState, AnalysisStatus, CameraSampling, Counter, InferenceBackend,
+    InferenceFailure, InferenceStatus,
     worker::{InferenceConfig, InferenceResult, Tasks},
 };
 use sw_storage::Store;
@@ -15,20 +15,15 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
-    CameraFrame, CameraRegistry, WorkerBinary, WorkerError,
+    CameraFrame, CameraRegistry, MICROS_PER_SECOND, WorkerBinary, WorkerError,
     evidence::EvidenceSampler,
     hazards::{HazardPolicies, PendingHazards},
     inference_process::InferenceProcess,
 };
 
-const POSE_INTERVAL_US: i64 = 200_000;
-const FIRE_INTERVAL_US: i64 = 500_000;
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
 const CADENCE_WINDOW_US: i64 = 10_000_000;
 const SOURCE_MINUTE_US: i64 = 60_000_000;
-// Allow for sampling intervals that cannot align exactly with the camera frame rate.
-const POSE_TARGET_PER_MINUTE: u32 = 240;
-const FIRE_TARGET_PER_MINUTE: u32 = 90;
 
 pub struct VisionScheduler {
     config: InferenceConfig,
@@ -189,8 +184,9 @@ impl VisionScheduler {
                             frame.scope == analysis.scope
                                 && frame.captured_at.elapsed() <= FRAME_MAX_AGE
                         })
-                        .and_then(|frame| frame.frame.header.source_micros)
-                        .and_then(|source_us| analysis.cadence(source_us));
+                        .and_then(|frame| {
+                            analysis.cadence(frame.frame.header.source_micros?, frame.sampling)
+                        });
                 }
             } else if state == AnalysisState::Ready {
                 response.state = AnalysisState::Starting;
@@ -362,12 +358,12 @@ impl VisionScheduler {
                 let pose = due(
                     previous.and_then(|state| state.pose_time),
                     source_us,
-                    POSE_INTERVAL_US,
+                    frame.sampling.pose_fps,
                 );
                 let fire = due(
                     previous.and_then(|state| state.fire_time),
                     source_us,
-                    FIRE_INTERVAL_US,
+                    frame.sampling.fire_fps,
                 );
                 let tasks = match (pose, fire) {
                     (true, true) => Tasks::Both,
@@ -480,7 +476,7 @@ impl Analysis {
         }
     }
 
-    fn cadence(&self, now: i64) -> Option<AnalysisCadence> {
+    fn cadence(&self, now: i64, sampling: CameraSampling) -> Option<AnalysisCadence> {
         if now.saturating_sub(self.first_source_us?) < CADENCE_WINDOW_US
             || self.pose_time.is_some_and(|sample| sample > now)
             || self.fire_time.is_some_and(|sample| sample > now)
@@ -498,16 +494,20 @@ impl Analysis {
         };
         let pose = per_minute(&self.pose_window);
         let fire = per_minute(&self.fire_window);
+        // Source frames do not always fall exactly on the requested intervals.
+        let pose_target = u32::from(sampling.pose_fps) * 48;
+        let fire_target = u32::from(sampling.fire_fps) * 45;
         Some(AnalysisCadence {
             pose_frames_per_minute: pose,
             fire_frames_per_minute: fire,
-            pose_target_per_minute: POSE_TARGET_PER_MINUTE,
-            fire_target_per_minute: FIRE_TARGET_PER_MINUTE,
-            below_target: pose < POSE_TARGET_PER_MINUTE || fire < FIRE_TARGET_PER_MINUTE,
+            pose_target_per_minute: pose_target,
+            fire_target_per_minute: fire_target,
+            below_target: pose < pose_target || fire < fire_target,
         })
     }
 }
 
-fn due(previous: Option<i64>, source_us: i64, interval: i64) -> bool {
+fn due(previous: Option<i64>, source_us: i64, fps: u8) -> bool {
+    let interval = MICROS_PER_SECOND / i64::from(fps);
     previous.is_none_or(|old| source_us.saturating_sub(old) >= interval)
 }
