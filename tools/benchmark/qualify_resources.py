@@ -36,7 +36,9 @@ class ChurnResources:
 
     def measured_usage(self, leader):
         profile = self.fixture["profile"]
-        usage = resources(leader, self.data, self.settings.get("cuda_device"), profile["host"]["accelerator"])
+        usage = resources(leader, self.data, self.settings.get("cuda_device"), profile["host"]["accelerator"],
+                          tracked=self.processes)
+        self.processes = {tuple(item) for item in usage["pids"]}
         threads = {}
         for pid, started in usage["pids"]:
             try:
@@ -68,7 +70,6 @@ class ChurnResources:
             return
         process = self.fixture["process"]
         usage = self.measured_usage(process.pid)
-        self.processes.update((pid, created) for pid, created in usage["pids"])
         self.records.append({"elapsed_s": time.monotonic() - self.begin, "kind": kind, "completed": list(completed),
                              "core": process.pid, "usage": usage, "leases": status["resources"]})
 
@@ -89,14 +90,7 @@ class ChurnResources:
         while True:
             status = self.status()
             usage = self.measured_usage(leader)
-            current = {tuple(record) for record in usage["pids"]}
-            detached = []
-            for pid, created in self.processes - current:
-                try:
-                    if psutil.Process(pid).create_time() == created:
-                        detached.append(pid)
-                except psutil.NoSuchProcess:
-                    continue
+            detached = usage["detached"]
             leases = status["resources"]
             writer = status["writer"]
             with closing(sqlite3.connect((self.data / "stillwatch.sqlite3").as_uri() + "?mode=ro", uri=True)) as database:
@@ -116,6 +110,6 @@ class ChurnResources:
             time.sleep(0.2)
         write_json(output, {"samples": self.records,
                             "drain": {"elapsed_ms": (time.monotonic() - began) * 1_000,
-                                      "usage": usage, "leases": leases, "writer": writer, "detached": sorted(detached),
+                                      "usage": usage, "leases": leases, "writer": writer, "detached": detached,
                                       "enabled_cameras": cameras[0], "reserved_frame_bytes": cameras[1],
                                       "semantic_jobs": jobs, "retained": retained}})

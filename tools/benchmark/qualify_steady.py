@@ -163,20 +163,36 @@ def gpu_used_bytes(device, declared):
     return None
 
 
-def resources(pid, data, device=None, accelerator=None):
+def resources(pid, data, device=None, accelerator=None, *, tracked=()):
     core = psutil.Process(pid)
     tree = [core, *core.children(recursive=True)]
+    seen = {process.pid for process in tree}
+    detached = []
+    for previous_pid, created in tracked:
+        if previous_pid in seen:
+            continue
+        try:
+            previous = psutil.Process(previous_pid)
+            if previous.create_time() == created:
+                for process in (previous, *previous.children(recursive=True)):
+                    if process.pid not in seen:
+                        tree.append(process)
+                        detached.append(process.pid)
+                        seen.add(process.pid)
+        except psutil.NoSuchProcess:
+            continue
     measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1, "cpu_seconds": 0.0,
-                    "os_handles": 0, "open_sockets": 0, "pids": [], "rss_by_pid": {}}
+                    "os_handles": 0, "open_sockets": 0, "pids": [], "rss_by_pid": {}, "detached": sorted(detached)}
+    rss_measured = True
     for child in tree:
         try:
+            measurements["pids"].append([child.pid, child.create_time()])
             rss = child.memory_info().rss
             measurements["rss_bytes"] += rss
             measurements["rss_by_pid"][str(child.pid)] = rss
             if measurements["cpu_seconds"] is not None:
                 cpu = child.cpu_times()
                 measurements["cpu_seconds"] += cpu.user + cpu.system
-            measurements["pids"].append([child.pid, child.create_time()])
             if measurements["os_handles"] is not None:
                 measures = child.num_handles if sys.platform == "win32" else child.num_fds
                 measurements["os_handles"] += measures()
@@ -185,9 +201,12 @@ def resources(pid, data, device=None, accelerator=None):
         except psutil.NoSuchProcess:
             continue
         except psutil.AccessDenied:
+            rss_measured = rss_measured and str(child.pid) in measurements["rss_by_pid"]
             measurements["cpu_seconds"] = None
             measurements["os_handles"] = None
             measurements["open_sockets"] = None
+    if not rss_measured:
+        measurements["rss_bytes"] = None
     for path in data.rglob("*"):
         if path.is_file():
             try:
