@@ -38,6 +38,9 @@ const MAX_COST_SHAPES: usize = 128;
 #[cfg(feature = "diagnostics")]
 mod lane_timings {
     use std::time::{Duration, Instant};
+    use sw_protocol::worker::ExecutionTiming;
+
+    const SLOW_STEP_US: u128 = 20_000;
 
     #[derive(Clone, Copy)]
     pub(super) enum Stage {
@@ -85,7 +88,7 @@ mod lane_timings {
             self.calls[stage] += 1;
             self.total_us[stage] += elapsed;
             self.maximum_us[stage] = self.maximum_us[stage].max(elapsed);
-            if elapsed >= 20_000 && stage < Stage::Idle as usize {
+            if elapsed >= SLOW_STEP_US && stage < Stage::Idle as usize {
                 eprintln!(
                     "SW_LANE_TIMING utc_ms={} lane={} stage={} duration_us={elapsed}",
                     sw_storage::utc_ms(),
@@ -95,24 +98,46 @@ mod lane_timings {
             }
             let window = now - self.started;
             if window >= Duration::from_secs(1) {
-                #[cfg(target_os = "linux")]
-                let monotonic_us = {
-                    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-                    Some(now.tv_sec * 1_000_000 + now.tv_nsec / 1_000)
-                };
-                #[cfg(not(target_os = "linux"))]
-                let monotonic_us: Option<i64> = None;
                 eprintln!(
                     "SW_LANE_WINDOW {}",
                     serde_json::json!({
                         "window_us": window.as_micros(), "end_utc_ms": sw_storage::utc_ms(),
-                        "end_monotonic_us": monotonic_us, "lane": self.lane, "stages": NAMES,
+                        "end_monotonic_us": monotonic_us(), "lane": self.lane, "stages": NAMES,
                         "calls": self.calls, "total_us": self.total_us, "maximum_us": self.maximum_us,
                     })
                 );
                 *self = Self::new(self.lane);
             }
         }
+
+        pub(super) fn record_worker(&mut self, began: Instant, timing: Option<ExecutionTiming>) {
+            let round_trip_us = began.elapsed().as_micros();
+            self.record(Stage::Worker, Some(began));
+            if let Some(timing) = timing.filter(|_| round_trip_us >= SLOW_STEP_US) {
+                eprintln!(
+                    "SW_LANE_WORKER {}",
+                    serde_json::json!({
+                        "end_monotonic_us": monotonic_us(), "end_utc_ms": sw_storage::utc_ms(),
+                        "lane": self.lane, "round_trip_us": round_trip_us,
+                        "input_read_us": timing.input_read_us, "preprocess_us": timing.preprocess_us,
+                        "pose_run_us": timing.pose_run_us, "pose_decode_us": timing.pose_decode_us,
+                        "fire_run_us": timing.fire_run_us, "fire_decode_us": timing.fire_decode_us,
+                        "serialize_us": timing.serialize_us,
+                    })
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn monotonic_us() -> Option<i64> {
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        Some(now.tv_sec * 1_000_000 + now.tv_nsec / 1_000)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn monotonic_us() -> Option<i64> {
+        None
     }
 }
 
@@ -536,10 +561,15 @@ impl VisionScheduler {
                             outcome = process.infer(&job.frame.frame, job.tasks) => outcome,
                         };
                         #[cfg(feature = "diagnostics")]
-                        timing.record(
-                            lane_timings::Stage::Worker,
-                            trace_lane.then_some(dispatched_at),
-                        );
+                        if trace_lane {
+                            timing.record_worker(
+                                dispatched_at,
+                                outcome
+                                    .as_ref()
+                                    .ok()
+                                    .and_then(|result| result.worker_timing),
+                            );
+                        }
                         match outcome {
                             Ok(result) => {
                                 #[cfg(feature = "diagnostics")]
