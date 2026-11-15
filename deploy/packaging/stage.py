@@ -194,5 +194,5 @@ if __name__ == "__main__":
     parser.add_argument("--vc-runtime", type=Path)
     parser.add_argument("--models", type=Path)
     parser.add_argument("--model-sha256")
-    parser.add_argument("--model-notices", type=Path)
+    parser.add_argument("--model-notices", type=Path, default=ROOT / "models/THIRD_PARTY_NOTICES.md")
     main(parser.parse_args())
