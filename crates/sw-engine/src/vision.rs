@@ -413,6 +413,7 @@ impl VisionScheduler {
                         self.phase(lane, AnalysisState::Ready, None);
                         let Some(job) = self.next(lane, last_camera) else {
                             tokio::select! {
+                                _ = self.cameras.wait_for_analysis_frame(lane) => continue,
                                 _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
                                 _ = shutdown.wait_for(|stop| *stop) => break None,
                             }

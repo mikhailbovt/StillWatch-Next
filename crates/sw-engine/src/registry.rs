@@ -21,7 +21,7 @@ use sw_storage::{
 };
 use thiserror::Error;
 use tokio::{
-    sync::{Semaphore, watch},
+    sync::{Notify, Semaphore, watch},
     task::JoinHandle,
 };
 use uuid::Uuid;
@@ -115,6 +115,7 @@ pub struct CameraRegistry {
     limits: CameraLimits,
     analysis_admission: Option<Arc<AnalysisAdmission>>,
     pub(crate) inference_lanes: usize,
+    analysis_frames: Box<[Notify]>,
     budget: FrameBudget,
     probes: Semaphore,
     pub(crate) uploads: ReplayUploads,
@@ -255,6 +256,7 @@ impl CameraRegistry {
             limits,
             analysis_admission,
             inference_lanes,
+            analysis_frames: (0..inference_lanes).map(|_| Notify::new()).collect(),
             budget: FrameBudget::new(limits.raw_bytes)?,
             probes: Semaphore::new(2),
             uploads,
@@ -382,6 +384,10 @@ impl CameraRegistry {
 
     pub(crate) fn inference_lane(&self, id: Uuid) -> Option<usize> {
         self.slots.read().ok()?.get(&id)?.inference_lane
+    }
+
+    pub(crate) async fn wait_for_analysis_frame(&self, lane: usize) {
+        self.analysis_frames[lane].notified().await;
     }
 
     pub(crate) fn frames(&self) -> Vec<Arc<CameraFrame>> {
@@ -1423,6 +1429,9 @@ impl CameraRegistry {
                     .hold_started
                     .is_some_and(|since| now.duration_since(since) >= Duration::from_secs(3));
             });
+            if usable {
+                self.analysis_frames[inference_lane].notify_one();
+            }
         }
     }
 }
