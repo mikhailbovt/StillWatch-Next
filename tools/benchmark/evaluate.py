@@ -246,6 +246,29 @@ def legacy(args, media, quality_hash):
     return report
 
 
+def media_hashes(clip):
+    hashes = {clip[key] for key in ("sha256", "source_sha256") if clip.get(key)}
+    hashes.update(segment["sha256"] for segment in clip.get("lineage", {}).get("original_segments", ()))
+    return hashes
+
+
+def development_media(development):
+    seen = set()
+    for corpus in development.get("corpora", ()):
+        seen.update(corpus.get("seen_media_sha256", ()))
+        name = corpus["manifest"]
+        path = (ROOT if name.startswith(".local/") else DEVELOPMENT_CORPORA.parent) / name
+        if path.is_file():
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != corpus["sha256"]:
+                raise ValueError(f"Development manifest digest differs for {corpus['id']}")
+            manifest = json.loads(raw)
+            seen.update(manifest.get("dataset", {}).get("source_video_sha256", {}).values())
+            for clip in manifest.get("clips", ()):
+                seen.update(media_hashes(clip))
+    return seen
+
+
 def load_manifest(path, manifest_digest, contract, development):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") == 2:
@@ -254,6 +277,12 @@ def load_manifest(path, manifest_digest, contract, development):
     if not clips or len({clip["file"] for clip in clips}) != len(clips):
         raise ValueError("Evaluation requires distinct clip entries")
     if manifest.get("schema_version") == 2:
+        rated_holdout = [clip for clip in clips if clip["split"] == "holdout"]
+        if rated_holdout:
+            seen = development_media(development)
+            for clip in rated_holdout:
+                if media_hashes(clip) & seen:
+                    raise ValueError(f"Previously evaluated media is reused by holdout clip {clip['file']}")
         lineage_splits = {}
         for clip in clips:
             lineage, split = clip["lineage"], clip["split"]

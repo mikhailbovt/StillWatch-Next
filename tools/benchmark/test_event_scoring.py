@@ -114,9 +114,9 @@ class EventScoring(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "dataset.json"
 
-            def load():
+            def load(development=None):
                 path.write_text(json.dumps(manifest), encoding="utf-8")
-                return load_manifest(path, "unused-for-v2", contract, {})
+                return load_manifest(path, "unused-for-v2", contract, development or {})
 
             self.assertEqual(load()[0], [video])
             video["extra"] = True
@@ -141,6 +141,12 @@ class EventScoring(unittest.TestCase):
             video["subject_frames"]["3000000"]["unknown-subject"] = [0.2, 0.2, 0.3, 0.3]
             with self.assertRaisesRegex(ValueError, "Invalid subject frame annotation"):
                 load()
+            del video["subject_frames"]["3000000"]["unknown-subject"]
+            video.update(split="holdout", sha256="3" * 64)
+            development = {"corpora": [{"id": "known", "manifest": "manifest-unavailable.json",
+                                         "seen_media_sha256": ["1" * 64]}]}
+            with self.assertRaisesRegex(ValueError, "Previously evaluated media is reused"):
+                load(development)
 
     def test_short_follow_up_and_visible_at_start_are_separate(self):
         night = {**clip(34, 39.333333), "last_negative_s": 32}

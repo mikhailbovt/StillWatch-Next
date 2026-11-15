@@ -9,8 +9,78 @@
     {"id": "controlled-flame", "manifest": "controlled-flame-v1.manifest.json", "sha256": "c8bbe358d250d9a4fb3d9666adf6b986c1923b0a5d1a789b642534b9c084eab4", "lineage": "The clip entries pin the individual public source videos and region annotations.", "purpose": "Expected flame in operator-reviewed zones."},
     {"id": "gmdcsa24", "manifest": "gmdcsa24-v2.1.manifest.json", "sha256": "8d7a45caf43af90ac7dc5188988f361155381430c7f70f0b4bc6407ab5ba2c1c", "lineage": "Split or resample by original subject and environment. Categories share subjects.", "purpose": "Twelve positive fall regressions and sixteen staged ADL clips."},
     {"id": "legacy-heldout-pilot", "manifest": "heldout-pilot.manifest.json", "sha256": "d57b202601849250f2ba0d44c3efafefe1ddcc8de7c13379e9702254546a0bee", "lineage": "CaucaFall test subjects 8 and 9 and named FURG source recordings. Keep all footage from one captured scene together.", "purpose": "Nine positive fall regressions, ten ADL clips and visible-fire pilot."},
-    {"id": "furg", "manifest": ".local/qualification/holdout/furg/frozen-nov14-manifest.json", "sha256": "71bf1e4b0dca362d824979e3e254356f335218e41f78cda25a24b47c720b57a0", "lineage": "Group with all FURG recordings in the pilot until source ancestry has been checked.", "purpose": "Visible flame timing and contextual recordings.", "annotation_overrides": {"case2_outside.mp4": {"annotation": "uncertain"}}},
-    {"id": "visifire", "manifest": ".local/qualification/holdout/bilkent-visifire/manifest.json", "sha256": "5b72c40579b7f5638443653b7022c053c2445d7012e27a56f6a938d3077795ee", "lineage": "Forest views can share an incident. Keep source-linked views together; count repeated views as one session for uncertainty.", "purpose": "Outdoor transfer and moving objects."},
-    {"id": "indoor-fire-smoke-images", "manifest": ".local/qualification/holdout/zenodo-indoor-fire-smoke-15826133/manifest.json", "sha256": "dba7f1668bc96b8e0928f1b4aa694810503422a67a7c34308d23a3bf6bf13d11", "lineage": "Source episodes are unknown for some images. Previously excluded exact and filename duplicates do not establish scene independence.", "purpose": "Perception transfer only. The smoke label contains stage fog and humidifier vapor."}
+    {
+      "id": "furg",
+      "manifest": ".local/qualification/holdout/furg/frozen-nov14-manifest.json",
+      "sha256": "71bf1e4b0dca362d824979e3e254356f335218e41f78cda25a24b47c720b57a0",
+      "seen_media_sha256": [
+        "0c12ad8ababe1aef3291ed18f4a73c69b90728ac867e269dd5d145f81fc79011",
+        "1af9a1d4dd42244f8905e5c164088d1fee387a65a401967addad46785d9a4b3b",
+        "2e851792b0bfa29d5ec274b187b2bc4e563a655da25eb08f1a46a138385b1b15",
+        "3c220fb2fed63528b713b3497fbaf8860e6881759d6ddf04c8f2ddea137ad0b4",
+        "423068b833a825b557740770ed704e281d7eb0af8df77df28d8d713b68e6431f",
+        "46cf0e2b2e4b7b628c6029e7bdad213320146e5ad3ed0cf974b93a1183e1b8ae",
+        "5b5d573d03c102c2ccc913bc0cf011d50c75a57189197e2824073758398e04dd",
+        "5ebaf97bd9cea68804d3da5872de778261c23a7ff8ae6299d8830e0f3fcafb60",
+        "6176a6ae902d83305b3c8941f3ffe63bb61956fb4d3a541d96d1a700df922091",
+        "65e392c1ce5eaf29da879403c43aa47bad481526f1315d1a7eced4a3e9e60357",
+        "68f4757b833107b6facf32d5425a4828222ceb0d72081bd1407fded913b73ce5",
+        "9944ba783633107c1b90d7204834cf441d5c11f962404d3f8fddeffb281266f3",
+        "b3e59cf1d8f4916727bc459a0b7c09d5ddfde4b8f0440b9586944abfda7d890c",
+        "e2137769a0ec50cdc5e49911b9e902ae760e9fc35bfa54e1b45de043b69aeef1",
+        "ec26e340444a551a99b5e0c4d7ba3cd6a69ac0669b4277fd526858521268ca2d"
+      ],
+      "lineage": "Group with all FURG recordings in the pilot until source ancestry has been checked.",
+      "purpose": "Visible flame timing and contextual recordings.",
+      "annotation_overrides": {
+        "case2_outside.mp4": {
+          "annotation": "uncertain"
+        }
+      }
+    },
+    {
+      "id": "visifire",
+      "manifest": ".local/qualification/holdout/bilkent-visifire/manifest.json",
+      "sha256": "5b72c40579b7f5638443653b7022c053c2445d7012e27a56f6a938d3077795ee",
+      "seen_media_sha256": [
+        "0f0d154133d4c1debec956d95911dfafe3ac1015430803233bbeadb5aeba3594",
+        "3a5656483ba84bd189bd8660c078b09ef4fc2ec4aedb0a7b718d470862ab3886",
+        "4c51cf205b185ee014936d1b93014d9ea311b6713ef19e746fd57ad380aa83bd",
+        "61ac563cd9d1a080ba6aeafff364b4d9fd8f69bed68e3aa32c5a0606937f88ac",
+        "8d169d97b1cf085798c8d99b11abbf52d181737cc84fc47f7b42251d7573e785",
+        "aaffa80524cdd8dbe6424d6181128c78b9a57daeb099e2e54761f87ea8c2b51f",
+        "c993f0187fd796bd02864baee9a10d7b21724cca2a6e8fd2649987330b43289b",
+        "ddd4c7548f2432a60baff23d1b4c2f014b65c4f8f7bda0c7d795d8cfed1e171b",
+        "e230a00f10bfb55d33fb5defd48fda615b15680f05d956d48058f0ab50cc68a1",
+        "e297984b80c04f1ff7356f094a8924bbde359f0a4abdaea53d4fc050711b1553",
+        "e968f306a512a88f67f7051f71d8d4f3d79ad1a07c2717b0200f5988144f6038",
+        "ee7e7080eb049e4175dca0c11bb7867ba61bff3fe6f4cda580874446f3a3bcb0"
+      ],
+      "lineage": "Forest views can share an incident. Keep source-linked views together; count repeated views as one session for uncertainty.",
+      "purpose": "Outdoor transfer and moving objects."
+    },
+    {"id": "indoor-fire-smoke-images", "manifest": ".local/qualification/holdout/zenodo-indoor-fire-smoke-15826133/manifest.json", "sha256": "dba7f1668bc96b8e0928f1b4aa694810503422a67a7c34308d23a3bf6bf13d11", "lineage": "Source episodes are unknown for some images. Previously excluded exact and filename duplicates do not establish scene independence.", "purpose": "Perception transfer only. The smoke label contains stage fog and humidifier vapor."},
+    {
+      "id": "edinburgh-test1-grounded",
+      "manifest": ".local/qualification/completion-step-12/edinburgh-f17-grounding/manifest.json",
+      "sha256": "93ccf50326b43fcf99fef7b879d63d2e1b266e77ba9ccf079491cfdbe70aa41a",
+      "seen_media_sha256": [
+        "f6b011f4e372a94ff6c7497655e739207af42d826ed7cf6d2e57b0b31566d47e",
+        "ae1f4d89c2afd5dba842305f2ed803954cb79059e8dc462df6cb6cf1bfccd087"
+      ],
+      "lineage": "The visible-fire lead is from Edinburgh Test 1. Related views of the same room stay in development.",
+      "purpose": "Grounded Fire openings and fixed-phase backend comparison."
+    },
+    {
+      "id": "umafall-forward-grounded",
+      "manifest": ".local/qualification/completion-step-12/umafall-f17-grounding/manifest.json",
+      "sha256": "ff6ed52523b7da9d3a2fc04d87493e759dfa271db60364454aadfec1334e473b",
+      "seen_media_sha256": [
+        "c3e273c0ff8fcf79cc6166251ec46ff01be0d4972131d6aa2da338da3a058aed",
+        "eebb3fa88265e318adc83a089fab81c6ca5387c85ce155c25fafd127d73f5c9e"
+      ],
+      "lineage": "The staged forward fall belongs to the UMAFall video protocol. Keep footage from the same subject and scene together.",
+      "purpose": "Exact source-time person association and medical opening regression."
+    }
   ]
 }
