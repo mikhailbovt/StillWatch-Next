@@ -602,6 +602,9 @@ class Validation:
         growth = {}
         for kind in FAULTS.values():
             records = workload[kind]
+            completed = {case for row in records for case in row["completed"]}
+            enough_cycles = len(completed) >= self.contract["minimum_completed_fault_cycles"][kind]
+            complete = complete and enough_cycles
             length = len(records) // 3
             if length == 0:
                 complete = False
@@ -618,7 +621,8 @@ class Validation:
                     continue
                 addition = upper_growth(blocks, budgets["growth_horizon_seconds"])
                 growth[f"{kind}/{key}"] = addition
-                if max(row["usage"][key] for row in records if number(row["usage"].get(key))) + addition > caps[key]:
+                peak = max(row["usage"][key] for row in records if number(row["usage"].get(key)))
+                if enough_cycles and peak + addition > caps[key]:
                     failures.append(f"{kind}/{key}")
         media = drain["leases"]["media"]
         drained = (drain["usage"]["children"] == children and not drain["detached"]
