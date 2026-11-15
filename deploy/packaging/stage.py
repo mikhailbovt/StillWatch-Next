@@ -87,8 +87,17 @@ def model_pack(args, out, worker, ort_path, ort_sha256):
         expected = (locked["parity_report_sha256"] if name == "parity-report.json"
                     else locked["models"][Path(name).stem]["sha256"])
         copy(args.models / name, directory / name, expected)
-    if args.model_notices is not None:
-        copy(args.model_notices, out / "licenses/model-notices")
+    notices = args.model_notices
+    origins = {name: item["source"] for name, item in locked["models"].items()}
+    if notices is None:
+        reference = json.loads((ROOT / "models/models.rect.lock.json").read_text(encoding="utf-8"))
+        expected = {name: item["source"]["sha256"] for name, item in reference["models"].items()}
+        if {name: item["sha256"] for name, item in origins.items()} == expected:
+            notices = ROOT / "models/THIRD_PARTY_NOTICES.md"
+    if notices is not None:
+        copy(notices, out / "licenses/model-notices")
+    if any(item.get("license") == "AGPL-3.0" for item in origins.values()):
+        copy(ROOT / "models/AGPL-3.0.txt", out / "licenses/model-agpl-3.0.txt")
     report = json.loads((directory / "parity-report.json").read_text(encoding="utf-8"))
     cases = report["cases"]
     if not isinstance(cases, dict) or not 1 <= len(cases) <= 64:
@@ -194,5 +203,5 @@ if __name__ == "__main__":
     parser.add_argument("--vc-runtime", type=Path)
     parser.add_argument("--models", type=Path)
     parser.add_argument("--model-sha256")
-    parser.add_argument("--model-notices", type=Path, default=ROOT / "models/THIRD_PARTY_NOTICES.md")
+    parser.add_argument("--model-notices", type=Path)
     main(parser.parse_args())
