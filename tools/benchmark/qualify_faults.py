@@ -381,5 +381,6 @@ def capacity(settings):
                               "camera_slot_reuse_with_live_analysis": len(restored),
                               "admission_recovery_ms": (time.monotonic() - released) * 1_000,
                               "excess_requests": len(excess), "excess_rejected": rejected_count,
+                              "excess_statuses": [status for (status, _), _ in excess],
                               "excess_latency_ms": [duration for _, duration in excess],
                               "control_ready_http": health, "active_cameras_progressed": len(progress)}))

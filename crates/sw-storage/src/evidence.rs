@@ -318,14 +318,18 @@ impl Database {
             } else {
                 match self.blob_bytes {
                     Some(used) if info.byte_length <= self.quota.saturating_sub(used) => {
-                        if write_blob(&self.blobs, &path, &image.jpeg).is_ok() {
-                            // Charge writes even if the metadata transaction rolls back.
-                            self.blob_bytes = Some(used.saturating_add(info.byte_length));
-                            None
-                        } else {
-                            // A failed directory flush can leave a renamed blob.
-                            self.blob_bytes = None;
-                            Some(EvidenceFailure::Io)
+                        match write_blob(&self.blobs, &path, &image.jpeg) {
+                            Ok(()) => {
+                                // Charge writes even if the metadata transaction rolls back.
+                                self.blob_bytes = Some(used.saturating_add(info.byte_length));
+                                None
+                            }
+                            Err(error) => {
+                                if error.needs_recount {
+                                    self.blob_bytes = None;
+                                }
+                                Some(EvidenceFailure::Io)
+                            }
                         }
                     }
                     Some(_) => Some(EvidenceFailure::Quota),
@@ -898,18 +902,40 @@ pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub(crate) fn write_blob(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+pub(crate) struct BlobWriteError {
+    pub(crate) cause: StoreError,
+    needs_recount: bool,
+}
+
+pub(crate) fn write_blob(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), BlobWriteError> {
     let mut staging = tempfile::Builder::new()
         .prefix(".pending-")
-        .tempfile_in(root)?;
-    staging.write_all(bytes)?;
-    staging.as_file().sync_all()?;
+        .tempfile_in(root)
+        .map_err(|error| BlobWriteError {
+            cause: error.into(),
+            needs_recount: false,
+        })?;
+    if let Err(error) = staging
+        .write_all(bytes)
+        .and_then(|()| staging.as_file().sync_all())
+    {
+        return Err(BlobWriteError {
+            cause: error.into(),
+            needs_recount: staging.close().is_err(),
+        });
+    }
     #[cfg(test)]
     crate::tests::pause_at_file_cutpoint(root, "jpeg-synced");
-    staging
-        .persist_noclobber(path)
-        .map_err(|error| error.error)?;
-    sync_directory(root)?;
+    if let Err(error) = staging.persist_noclobber(path) {
+        return Err(BlobWriteError {
+            cause: error.error.into(),
+            needs_recount: error.file.close().is_err() || path.try_exists().unwrap_or(true),
+        });
+    }
+    sync_directory(root).map_err(|cause| BlobWriteError {
+        cause,
+        needs_recount: true,
+    })?;
     #[cfg(test)]
     crate::tests::pause_at_file_cutpoint(root, "blob-renamed");
     Ok(())

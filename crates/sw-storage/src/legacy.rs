@@ -457,7 +457,7 @@ impl LegacyEvidence<'_> {
             if bytes.len() as u64 > self.remaining {
                 return Ok(None);
             }
-            write_blob(self.destination, &destination, &bytes)?;
+            write_blob(self.destination, &destination, &bytes).map_err(|error| error.cause)?;
             tx.execute(
                 "INSERT INTO artifacts VALUES (?, ?, 1)",
                 params![digest, bytes.len() as i64],

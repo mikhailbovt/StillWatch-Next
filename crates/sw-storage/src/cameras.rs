@@ -126,6 +126,18 @@ impl Store {
         self.call(move |db| get(&db.conn, id)).await
     }
 
+    pub async fn camera_slot_available(
+        &self,
+        replacing: Option<Uuid>,
+        limits: CameraLimits,
+    ) -> Result<bool, StoreError> {
+        self.call(move |db| {
+            let (slots, _) = available_capture_capacity(&db.conn, replacing, limits)?;
+            Ok(slots != 0)
+        })
+        .await
+    }
+
     pub async fn camera_capacity(
         &self,
         dims: Dimensions,
@@ -408,6 +420,21 @@ fn capture_capacity(
     limits: CameraLimits,
 ) -> Result<CaptureCapacity, StoreError> {
     let required_raw_bytes = CameraLimits::required_raw_bytes(dims).ok_or(StoreError::Invalid)?;
+    let (available_camera_slots, available_raw_bytes) =
+        available_capture_capacity(conn, replacing, limits)?;
+    Ok(CaptureCapacity {
+        fits: available_camera_slots > 0 && available_raw_bytes >= required_raw_bytes,
+        available_camera_slots,
+        available_raw_bytes,
+        required_raw_bytes,
+    })
+}
+
+fn available_capture_capacity(
+    conn: &Connection,
+    replacing: Option<Uuid>,
+    limits: CameraLimits,
+) -> Result<(u32, u32), StoreError> {
     let (active, occupied) = conn.query_row(
         "SELECT count(*), coalesce(sum(bytes_reserved), 0) FROM cameras
          WHERE enabled = 1 AND deleted = 0 AND (?1 IS NULL OR id != ?1)",
@@ -420,12 +447,7 @@ fn capture_capacity(
     let available_raw_bytes = limits
         .raw_bytes
         .saturating_sub(u32::try_from(occupied).unwrap_or(u32::MAX));
-    Ok(CaptureCapacity {
-        fits: available_camera_slots > 0 && available_raw_bytes >= required_raw_bytes,
-        available_camera_slots,
-        available_raw_bytes,
-        required_raw_bytes,
-    })
+    Ok((available_camera_slots, available_raw_bytes))
 }
 
 fn available_compute_slots(

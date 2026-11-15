@@ -126,4 +126,6 @@ def run(settings, output):
                 write_json(output, {"planned": planned, "volume_bytes": size, "probe_errno": code,
                                     "free_bytes_after_release": released_bytes, "pressure_event": failed_event,
                                     "released_utc_ms": released_utc, "recovery_ms": elapsed, "incidents": incidents,
+                                    "source_after_release": latest(source, local),
+                                    "openings_after_release": openings(database, fixture["cameras"], released_utc),
                                     "checks": checks})

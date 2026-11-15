@@ -522,6 +522,18 @@ impl CameraRegistry {
                     if let Some(dimensions) = retained.and_then(|previous| previous.dimensions) {
                         (Some(dimensions), None, None)
                     } else {
+                        // Skip the decoder probe when all capture slots are already occupied.
+                        // The write transaction still arbitrates concurrent admissions.
+                        if !self
+                            .store
+                            .camera_slot_available(replacing, self.limits)
+                            .await?
+                        {
+                            if let Some(saved) = self.store.cached_camera(command, now).await? {
+                                return Ok(saved);
+                            }
+                            return Err(StoreError::CameraCapacity.into());
+                        }
                         let (probe, scene) = self
                             .probe_frame(
                                 &config.source,
