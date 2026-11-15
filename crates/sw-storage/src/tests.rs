@@ -2511,7 +2511,7 @@ fn backup_crash_before_publish_reclaims_the_staged_snapshot() {
     let restored_identity = restore_backup(&backup, &target).unwrap();
     assert_eq!(restored_identity.instance_id, identity.instance_id);
     assert_ne!(restored_identity.generation, identity.generation);
-    let restored = database(&target, 4 * 1024 * 1024);
+    let mut restored = database(&target, 4 * 1024 * 1024);
     assert_eq!(
         restored
             .read_evidence(incident.id, stamp.packet_id, 0)
