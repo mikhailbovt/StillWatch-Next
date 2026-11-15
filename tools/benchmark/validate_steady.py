@@ -5,7 +5,7 @@ import json
 import math
 import statistics
 
-from fast_rc_contract import checked_json, detail_output_dimensions, number, sha256
+from fast_rc_contract import checked_json, detail_output_dimensions, fresh_opening, number, sha256
 
 
 def resource_caps(profile):
@@ -243,9 +243,13 @@ class Steady:
         required = {"expected_known_canaries": len(canaries), "active_live_detector": True}
         if not self.end or not canaries:
             return required, {}, "INCOMPLETE"
+        started_utc = self.end.get("started_utc_ms")
+        if not number(started_utc) or any("opening_observed_host_utc_ms" not in event for event in self.end["openings"]):
+            return required, {"opening_frame_time_recorded": False}, "INCOMPLETE"
         missed = []
         for canary in canaries:
             if not any(event["live"] and event["category"] == canary["category"] and event["camera"] == canary["camera"]
+                       and fresh_opening(event, started_utc)
                        and canary["earliest_source_us"] <= int(event["source_us"]) <= canary["latest_source_us"]
                        for event in self.end["openings"]):
                 missed.append(canary["id"])

@@ -246,6 +246,13 @@ def number(value):
     return type(value) in (int, float) and value >= 0 and math.isfinite(value)
 
 
+def fresh_opening(event, start_ms):
+    observed = event.get("opening_observed_host_utc_ms")
+    committed = event.get("utc_ms")
+    return (type(observed) is int and type(committed) is int and 0 < start_ms <= observed <= committed
+            and event.get("opening_delayed") is False)
+
+
 def capture_progressed(before, after):
     return (after["capture_state"] == "streaming" and int(after["epoch"]) == int(before["epoch"])
             and int(after["frame"]) > int(before["frame"]))

@@ -232,7 +232,9 @@ def openings(database, cameras, start_ms):
             if scope["camera_id"] in reverse:
                 result.append({"id": incident["id"], "camera": reverse[scope["camera_id"]], "epoch": scope["epoch"],
                                "utc_ms": utc, "category": incident["category"], "attention": incident["attention"],
-                               "source_us": incident["first_source_us"], "live": incident["live"]})
+                               "source_us": incident["first_source_us"], "live": incident["live"],
+                               "opening_observed_host_utc_ms": incident.get("opening_observed_host_utc"),
+                               "opening_delayed": incident.get("opening_delayed", False)})
         return result
 
 
@@ -327,6 +329,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
             if first["epoch"] == last["epoch"] and before is not None and after is not None and int(after) >= int(before):
                 source_spans[camera] = (int(after) - int(before)) / 1_000_000
         write_json(output / "end.json", {"elapsed_s": interval, "metrics": end_metrics, "openings": observed,
+                                          "started_utc_ms": start_utc_ms,
                                           "viewer_renewals": viewer_renewals, "snapshots": snapshots["requests"],
                                           "snapshots_ok": snapshots["decoded"],
                                           "source_camera_count": len(sources), "source_seconds_by_camera": source_spans})

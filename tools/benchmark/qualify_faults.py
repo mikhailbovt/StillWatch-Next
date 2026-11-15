@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 import psutil
 
 from fast_rc_contract import (
-    CONTRACTS, camera_quiet, camera_recovered, checked_json, evidence, inference_camera_interrupted,
+    CONTRACTS, camera_quiet, camera_recovered, checked_json, evidence, fresh_opening, inference_camera_interrupted,
     inference_cameras_recovered, inference_worker_replaced, sha256, write_json,
 )
 from qualify_resources import ChurnResources
@@ -121,7 +121,8 @@ def canary(database, fixture, receiver, expected, earliest_utc):
     lan, session, _, _ = receiver
     token = session["access_token"]
     for event in events:
-        if not event["live"] or event["camera"] != expected["camera"] or event["category"] != expected["category"]:
+        if (not event["live"] or event["camera"] != expected["camera"] or event["category"] != expected["category"]
+                or not fresh_opening(event, earliest_utc)):
             continue
         if (int(event["epoch"]) != int(expected["source_epoch"])
                 or not expected["earliest_source_us"] <= int(event["source_us"]) <= expected["latest_source_us"]):

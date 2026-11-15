@@ -7,6 +7,7 @@ import unittest
 
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
 from event_scoring import coverage_intervals, score_clip
+from validate_report import canary_matches
 
 
 LIMITS = {"before_onset_tolerance_s": 2, "max_delay_s": 8, "minimum_roi_iou": 0.3,
@@ -179,6 +180,19 @@ class EventScoring(unittest.TestCase):
         check({"11000000": {"subject-A": roi, "subject-B": roi}}, "unverified_grounding")
         check({"10999999": {"subject-A": roi}}, "unverified_grounding")
         check({"11000000": {"subject-A": roi}}, "unverified_grounding", identity_uncertain=True)
+
+    def test_canary_requires_a_frame_observed_after_the_fault(self):
+        plan = {"camera": "cam", "category": "fire", "source_epoch": 1, "earliest_source_us": 0, "latest_source_us": 2_000}
+        opening = {"camera": "cam", "category": "fire", "source_epoch": "1", "source_us": 800,
+                   "utc_ms": 125, "receipt_utc_ms": 142, "live": True, "evidence_state": "persisted",
+                   "acknowledged": False, "opening_delayed": False}
+        with self.assertRaisesRegex(ValueError, "opening frame"):
+            canary_matches([opening], plan, 100)
+        self.assertEqual(canary_matches([dict(opening, opening_observed_host_utc_ms=99)], plan, 100), [])
+        self.assertEqual(canary_matches([dict(opening, opening_observed_host_utc_ms=126)], plan, 100), [])
+        fresh = dict(opening, opening_observed_host_utc_ms=101)
+        self.assertEqual(canary_matches([fresh], plan, 100), [fresh])
+        self.assertEqual(canary_matches([dict(fresh, opening_delayed=True)], plan, 100), [])
 
 
 if __name__ == "__main__":

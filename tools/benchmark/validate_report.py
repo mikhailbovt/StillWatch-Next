@@ -15,7 +15,7 @@ import sys
 from fast_rc_contract import (
     CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
     camera_quiet, camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
-    cuda_graph_shape,
+    cuda_graph_shape, fresh_opening,
     inference_cameras_recovered, inference_worker_replaced, member, number, sha256, validate_schema, write_json,
 )
 from validate_steady import Steady, resource_caps, upper_growth
@@ -39,12 +39,15 @@ FAULTS = {
 }
 
 
-def canary_matches(incidents, planned):
+def canary_matches(incidents, planned, start_ms):
+    if any("opening_observed_host_utc_ms" not in incident for incident in incidents):
+        raise ValueError("Canary evidence does not record when the opening frame was observed")
     return [incident for incident in incidents
             if all(incident.get(key) == planned[key] for key in ("category", "camera"))
             and int(incident["source_epoch"]) == int(planned["source_epoch"])
             and planned["earliest_source_us"] <= int(incident["source_us"]) <= planned["latest_source_us"]
-            and incident["live"] is True and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
+            and fresh_opening(incident, start_ms) and incident["live"] is True
+            and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
             and incident["utc_ms"] <= incident["receipt_utc_ms"]]
 
 
@@ -498,8 +501,8 @@ class Validation:
             start_utc = raw.get("started_utc_ms")
             if not number(start_utc):
                 continue
-            matches = [row for row in canary_matches(raw["incidents"], planned["canary"])
-                       if row["utc_ms"] >= start_utc and row["id"] not in seen_incidents]
+            matches = [row for row in canary_matches(raw["incidents"], planned["canary"], start_utc)
+                       if row["id"] not in seen_incidents]
             if len(matches) != 1 or planned["canary"]["camera"] != planned["camera"]:
                 failed.append({"id": name, "fresh_unique_matching_canaries": len(matches)})
                 continue
@@ -535,7 +538,7 @@ class Validation:
         if (raw["planned"] != planned or not number(raw["started_utc_ms"]) or not number(elapsed)
                 or elapsed > (proof["finished_s"] - proof["started_s"]) * 1_000):
             raise ValueError("Invalid final canary identity or observation interval")
-        matching = [row for row in canary_matches(raw["incidents"], planned) if row["utc_ms"] >= raw["started_utc_ms"]]
+        matching = canary_matches(raw["incidents"], planned, raw["started_utc_ms"])
         observed = {"ready_cameras": raw["ready_cameras"], "recovery_ms": elapsed, "matching_live_incidents": matching,
                     "integrity": raw["integrity"], "invalid_references": raw["invalid_references"]}
         passed = (len(cameras) == workload["camera_count"] and sorted(raw["ready_cameras"]) == sorted(cameras)
@@ -563,8 +566,8 @@ class Validation:
                               and int(pressure["epoch"]) == int(known["source_epoch"]) and pressure["live"] is True
                               and known["earliest_source_us"] <= int(pressure["source_us"]) <= known["latest_source_us"]
                               and pressure["failed_image_writes"] > 0 and pressure["utc_ms"] <= raw["released_utc_ms"])
-        matches = [row for row in canary_matches(raw["incidents"], planned["recovered_canary"])
-                   if row["id"] != pressure["id"] and row["utc_ms"] >= raw["released_utc_ms"]]
+        matches = [row for row in canary_matches(raw["incidents"], planned["recovered_canary"], raw["released_utc_ms"])
+                   if row["id"] != pressure["id"]]
         checks = raw["checks"]
         passed = (pressure_exercised and len(matches) == 1 and raw["recovery_ms"] <= maximum
                   and raw["probe_errno"] == errno.ENOSPC and 0 < raw["free_bytes_after_release"] <= raw["volume_bytes"] <= required["maximum_volume_bytes"]
@@ -600,8 +603,8 @@ class Validation:
                 raise ValueError(f"Invalid storage recovery identity or timing for {kind}")
             pressure = trial["during_pressure"]
             before, during = pressure["before"], pressure["during"]
-            matches = [event for event in canary_matches(trial["incidents"], planned[kind])
-                       if event["utc_ms"] >= trial["released_utc_ms"] and event["id"] not in used_incidents]
+            matches = [event for event in canary_matches(trial["incidents"], planned[kind], trial["released_utc_ms"])
+                       if event["id"] not in used_incidents]
             held_wal = kind != "pinned_wal" or (number(pressure["wal_bytes"]) and pressure["wal_bytes"] >= minimum_wal)
             selected = planned[kind]["camera"]
             passed = (set(before) == set(during) == cameras
