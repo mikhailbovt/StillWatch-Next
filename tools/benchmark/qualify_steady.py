@@ -91,6 +91,18 @@ def publisher(ffmpeg, peer, source):
             "-map", "0:v:0", "-an", "-c:v", "copy", "-f", "rtsp", "-rtsp_transport", "tcp", f"rtsp://{peer}/{source['id']}"]
 
 
+def rtsp_published(port, name):
+    url = f"rtsp://127.0.0.1:{port}/{name}"
+    request = f"DESCRIBE {url} RTSP/1.0\r\nCSeq: 1\r\nAccept: application/sdp\r\n\r\n"
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1) as connection:
+            connection.sendall(request.encode("ascii"))
+            with connection.makefile("rb") as response:
+                return response.readline(128).startswith(b"RTSP/1.0 200 ")
+    except OSError:
+        return False
+
+
 def pair_owner(settings, client, root):
     output = subprocess.check_output([settings["cli"], "pair", "--local", client.address.removeprefix("http://"),
                                       "--data-dir", str(root / "data"), "--role", "owner", "--json"], text=True, timeout=15)
@@ -381,6 +393,7 @@ def native_fixture(settings, root, *, start_enabled=True):
         for name, source in sorted(sources.items(), key=lambda pair: pair[1]["delay_s"]):
             time.sleep(max(0, begin + source["delay_s"] - time.monotonic()))
             publishers[name] = start_publisher(name)
+        until(lambda: all(rtsp_published(router_port, name) for name in sources), 15)
 
         def start_core():
             index = sum(1 for _ in root.glob("core-*.log"))
@@ -396,7 +409,8 @@ def native_fixture(settings, root, *, start_enabled=True):
                            "transport": "tcp", "credential_ref": None},
             }, key=uuid4().hex)
             if code != 201:
-                raise RuntimeError(f"Camera fixture {name} was rejected: {code}")
+                publisher_code = publishers[name].poll()
+                raise RuntimeError(f"Camera fixture {name} returned HTTP {code} with {camera}. Publisher exit {publisher_code}")
             cameras[name] = camera["id"]
         yield {"profile": profile, "sources": sources, "viewers": viewers, "cameras": cameras, "process": process,
                "local": local, "publishers": publishers, "start_publisher": start_publisher, "start_core": start_core}
