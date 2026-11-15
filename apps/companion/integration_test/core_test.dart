@@ -107,7 +107,7 @@ void main() {
     await _waitFor(tester, history);
     await tester.ensureVisible(history);
     await tester.tap(history);
-    await _waitFor(tester, find.text('Camera frames frozen'));
+    await _waitFor(tester, find.text('Visual changes unconfirmed'));
     await tester.tap(find.text('Active'));
     await _waitFor(tester, find.text('No active technical events.'));
     await tester.pumpWidget(const SizedBox.shrink());
