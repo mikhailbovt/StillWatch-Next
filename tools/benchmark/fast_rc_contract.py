@@ -252,6 +252,12 @@ def camera_recovered(before, after, epoch_changes):
             and all(int(analysis[key]) > int(before["analysis"][key]) for key in tasks))
 
 
+def camera_quiet(snapshot):
+    analysis = snapshot["analysis"] or {}
+    return (snapshot["capture_state"] == "streaming" and analysis.get("state") == "ready"
+            and analysis.get("fire_regions") == analysis.get("smoke_regions") == 0)
+
+
 def inference_worker_replaced(fault, count):
     before = {tuple(identity) for identity in fault["workers_before"]}
     after = {tuple(identity) for identity in fault["workers_after"]}

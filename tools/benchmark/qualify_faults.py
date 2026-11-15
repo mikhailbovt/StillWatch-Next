@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 import psutil
 
 from fast_rc_contract import (
-    CONTRACTS, camera_recovered, checked_json, evidence, inference_camera_interrupted,
+    CONTRACTS, camera_quiet, camera_recovered, checked_json, evidence, inference_camera_interrupted,
     inference_cameras_recovered, inference_worker_replaced, sha256, write_json,
 )
 from qualify_resources import ChurnResources
@@ -146,9 +146,8 @@ def canary(database, fixture, receiver, expected, earliest_utc):
     return None
 
 
-def close_canary(local, verified):
-    incident, = verified["incidents"]
-    path = f"/api/v2/incidents/{incident['id']}"
+def close_canary(local, incident):
+    path = f"/api/v2/incidents/{incident}"
     code, active = local.call("GET", path)
     if code != 200:
         raise RuntimeError("The completed canary could not be opened for cleanup")
@@ -165,9 +164,12 @@ def prepare_canary(database, fixture, case):
     if not case.get("resolve_before_fault"):
         return 0
     planned = case["canary"]
-    previous = [event for event in openings(database, fixture["cameras"], 0)
-                if event["live"] and event["camera"] == planned["camera"] and event["category"] == planned["category"]]
-    return sum(close_canary(fixture["local"], {"incidents": [event]}) for event in previous)
+    camera = UUID(fixture["cameras"][planned["camera"]]).bytes
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+        rows = db.execute("SELECT id FROM incidents WHERE camera_id = ? AND resolved = 0 "
+                          "AND json_extract(state, '$.live') = 1 AND json_extract(state, '$.category') = ?",
+                          (camera, planned["category"])).fetchall()
+    return sum(close_canary(fixture["local"], str(UUID(bytes=ident))) for ident, in rows)
 
 
 def batches(schedule):
@@ -200,6 +202,9 @@ def run(settings, output, evidence_root):
             raise ValueError("The canary must demonstrate recovery on the camera named for the fault")
         if type(case.get("resolve_before_fault", False)) is not bool:
             raise ValueError("The canary preparation flag must be a boolean")
+        quiet = case.get("require_quiet_before_fault", False)
+        if type(quiet) is not bool or (quiet and case["kind"] != "viewer_grant_offer_close"):
+            raise ValueError("The quiet precondition applies only to viewer cycles")
     if len({case["id"] for case in schedule}) != len(schedule):
         raise ValueError("Fault schedule contains a duplicate ID")
 
@@ -220,13 +225,30 @@ def run(settings, output, evidence_root):
             for batch in batches(schedule):
                 refresh_receiver(settings, receiver)
                 prepared = {case["id"]: prepare_canary(database, fixture, case) for case in batch}
-                started = offset()
-                began_utc = time.time_ns() // 1_000_000
                 kind = batch[0]["kind"]
-                deadline = started + profile["budgets"][LIMITS[kind]] / 1_000
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
                 tracked = fixture["cameras"] if kind == "inference_child_restart" else affected
-                before = {name: latest(camera, fixture["local"]) for name, camera in tracked.items()}
+                before = None
+                if batch[0].get("require_quiet_before_fault"):
+                    case, = batch
+                    name = case["camera"]
+
+                    def quiet_sample():
+                        sample = latest(affected[name], fixture["local"])
+                        return sample if camera_quiet(sample) else None
+
+                    began = offset()
+                    try:
+                        before = {name: until(quiet_sample, 20)}
+                    except AssertionError:
+                        log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": began,
+                                              "ended_s": offset(), "finished_s": None, "error": "Quiet scene precondition expired"}) + "\n")
+                        continue
+                started = offset()
+                began_utc = time.time_ns() // 1_000_000
+                deadline = started + profile["budgets"][LIMITS[kind]] / 1_000
+                if before is None:
+                    before = {name: latest(camera, fixture["local"]) for name, camera in tracked.items()}
                 try:
                     fault = inject(fixture, batch, receiver, resources)
                 except (OSError, RuntimeError, ValueError, TimeoutError, AssertionError) as error:
@@ -272,7 +294,7 @@ def run(settings, output, evidence_root):
                         log.write(json.dumps(row) + "\n")
                         completed.append(case["id"])
                         outstanding.pop(name)
-                        close_canary(fixture["local"], verified)
+                        close_canary(fixture["local"], verified["incidents"][0]["id"])
                     if outstanding:
                         time.sleep(0.2)
                 for name, case in outstanding.items():
@@ -320,7 +342,7 @@ def final_canary(settings, output):
                 time.sleep(0.2)
             elapsed = (time.monotonic() - started) * 1_000
             if verified is not None:
-                close_canary(fixture["local"], verified)
+                close_canary(fixture["local"], verified["incidents"][0]["id"])
             with closing(sqlite3.connect(database)) as db:
                 integrity = [status for status, in db.execute("PRAGMA integrity_check")]
                 invalid_references = len(db.execute("PRAGMA foreign_key_check").fetchall())

@@ -14,7 +14,7 @@ import sys
 
 from fast_rc_contract import (
     CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
-    camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
+    camera_quiet, camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
     inference_cameras_recovered, inference_worker_replaced, member, number, sha256, validate_schema, write_json,
 )
 from validate_steady import Steady, resource_caps, upper_growth
@@ -426,6 +426,9 @@ class Validation:
             prepared = row.get("prior_incidents_resolved", 0)
             if type(prepared) is not int or prepared < 0 or (prepared and not planned.get("resolve_before_fault")):
                 raise ValueError("Fault ledger includes an unplanned incident resolution")
+            quiet = planned.get("require_quiet_before_fault", False)
+            if type(quiet) is not bool or (quiet and row["kind"] != "viewer_grant_offer_close"):
+                raise ValueError("The quiet precondition applies only to viewer cycles")
             if row.get("finished_s") is None:
                 if row.get("fault") and number(row.get("ended_s")) and row["ended_s"] >= row["deadline_s"]:
                     failed.append({"id": name, "reason": row["error"], "observed_ms": (row["ended_s"] - row["started_s"]) * 1_000})
@@ -444,6 +447,8 @@ class Validation:
             raw = checked_json(checked_evidence(self.root, canary))
             if raw.get("planned") != planned["canary"] or not isinstance(raw.get("incidents"), list):
                 raise ValueError("Canary is missing the frozen event specification or native incident rows")
+            if quiet and not camera_quiet(raw["source_before"]):
+                raise ValueError("The viewer was started outside the planned quiet scene")
             progress = row.get("capture_progress_s")
             new_epoch = row["kind"] in {"rtsp_reconnect", "core_restart"}
             if not number(progress) or not started <= progress <= finished or not camera_recovered(
