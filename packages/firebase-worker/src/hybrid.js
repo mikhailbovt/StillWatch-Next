@@ -253,6 +253,11 @@ async function serveJob(response) {
   } catch (error) {
     result = { error: "inference_unavailable" };
     failure = evaluationFailure(error);
+    if (error?.message === "route_unavailable" && state === "ready") {
+      state = "unavailable";
+      nextWarmup = performance.now() + 30_000;
+      prepare.disabled = false;
+    }
     hideEvidence();
   } finally {
     currentJob = undefined;
@@ -286,6 +291,7 @@ async function serveJob(response) {
 }
 
 function evaluationFailure(error) {
+  if (error?.message === "route_unavailable") return "local model unavailable";
   if (error instanceof SyntaxError || error?.message === "invalid_response") return "invalid response";
   if (error?.message === "blocked_response") return "blocked response";
   if (error?.message === "unverified_route") return "route unverified";

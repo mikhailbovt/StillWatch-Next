@@ -109,13 +109,18 @@ export function bootstrapDevice(ai) {
 
 export async function evaluate(ai, model, packet, signal, { browser = false, deviceReady = false } = {}) {
   const { meta } = packet;
+  const canUseDevice = browser && deviceReady && typeof globalThis.LanguageModel?.create === "function"
+    && typeof globalThis.LanguageModel?.availability === "function";
+  // The SDK selects cloud transport when the browser adapter is absent, including in local-only mode.
+  if ((meta.route === "local_only" && !canUseDevice) || (!browser && meta.route !== "cloud_only")) {
+    throw new Error("route_unavailable");
+  }
   const route = browser
     ? { cloud_only: InferenceMode.ONLY_IN_CLOUD, local_only: InferenceMode.ONLY_ON_DEVICE,
-        prefer_local: deviceReady ? InferenceMode.PREFER_ON_DEVICE : InferenceMode.ONLY_IN_CLOUD }[meta.route]
+        prefer_local: canUseDevice ? InferenceMode.PREFER_ON_DEVICE : InferenceMode.ONLY_IN_CLOUD }[meta.route]
     : InferenceMode.ONLY_IN_CLOUD;
-  if (!browser && meta.route !== "cloud_only") throw new Error("route_unavailable");
   const currentOverview = packet.images.findLast(image => image.kind === "overview");
-  const images = browser && meta.route !== "cloud_only" ? [currentOverview] : packet.images;
+  const images = route === InferenceMode.ONLY_IN_CLOUD ? packet.images : [currentOverview];
   const schema = descriptionSchema(meta.category, images.map(image => image.id));
   const configured = getGenerativeModel(ai, {
     mode: route,
