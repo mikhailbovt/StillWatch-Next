@@ -89,6 +89,11 @@ export async function warmDevice() {
   let session;
   try {
     session = await globalThis.LanguageModel.create({ expectedInputs, signal });
+  } finally {
+    // Chrome associates the creation signal with the lifetime of the session.
+    deadline.removeEventListener("abort", expire);
+  }
+  try {
     const canvas = new OffscreenCanvas(320, 180);
     canvas.getContext("2d").fillRect(0, 0, canvas.width, canvas.height);
     const image = canvas.transferToImageBitmap();
@@ -96,17 +101,14 @@ export async function warmDevice() {
       await session.prompt([{ role: "user", content: [
         { type: "text", value: "Is the image blank? Return true or false." },
         { type: "image", value: image },
-      ] }], { responseConstraint: { type: "boolean" }, signal });
+      ] }], { responseConstraint: { type: "boolean" }, signal: AbortSignal.timeout(60_000) });
     } finally {
       image.close();
     }
     return session;
   } catch (error) {
-    session?.destroy();
+    session.destroy();
     throw error;
-  } finally {
-    // Aborting the creation signal also destroys an already-created session.
-    deadline.removeEventListener("abort", expire);
   }
 }
 

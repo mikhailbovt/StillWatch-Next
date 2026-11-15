@@ -46,12 +46,21 @@ test("cloud fallback includes the temporal evidence when the device model is una
   assert.deepEqual(received, packet.images.map(image => Buffer.from(image.jpeg).toString("base64")));
 });
 
-test("the warmup deadline no longer controls a successfully warmed session", async t => {
-  const deadline = new AbortController();
-  t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+test("creation and image warmup have independent deadlines", async t => {
+  const creationDeadline = new AbortController();
+  const imageDeadline = new AbortController();
+  const deadlines = new Map([[120_000, creationDeadline], [60_000, imageDeadline]]);
+  t.mock.method(AbortSignal, "timeout", ms => deadlines.get(ms).signal);
   let creationSignal;
   let imageClosed = false;
-  const session = { async prompt() {}, destroy: t.mock.fn() };
+  const session = {
+    async prompt(_, { signal }) {
+      creationDeadline.abort(new DOMException("Creation timed out", "TimeoutError"));
+      assert.equal(creationSignal.aborted, false);
+      assert.equal(signal, imageDeadline.signal);
+    },
+    destroy: t.mock.fn(),
+  };
   globalThis.LanguageModel = { async create({ signal }) { creationSignal = signal; return session; } };
   globalThis.OffscreenCanvas = class {
     getContext() { return { fillRect() {} }; }
@@ -61,7 +70,7 @@ test("the warmup deadline no longer controls a successfully warmed session", asy
 
   assert.equal(await warmDevice(), session);
   assert.equal(imageClosed, true);
-  deadline.abort(new DOMException("Warmup timed out", "TimeoutError"));
+  imageDeadline.abort(new DOMException("Image warmup timed out", "TimeoutError"));
   assert.equal(creationSignal.aborted, false);
   assert.equal(session.destroy.mock.callCount(), 0);
 });
