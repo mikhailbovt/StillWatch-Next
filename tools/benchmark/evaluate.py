@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -111,7 +112,43 @@ def match_opening_subject(event, subject_frames, minimum_iou):
     return matches[0] if len(matches) == 1 else None
 
 
-def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, configured):
+def replay_backend(args):
+    metadata = {"backend": "cpu", "threads_per_worker": args.threads, "cuda": None}
+    options = ["--inference-threads", str(args.threads)]
+    if args.cuda_device is not None:
+        stems = ("onnxruntime_providers_cuda.dll", "onnxruntime_providers_shared.dll") if os.name == "nt" else (
+            "libonnxruntime_providers_cuda.so", "libonnxruntime_providers_shared.so")
+        provider, shared = (digest(args.runtime.with_name(name)) for name in stems)
+        metadata.update(backend="cuda", cuda={"device": args.cuda_device, "provider_sha256": provider,
+                                             "shared_sha256": shared, "graph_shape": args.cuda_graph_shape})
+        options.extend(["--cuda-device", str(args.cuda_device), "--cuda-provider-sha256", provider,
+                        "--cuda-shared-sha256", shared])
+        if args.cuda_graph_shape:
+            options.extend(["--cuda-graph-shape", *map(str, args.cuda_graph_shape)])
+    return metadata, options
+
+
+def wait_for_replay_workers(client, backend, lanes):
+    last_status = {}
+
+    def ready():
+        code, body = client.call("GET", "/api/v2/status")
+        if code != 200:
+            raise RuntimeError(f"Replay Core status returned {code}")
+        inference = body["inference"]
+        if inference["backend"] != backend or inference["configured_workers"] != lanes:
+            raise RuntimeError("Replay Core loaded a different inference configuration")
+        last_status.update(state=inference["state"], ready_workers=inference["ready_workers"],
+                           failure=inference.get("failure"))
+        return inference["state"] == "ready" and inference["ready_workers"] == lanes
+
+    try:
+        until(ready, 60 if backend == "cuda" else 30)
+    except AssertionError as error:
+        raise RuntimeError(f"Replay workers did not become ready ({last_status})") from error
+
+
+def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, native_options, *, configured):
     with TemporaryDirectory(prefix="stillwatch-heldout-") as directory:
         root = Path(directory)
         data = root / "data"
@@ -120,10 +157,13 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
         for index, clip in enumerate(clips):
             source = media / clip["file"]
             shutil.copyfile(source, sources / f"{index}{source.suffix}")
+        backend = "cuda" if args.cuda_device is not None else "cpu"
+        lanes = 1 if backend == "cuda" else len(clips)
         with run_core(args.core, args.worker, data, sources, root / "core.log",
                       "--model-pack", str(args.models), "--model-manifest-sha256", model_hash,
                       "--ort-library", str(args.runtime), "--ort-library-sha256", ort_hash,
-                      "--inference-workers", str(len(clips)), "--inference-threads", "3") as (_, client):
+                      "--inference-workers", str(lanes), *native_options) as (_, client):
+            wait_for_replay_workers(client, backend, lanes)
             cameras = {}
             samples = defaultdict(list)
             source_epochs = defaultdict(dict)
@@ -304,11 +344,14 @@ def run(args):
             raise ValueError(f"Invalid local-only evaluation input {clip['file']}")
     model_hash = digest(args.models / "models.lock.json")
     ort_hash = digest(args.runtime)
+    inference, native_options = replay_backend(args)
+    maximum_lanes = 1 if args.cuda_device is not None else min(args.parallel, len(clips))
     reference = legacy(args, clips, media)
     outputs = {}
     for start in range(0, len(clips), args.parallel):
         group = clips[start:start + args.parallel]
-        outputs.update(rust_batch(args, group, media, model_hash, ort_hash, contract["coverage"], configured=True))
+        outputs.update(rust_batch(args, group, media, model_hash, ort_hash, contract["coverage"], native_options,
+                                  configured=True))
         print(f"Evaluated {start + len(group)}/{len(clips)} clips through Rust Core", flush=True)
     controlled = [clip for clip in clips if "controlled_fire_regions" in clip]
     comparison = {}
@@ -316,13 +359,15 @@ def run(args):
     for start in range(0, len(clips), args.parallel):
         group = clips[start:start + args.parallel]
         if any("controlled_fire_regions" in clip for clip in group):
-            other = rust_batch(args, group, media, model_hash, ort_hash, contract["coverage"], configured=False)
+            other = rust_batch(args, group, media, model_hash, ort_hash, contract["coverage"], native_options,
+                               configured=False)
             comparison.update({clip["file"]: other[clip["file"]] for clip in group
                                if "controlled_fire_regions" in clip})
     report = {
         **scoring_inputs, "method": "paced_local_replay", "core_sha256": digest(args.core),
         "worker_sha256": digest(args.worker), "model_manifest_sha256": model_hash,
-        "ort_sha256": ort_hash, "inference_threads_per_replay_lane": 3, "parallel_lanes": args.parallel,
+        "ort_sha256": ort_hash, "inference_threads_per_replay_lane": args.threads, "parallel_lanes": args.parallel,
+        "inference": inference | {"maximum_workers": maximum_lanes},
         "rust": score_run(clips, outputs, thresholds), "per_clip_rust": outputs,
         "controlled_without_regions": comparison,
         "controlled_without_regions_summary": score_run(controlled, comparison, thresholds),
@@ -342,6 +387,9 @@ if __name__ == "__main__":
     for name in ("legacy-python", "legacy-root", "legacy-models"):
         parser.add_argument(f"--{name}", type=Path)
     parser.add_argument("--parallel", type=int, choices=range(1, 5), default=3)
+    parser.add_argument("--threads", type=int, choices=range(1, 65), default=3)
+    parser.add_argument("--cuda-device", type=int)
+    parser.add_argument("--cuda-graph-shape", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"))
     args = parser.parse_args()
     legacy_args = (args.legacy_python, args.legacy_root, args.legacy_models)
     if any(legacy_args) and not all(legacy_args):
@@ -351,6 +399,11 @@ if __name__ == "__main__":
         parser.error("native replay requires --core, --worker, --models, --runtime and --media")
     if args.rescore is not None and (any(native_args) or any(legacy_args)):
         parser.error("--rescore reads an existing report without launching a runtime")
+    if args.cuda_device is not None and (args.rescore is not None or not 0 <= args.cuda_device <= 65535):
+        parser.error("--cuda-device requires native replay and a device index in 0..65535")
+    if args.cuda_graph_shape is not None and (args.cuda_device is None or any(
+            not 32 <= side <= 640 or side % 32 for side in args.cuda_graph_shape)):
+        parser.error("--cuda-graph-shape requires CUDA and positive stride-32 tensor dimensions up to 640")
     for name in ("core", "worker", "models", "runtime", "manifest", "media", "legacy_python", "legacy_root", "legacy_models", "rescore"):
         if (path := getattr(args, name)) is not None:
             setattr(args, name, path.resolve(strict=True))
