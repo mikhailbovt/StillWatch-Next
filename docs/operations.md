@@ -6,6 +6,8 @@ Install the Core on the machine that can reach the cameras. Use a local filesyst
 
 The Windows x64 MSI installs the StillWatchCore service under LocalService. Service settings are in the StillWatch subdirectory of ProgramData. Back up that directory before changing versions. On Linux, install the DEB on Ubuntu 24.04 x64 or the RPM on Fedora 44 x64, review the environment in /etc/stillwatch/core.conf, then enable the service with the command below. Allow USB access through the specific device's operating system permissions if needed.
 
+The Linux package version comes from the three-part version in the staged manifest. Before an upgrade, stop the Core and any enabled notification relay, then take an offline backup. Install the newer package and restart the services with their saved configuration. Keep the previous package and matching backup for rollback across a schema change.
+
 The Windows Core installer includes the locked Microsoft Visual C++ x64 runtime beside the executables. The SCM restarts the Core after up to two unexpected exits, with a three-second delay. Review the System event log if restarts are exhausted. The failure count resets after a day without an unexpected exit.
 
 The CPU and CUDA Compose profiles use a 512 MiB temporary filesystem and rotate the Core log across three 16 MiB files. The Linux package writes to the systemd journal. Set the journal's storage budget and retention through the host's journald policy. [Docker local logging driver](https://docs.docker.com/engine/logging/drivers/local/), [systemd journal limits](https://www.freedesktop.org/software/systemd/man/latest/journald.conf.html)

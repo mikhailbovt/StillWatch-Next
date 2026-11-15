@@ -7,6 +7,7 @@ if (( $# != 3 )); then
 fi
 source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 payload=$(realpath "$1")
+version=$(python3 "$source_root/deploy/packaging/linux-package-version.py" "$payload/manifest.json")
 stage=$(realpath -m "$2")
 output=$(realpath -m "$3")
 if [[ -e "$stage" && -n $(find "$stage" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
@@ -21,9 +22,9 @@ install -D -m 0644 "$source_root/deploy/systemd/stillwatch.service" "$stage/usr/
 install -D -m 0644 "$source_root/deploy/systemd/stillwatch-apns.service" "$stage/usr/lib/systemd/system/stillwatch-apns.service"
 install -D -m 0644 "$source_root/deploy/linux/stillwatch.conf" "$stage/etc/stillwatch/core.conf"
 
-cat > "$stage/DEBIAN/control" <<'EOF'
-Package: stillwatch-core
-Version: 0.1.0
+{
+printf 'Package: stillwatch-core\nVersion: %s\n' "$version"
+cat <<'EOF'
 Architecture: amd64
 Section: video
 Priority: optional
@@ -32,6 +33,7 @@ Depends: libc6 (>= 2.39), libgcc-s1, libstdc++6, libgnutls30t64, adduser
 Description: StillWatch Next autonomous monitoring service
  Native Rust Core, capture and inference worker, and desktop alarm agent.
 EOF
+} > "$stage/DEBIAN/control"
 printf '%s\n' /etc/stillwatch/core.conf > "$stage/DEBIAN/conffiles"
 cat > "$stage/DEBIAN/postinst" <<'EOF'
 #!/bin/sh

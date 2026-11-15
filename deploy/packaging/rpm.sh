@@ -7,6 +7,7 @@ if (( $# != 3 )); then
 fi
 source_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 payload=$(realpath "$1")
+version=$(python3 "$source_root/deploy/packaging/linux-package-version.py" "$payload/manifest.json")
 top=$(realpath -m "$2")
 output=$(realpath -m "$3")
 if [[ -e "$top" && -n $(find "$top" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
@@ -19,9 +20,9 @@ install -m 0755 "$source_root/deploy/linux/stillwatch-core" "$top/SOURCES/stillw
 install -m 0644 "$source_root/deploy/linux/stillwatch.conf" "$top/SOURCES/core.conf"
 install -m 0644 "$source_root/deploy/systemd/stillwatch.service" "$top/SOURCES/stillwatch.service"
 install -m 0644 "$source_root/deploy/systemd/stillwatch-apns.service" "$top/SOURCES/stillwatch-apns.service"
-cat > "$top/SPECS/stillwatch-core.spec" <<'EOF'
-Name: stillwatch-core
-Version: 0.1.0
+{
+printf 'Name: stillwatch-core\nVersion: %s\n' "$version"
+cat <<'EOF'
 Release: 1
 Summary: StillWatch Next autonomous monitoring service
 License: Apache-2.0 AND MIT AND LGPL-2.1-or-later AND BSD-2-Clause
@@ -75,4 +76,5 @@ if test -d /run/systemd/system; then systemctl daemon-reload; fi
 /usr/lib/systemd/system/stillwatch.service
 /usr/lib/systemd/system/stillwatch-apns.service
 EOF
+} > "$top/SPECS/stillwatch-core.spec"
 rpmbuild -bb --define "_topdir $top" --define "_rpmdir $output" "$top/SPECS/stillwatch-core.spec"
