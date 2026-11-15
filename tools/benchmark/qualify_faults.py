@@ -17,8 +17,9 @@ from uuid import UUID, uuid4
 import psutil
 
 from fast_rc_contract import (
-    CONTRACTS, camera_quiet, camera_recovered, checked_json, evidence, fresh_opening, inference_camera_interrupted,
-    inference_cameras_recovered, inference_worker_replaced, sha256, write_json,
+    CONTRACTS, camera_quiet, camera_recovered, checked_json, consecutive_quiet_samples, evidence, fresh_opening,
+    inference_camera_interrupted, inference_cameras_recovered, inference_worker_replaced, quiet_fire_sample,
+    quiet_requirements, sha256, write_json,
 )
 from qualify_resources import ChurnResources
 from qualify_steady import latest, native_fixture, openings, pair_owner
@@ -203,9 +204,7 @@ def run(settings, output, evidence_root):
             raise ValueError("The canary must demonstrate recovery on the camera named for the fault")
         if type(case.get("resolve_before_fault", False)) is not bool:
             raise ValueError("The canary preparation flag must be a boolean")
-        quiet = case.get("require_quiet_before_fault", False)
-        if type(quiet) is not bool or (quiet and case["kind"] != "viewer_grant_offer_close"):
-            raise ValueError("The quiet precondition applies only to viewer cycles")
+        quiet_requirements(case)
     if len({case["id"] for case in schedule}) != len(schedule):
         raise ValueError("Fault schedule contains a duplicate ID")
 
@@ -230,13 +229,31 @@ def run(settings, output, evidence_root):
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
                 tracked = fixture["cameras"] if kind == "inference_child_restart" else affected
                 before = None
-                if batch[0].get("require_quiet_before_fault"):
+                quiet, quiet_duration_us = quiet_requirements(batch[0])
+                quiet_observations = []
+                if quiet:
                     case, = batch
                     name = case["camera"]
 
                     def quiet_sample():
                         sample = latest(affected[name], fixture["local"])
-                        return sample if camera_quiet(sample) else None
+                        if quiet_duration_us == 0:
+                            return sample if camera_quiet(sample) else None
+                        cursor = quiet_fire_sample(sample)
+                        if cursor is None:
+                            quiet_observations.clear()
+                            return None
+                        if quiet_observations:
+                            previous = quiet_fire_sample(quiet_observations[-1])
+                            if previous == cursor:
+                                return None
+                            if not consecutive_quiet_samples(previous, cursor):
+                                quiet_observations.clear()
+                        quiet_observations.append(sample)
+                        if len(quiet_observations) > 32:
+                            quiet_observations.pop(0)
+                        elapsed_us = cursor[2] - quiet_fire_sample(quiet_observations[0])[2]
+                        return sample if elapsed_us >= quiet_duration_us else None
 
                     began = offset()
                     try:
@@ -287,7 +304,8 @@ def run(settings, output, evidence_root):
                             continue
                         path = output / (case["id"] + ".json")
                         write_json(path, verified | {"started_utc_ms": began_utc, "source_before": before[name],
-                                                      "source_after": current, "inference_recovery": recovery})
+                                                      "source_after": current, "inference_recovery": recovery,
+                                                      "quiet_observations": quiet_observations})
                         row = {"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
                                "prior_incidents_resolved": prepared[case["id"]],
@@ -303,6 +321,7 @@ def run(settings, output, evidence_root):
                     write_json(path, {"planned": case["canary"], "source_before": before[name],
                                       "source_after": latest(affected[name], fixture["local"]),
                                       "inference_recovery": recovery,
+                                      "quiet_observations": quiet_observations,
                                       "incidents": openings(database, fixture["cameras"], began_utc)})
                     log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                           "ended_s": offset(), "finished_s": None, "capture_progress_s": window[name],

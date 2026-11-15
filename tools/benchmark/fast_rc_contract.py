@@ -275,6 +275,38 @@ def camera_quiet(snapshot):
             and analysis.get("fire_regions") == analysis.get("smoke_regions") == 0)
 
 
+def quiet_requirements(case):
+    quiet = case.get("require_quiet_before_fault", False)
+    duration = case.get("quiet_source_ms", 0)
+    if (type(quiet) is not bool or (quiet and case["kind"] != "viewer_grant_offer_close")
+            or type(duration) is not int or not 0 <= duration <= 10_000 or (duration and not quiet)):
+        raise ValueError("Invalid viewer quiet-scene precondition")
+    return quiet, duration * 1_000
+
+
+def quiet_fire_sample(snapshot):
+    analysis = snapshot["analysis"] or {}
+    epoch = snapshot["epoch"]
+    if (not camera_quiet(snapshot) or analysis.get("source_epoch") != epoch
+            or analysis.get("last_fire_source_us") is None):
+        return None
+    return epoch, int(analysis["fire_frames"]), int(analysis["last_fire_source_us"])
+
+
+def consecutive_quiet_samples(previous, current):
+    return (previous[0] == current[0] and current[1] == previous[1] + 1
+            and 0 < current[2] - previous[2] <= 1_500_000)
+
+
+def verified_quiet_window(snapshots, minimum_us):
+    if not 2 <= len(snapshots) <= 32:
+        return False
+    samples = [quiet_fire_sample(row) for row in snapshots]
+    return (all(sample is not None for sample in samples)
+            and all(consecutive_quiet_samples(a, b) for a, b in zip(samples, samples[1:]))
+            and samples[-1][2] - samples[0][2] >= minimum_us)
+
+
 def inference_worker_replaced(fault, count):
     before = {tuple(identity) for identity in fault["workers_before"]}
     after = {tuple(identity) for identity in fault["workers_after"]}

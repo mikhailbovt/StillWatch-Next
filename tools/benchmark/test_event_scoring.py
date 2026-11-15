@@ -7,6 +7,7 @@ import unittest
 
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
 from event_scoring import coverage_intervals, score_clip
+from fast_rc_contract import verified_quiet_window
 from validate_report import canary_matches
 
 
@@ -193,6 +194,17 @@ class EventScoring(unittest.TestCase):
         fresh = dict(opening, opening_observed_host_utc_ms=101)
         self.assertEqual(canary_matches([fresh], plan, 100), [fresh])
         self.assertEqual(canary_matches([dict(fresh, opening_delayed=True)], plan, 100), [])
+
+    def test_viewer_quiet_precondition_uses_continuous_accepted_fire_frames(self):
+        snapshots = [{"epoch": "2", "capture_state": "streaming",
+                      "analysis": {"state": "ready", "source_epoch": "2", "fire_regions": 0, "smoke_regions": 0,
+                                   "fire_frames": str(index + 1), "last_fire_source_us": str(index * 500_000)}}
+                     for index in range(7)]
+        self.assertTrue(verified_quiet_window(snapshots, 3_000_000))
+        self.assertFalse(verified_quiet_window(snapshots[1:], 3_000_000))
+        self.assertFalse(verified_quiet_window(snapshots[:3] + snapshots[4:], 3_000_000))
+        snapshots[3]["analysis"]["smoke_regions"] = 1
+        self.assertFalse(verified_quiet_window(snapshots, 3_000_000))
 
 
 if __name__ == "__main__":
