@@ -818,10 +818,12 @@ fn append_hazard_observation(
             signature.as_ref().map(|signature| signature.0.as_slice())
         ],
     )?;
+    // Keep the first observation for opening provenance and the latest 63 for continuity.
     conn.execute(
         "DELETE FROM hazard_observations WHERE incident_id = ?1 AND source_us < (
            SELECT source_us FROM hazard_observations WHERE incident_id = ?1
-           ORDER BY source_us DESC LIMIT 1 OFFSET 63)",
+           ORDER BY source_us DESC LIMIT 1 OFFSET 62)
+         AND source_us > (SELECT min(source_us) FROM hazard_observations WHERE incident_id = ?1)",
         [id(&incident.id)],
     )?;
     Ok(())

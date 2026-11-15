@@ -5,7 +5,7 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
-from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, score_run
+from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
 from event_scoring import coverage_intervals, score_clip
 
 
@@ -69,6 +69,15 @@ class EventScoring(unittest.TestCase):
             manifest["clips"].append(dict(video, file="second.mp4", sha256="2" * 64, split="holdout", lineage=lineage))
             with self.assertRaisesRegex(ValueError, "Source lineage crosses evaluation splits: .*group"):
                 load()
+            manifest["clips"].pop()
+            video["category"] = "medical"
+            video["lineage"]["subject_ids"] = ["subject-A"]
+            video["events"] = [dict(video["events"][0], category="medical", subject_id="subject-A")]
+            video["subject_frames"] = {"3000000": {"subject-A": [0.1, 0.1, 0.2, 0.2]}}
+            self.assertEqual(load()[0], [video])
+            video["subject_frames"]["3000000"]["unknown-subject"] = [0.2, 0.2, 0.3, 0.3]
+            with self.assertRaisesRegex(ValueError, "Invalid subject frame annotation"):
+                load()
 
     def test_short_follow_up_and_visible_at_start_are_separate(self):
         night = {**clip(34, 39.333333), "last_negative_s": 32}
@@ -124,18 +133,52 @@ class EventScoring(unittest.TestCase):
         self.assertGreater(no_trace["nominal_negative_camera_hours"], 0)
         self.assertEqual(no_trace["verified_negative_camera_hours"], 0)
 
-    def test_opening_timestamp_is_immutable_after_evidence_update(self):
+    def test_opening_timestamp_and_roi_are_immutable_after_evidence_update(self):
         first = {"id": "same", "scope": {"camera_id": "cam", "epoch": 1, "scene_revision": 2},
-                 "category": "fire", "last_source_us": 22_000_000, "attention": "review", "detection_reason": "flame"}
+                 "category": "fire", "last_source_us": 22_000_000, "opening_observed_host_utc": 110,
+                 "attention": "review", "detection_reason": "flame"}
         updated = dict(first, last_source_us=28_000_000, evidence={"version": 2})
+        immutable = json.dumps([{"type": "fire"}, {"x1": 10, "y1": 16, "x2": 50, "y2": 40}])
+        later = json.dumps([{"type": "fire"}, {"x1": 35, "y1": 24, "x2": 55, "y2": 46}])
+        incident = b"\x02" * 16
+        sources = {"1": (2_000_000, (100, 80))}
         with closing(sqlite3.connect(":memory:")) as db:
-            db.execute("CREATE TABLE change_events(sequence INTEGER PRIMARY KEY, opened, occurred_at, incident)")
-            db.executemany("INSERT INTO change_events(opened, occurred_at, incident) VALUES (?, ?, ?)",
-                           ((1, 123, json.dumps(first)), (0, 456, json.dumps(updated))))
-            row, utc = db.execute("SELECT incident, occurred_at FROM change_events WHERE opened=1 ORDER BY sequence").fetchone()
-        result = opening_event(json.loads(row), utc, {"1": 2_000_000})
+            db.execute("CREATE TABLE change_events(sequence INTEGER PRIMARY KEY, incident_id, opened, occurred_at, incident)")
+            db.executemany("INSERT INTO change_events(incident_id, opened, occurred_at, incident) VALUES (?, ?, ?, ?)",
+                           ((incident, 1, 123, json.dumps(first)), (incident, 0, 456, json.dumps(updated))))
+            self.assertIsNone(opening_rows(db)[0][2])
+            db.execute("CREATE TABLE hazard_observations(incident_id, source_us, observed_host_utc, facts)")
+            db.executemany("INSERT INTO hazard_observations VALUES (?, ?, ?, ?)",
+                           ((incident, 22_000_000, 110, immutable), (incident, 28_000_000, 420, later)))
+            row, utc, facts = opening_rows(db)[0]
+            db.execute("UPDATE hazard_observations SET observed_host_utc=111 WHERE source_us=22000000")
+            self.assertIsNone(opening_rows(db)[0][2])
+        result = opening_event(json.loads(row), utc, sources, facts)
+        self.assertEqual(result["roi"], [0.1, 0.2, 0.5, 0.5])
+        self.assertEqual(result["opened_clip_us"], "20000000")
         self.assertEqual(result["opened_source_s"], 20)
         self.assertEqual(result["opening_recorded_utc_ms"], 123)
+        self.assertNotIn("roi", opening_event(json.loads(row), utc, {}, facts))
+
+    def test_medical_subject_requires_an_unambiguous_box_at_native_pts(self):
+        roi = [0.1, 0.1, 0.45, 0.55]
+        truth = dict(annotation("fall", 10, roi), category="medical", subject_id="subject-A", strata=["fall"])
+        clip_data = {**clip(10), "category": "medical", "events": [truth]}
+        opening = dict(event(11), category="medical", camera_id="run-camera", epoch="1", roi=roi,
+                       track_id="3", identity_uncertain=False, opened_clip_us="11000000")
+        coverage = {"source_time": {"pose": measured()["source_time"]["fire"]}}
+
+        def check(subject_frames, status, subject=None, **values):
+            run = {"events": [dict(opening, subject_id="subject-A", **values)], "camera_id": "run-camera", "coverage": coverage}
+            score_run([dict(clip_data, subject_frames=subject_frames)], {clip_data["file"]: run}, LIMITS)
+            self.assertEqual(run["scoring"]["episodes"][0]["status"], status)
+            self.assertEqual(run["events"][0].get("subject_id"), subject)
+
+        check({"11000000": {"subject-A": roi, "subject-B": [0.6, 0.1, 0.9, 0.7]}}, "timely", "subject-A")
+        check({"11000000": {"subject-B": roi}}, "miss", "subject-B")
+        check({"11000000": {"subject-A": roi, "subject-B": roi}}, "unverified_grounding")
+        check({"10999999": {"subject-A": roi}}, "unverified_grounding")
+        check({"11000000": {"subject-A": roi}}, "unverified_grounding", identity_uncertain=True)
 
 
 if __name__ == "__main__":

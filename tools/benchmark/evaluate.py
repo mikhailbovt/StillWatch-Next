@@ -15,7 +15,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from event_scoring import coverage_intervals, episodes, score_clip, summarize
+from event_scoring import coverage_intervals, episodes, overlap, score_clip, summarize
 from fast_rc_contract import validate_schema
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,13 +30,16 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def sample_camera(state, first_pts):
+def sample_camera(state, source_epochs):
     runtime = state["runtime"]
     analysis = runtime["analysis"]
-    epoch = state["source_epoch"]
+    epoch = str(state["source_epoch"])
     origin = runtime.get("first_source_us")
+    dimensions = state.get("dimensions")
     if origin is not None:
-        first_pts[epoch] = int(origin)
+        origin = int(origin)
+        size = (dimensions["width"], dimensions["height"]) if dimensions else None
+        source_epochs[epoch] = (origin, size)
     result = {"capture_state": runtime["state"],
               "analysis_state": analysis["state"], "source_epoch": epoch,
               "source_timestamps_supported": origin is not None}
@@ -45,26 +48,67 @@ def sample_camera(state, first_pts):
         result[f"{task}_fps"] = settings.get(f"{task}_fps", default)
         result[f"{task}_frames"] = int(analysis[f"{task}_frames"])
         observed = analysis.get(f"last_{task}_source_us")
-        result[f"{task}_source_s"] = ((int(observed) - first_pts[epoch]) / 1_000_000
-                                      if epoch in first_pts and observed is not None
-                                      and analysis["source_epoch"] == epoch else None)
+        result[f"{task}_source_s"] = ((int(observed) - origin) / 1_000_000
+                                      if origin is not None and observed is not None
+                                      and str(analysis["source_epoch"]) == epoch else None)
     return result
 
 
-def opening_event(event, committed_at, origins):
+def opening_rows(db):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hazard_observations'").fetchone():
+        return db.execute("""
+            SELECT e.incident, e.occurred_at, h.facts
+            FROM change_events e LEFT JOIN hazard_observations h
+              ON h.incident_id = e.incident_id
+             AND h.source_us = json_extract(e.incident, '$.last_source_us')
+             AND h.observed_host_utc = json_extract(e.incident, '$.opening_observed_host_utc')
+            WHERE e.opened = 1 ORDER BY e.sequence
+            """).fetchall()
+    return db.execute("SELECT incident, occurred_at, NULL FROM change_events WHERE opened=1 ORDER BY sequence").fetchall()
+
+
+def opening_event(event, committed_at, source_epochs, observation=None):
     scope = event["scope"]
     epoch = str(scope["epoch"])
     source_us = event["last_source_us"]
-    origin = origins.get(epoch)
-    return {
+    origin, dimensions = source_epochs.get(epoch, (None, None))
+    relative_us = source_us - (origin if origin is not None else 0)
+    result = {
         "id": event["id"], "category": event["category"], "camera_id": scope["camera_id"], "epoch": epoch,
         "scene_revision": str(scope["scene_revision"]), "opened_source_us": str(source_us),
-        "opened_source_s": (source_us - (origin if origin is not None else 0)) / 1_000_000,
+        "opened_source_s": relative_us / 1_000_000,
         "source_origin_verified": origin is not None, "opening_recorded_utc_ms": committed_at,
         "opening_observed_host_utc_ms": event.get("opening_observed_host_utc"),
         "opening_delayed": event.get("opening_delayed", False),
         "attention": event["attention"], "reason": event["detection_reason"],
     }
+    if origin is None or relative_us < 0 or dimensions is None or observation is None:
+        return result
+    facts, region = json.loads(observation)
+    if facts["type"] != event["category"]:
+        return result
+    width, height = dimensions
+    if width <= 0 or height <= 0:
+        return result
+    roi = [region[key] / side for key, side in zip(("x1", "y1", "x2", "y2"), (width, height, width, height), strict=True)]
+    if valid_rectangle(roi):
+        result.update(roi=roi, opened_clip_us=str(relative_us))
+        if facts["type"] == "medical":
+            result.update(track_id=facts["track_id"], identity_uncertain=facts["identity_uncertain"])
+    return result
+
+
+def valid_rectangle(rect):
+    x1, y1, x2, y2 = rect
+    return 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
+
+
+def match_opening_subject(event, subject_frames, minimum_iou):
+    if event.get("track_id") is None or event.get("identity_uncertain") is not False or "roi" not in event:
+        return None
+    subjects = subject_frames.get(event.get("opened_clip_us"), {})
+    matches = [subject for subject, roi in subjects.items() if overlap(event["roi"], roi) >= minimum_iou]
+    return matches[0] if len(matches) == 1 else None
 
 
 def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, configured):
@@ -82,7 +126,7 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
                       "--inference-workers", str(len(clips)), "--inference-threads", "3") as (_, client):
             cameras = {}
             samples = defaultdict(list)
-            source_origins = defaultdict(dict)
+            source_epochs = defaultdict(dict)
             for index, clip in enumerate(clips):
                 config = {"name": f"Evaluation {index}", "enabled": True,
                           "source": {"type": "replay", "file": f"{index}{Path(clip['file']).suffix}", "pace": True}}
@@ -95,7 +139,7 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
                 # Catch fast starts whilst the other camera probes are still being issued.
                 for camera_id in cameras:
                     state = client.camera(camera_id)
-                    samples[camera_id].append(sample_camera(state, source_origins[camera_id]))
+                    samples[camera_id].append(sample_camera(state, source_epochs[camera_id]))
 
             terminal = set()
             end = time.monotonic() + max(clip["duration_s"] for clip in clips) + 20
@@ -105,7 +149,7 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
                         continue
                     state = client.camera(camera)
                     finished = state["runtime"]["state"] == "completed"
-                    samples[camera].append(sample_camera(state, source_origins[camera]))
+                    samples[camera].append(sample_camera(state, source_epochs[camera]))
                     if finished:
                         terminal.add(camera)
                 if len(terminal) == len(cameras):
@@ -115,7 +159,7 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
             with closing(sqlite3.connect(data / "stillwatch.sqlite3")) as db:
                 def capture_report():
                     current = db.execute("SELECT count(*) FROM incidents").fetchone()[0]
-                    rows = db.execute("SELECT incident, occurred_at FROM change_events WHERE opened=1 ORDER BY sequence").fetchall()
+                    rows = opening_rows(db)
                     if len(rows) != current:
                         return None
                     return (rows, db.execute("SELECT count(*) FROM notification_outbox").fetchone()[0])
@@ -126,10 +170,10 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, conf
                 if outbox:
                     raise RuntimeError("An offline replay unexpectedly queued a delivery")
             found = defaultdict(list)
-            for row, committed_at in rows:
+            for row, committed_at, observation in rows:
                 event = json.loads(row)
                 camera = event["scope"]["camera_id"]
-                found[camera].append(opening_event(event, committed_at, source_origins[camera]))
+                found[camera].append(opening_event(event, committed_at, source_epochs[camera], observation))
             results = {}
             for camera, clip in cameras.items():
                 observations = samples[camera]
@@ -189,13 +233,17 @@ def load_manifest(path, manifest_digest, contract, development):
                 raise ValueError(f"Episode category differs from its clip in {clip['file']}")
             if len({event.id for event in truth}) != len(truth):
                 raise ValueError(f"Duplicate episode ID in {clip['file']}")
+            subjects = set(lineage.get("subject_ids", []))
+            for time_us, visible in clip.get("subject_frames", {}).items():
+                if (clip["category"] != "medical" or int(time_us) >= clip["duration_s"] * 1_000_000
+                        or not visible.keys() <= subjects or not all(valid_rectangle(roi) for roi in visible.values())):
+                    raise ValueError(f"Invalid subject frame annotation in {clip['file']}")
             for event in truth:
-                x1, y1, x2, y2 = event.roi
-                if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
+                if not (valid_rectangle(event.roi)
                         and 0 <= event.first_visible < clip["duration_s"]
                         and (event.last_negative is None or 0 <= event.last_negative < event.first_visible)):
                     raise ValueError(f"Invalid onset interval or ROI in {clip['file']}")
-                if event.subject is not None and event.subject not in lineage.get("subject_ids", []):
+                if event.subject is not None and event.subject not in subjects:
                     raise ValueError(f"Missing subject lineage in {clip['file']}")
                 if event.left_censored and event.first_visible != 0:
                     raise ValueError(f"Left-censored episode must be visible at the start of {clip['file']}")
@@ -220,7 +268,14 @@ def load_manifest(path, manifest_digest, contract, development):
 
 def score_run(clips, outputs, thresholds):
     for clip in clips:
-        outputs[clip["file"]]["scoring"] = score_clip(clip, outputs[clip["file"]], thresholds)
+        output = outputs[clip["file"]]
+        if "events" in clip and clip.get("category") == "medical":
+            for event in output["events"]:
+                event.pop("subject_id", None)
+                subject = match_opening_subject(event, clip.get("subject_frames", {}), thresholds["minimum_roi_iou"])
+                if subject is not None:
+                    event["subject_id"] = subject
+        output["scoring"] = score_clip(clip, output, thresholds)
     return summarize(clips, outputs)
 
 

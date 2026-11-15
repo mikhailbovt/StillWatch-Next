@@ -421,14 +421,15 @@ async fn material_observations_are_durable_and_bounded_without_image_packets() {
         assert_eq!(saved.last_source_us, observed.last_source_us);
         assert_eq!(saved.evidence_version(), 0);
     }
-    let (count, oldest, latest) = store.call(move |db| {
+    let (count, opening, latest, after_opening) = store.call(move |db| {
         db.conn.query_row(
-            "SELECT count(*), min(source_us), max(source_us) FROM hazard_observations WHERE incident_id = ?",
+            "SELECT count(*), min(source_us), max(source_us), min(CASE WHEN source_us > 0 THEN source_us END)
+             FROM hazard_observations WHERE incident_id = ?",
             [observed.id.as_bytes()],
-            |r| Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+            |r| Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)),
         ).map_err(Into::into)
     }).await.unwrap();
-    assert_eq!((count, oldest, latest), (64, 3_000_000, 34_500_000));
+    assert_eq!((count, opening, latest, after_opening), (64, 0, 34_500_000, 3_500_000));
 }
 
 #[tokio::test]
