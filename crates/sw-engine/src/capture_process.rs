@@ -248,6 +248,20 @@ pub struct Frame {
     _budget: OwnedSemaphorePermit,
 }
 
+#[cfg(test)]
+impl Frame {
+    pub(crate) fn test_frame(header: FrameHeader) -> Self {
+        let bytes = header.byte_length().unwrap();
+        let budget = FrameBudget::new(bytes).unwrap();
+        Self {
+            generation: Uuid::nil(),
+            header,
+            rgb: vec![0; bytes as usize],
+            _budget: budget.try_reserve(bytes).unwrap(),
+        }
+    }
+}
+
 pub enum CaptureRead {
     Frame(Frame),
     Dropped(FrameHeader),

@@ -17,7 +17,7 @@ use sw_protocol::{
 use sw_storage::{
     EvidenceOutcome, EvidenceWrite, RecoveryIntent, RecoveryOutcome, Store, StoreError, utc_ms,
 };
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinSet};
 use uuid::Uuid;
 
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
@@ -42,6 +42,7 @@ pub(crate) struct HazardPolicies {
     resolutions: Option<oneshot::Receiver<Vec<Uuid>>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Hazard {
     pub id: Uuid,
     pub assessment: Assessment,
@@ -820,9 +821,10 @@ pub(crate) struct HazardCommit {
 
 pub(crate) struct PendingHazards {
     queue: VecDeque<Batch>,
+    writes: JoinSet<Result<Option<HazardCommit>, StoreError>>,
     store: Store,
     evidence: Arc<EvidenceSampler>,
-    origin: AnalysisOrigin,
+    origin: Arc<AnalysisOrigin>,
     retry_at: Option<tokio::time::Instant>,
 }
 
@@ -835,14 +837,19 @@ impl PendingHazards {
     pub fn new(store: Store, evidence: Arc<EvidenceSampler>, model_manifest_sha256: &str) -> Self {
         Self {
             queue: VecDeque::new(),
+            writes: JoinSet::new(),
             store,
             evidence,
-            origin: AnalysisOrigin {
+            origin: Arc::new(AnalysisOrigin {
                 model_manifest_sha256: model_manifest_sha256.to_ascii_lowercase(),
                 policy_version: POLICY_VERSION.into(),
-            },
+            }),
             retry_at: None,
         }
+    }
+
+    pub fn has_work(&self) -> bool {
+        !self.queue.is_empty()
     }
 
     pub fn blocked(&self) -> bool {
@@ -873,8 +880,8 @@ impl PendingHazards {
             }
             !batch.pending.is_empty()
         });
-        // Only a more recent packet supersedes queued image work. Keep the
-        // earlier opening and material observations in the durable history.
+        // A newer packet supersedes queued image work, including retries of
+        // the in-flight write. Keep earlier openings and material observations.
         for update in updates
             .hazards
             .iter()
@@ -901,57 +908,91 @@ impl PendingHazards {
         }
     }
 
-    pub async fn flush(&mut self) -> Option<HazardCommit> {
-        if self
-            .retry_at
-            .is_some_and(|time| time > tokio::time::Instant::now())
+    pub async fn advance(&mut self) -> Option<HazardCommit> {
+        if let Some(result) = self.writes.try_join_next() {
+            return self.complete(result.unwrap_or(Err(StoreError::Unavailable)));
+        }
+        if !self.writes.is_empty()
+            || self
+                .retry_at
+                .is_some_and(|time| time > tokio::time::Instant::now())
         {
             return None;
         }
-        // One commit per iteration keeps camera scheduling responsive.
-        if let Some(batch) = self.queue.front_mut()
-            && let Some(pending) = batch.pending.front()
-        {
+        let batch = self.queue.front()?;
+        let hazard = batch.pending.front()?;
+        if hazard.recovery.is_some() {
+            // A recovery can clear an incident. Receive the durable decision
+            // before evaluating further observations on this lane.
             let result = persist(
                 &self.store,
                 &self.evidence,
                 &batch.frame,
-                pending,
+                hazard,
                 &self.origin,
             )
             .await;
-            match result {
-                outcome @ (Ok(_)
-                | Err(
-                    StoreError::NotFound
-                    | StoreError::Domain(DomainError::Resolved | DomainError::Stale),
-                )) => {
-                    let commit = match outcome {
-                        Ok(commit) => commit,
-                        Err(error) => pending.recovery.map(|intent| HazardCommit {
-                            scope: intent.scope,
-                            incident: intent.incident_id,
-                            packet: None,
-                            recovery: Some((intent, RecoveryOutcome::Superseded)),
-                            resolved: matches!(error, StoreError::Domain(DomainError::Resolved)),
-                        }),
-                    };
-                    self.retry_at = None;
-                    batch.pending.pop_front();
-                    if batch.pending.is_empty() {
-                        self.queue.pop_front();
-                    }
-                    return commit;
-                }
-                Err(_) => {
-                    if self.retry_at.is_none() {
-                        eprintln!("StillWatch could not commit a pending incident or its evidence");
-                    }
-                    self.retry_at = Some(tokio::time::Instant::now() + Duration::from_millis(500));
-                }
-            }
+            return self.complete(result);
         }
+        // Keep the active write at the head until it completes. It counts
+        // against the queue bound and no later write can overtake it.
+        let (store, evidence, origin) = (
+            self.store.clone(),
+            self.evidence.clone(),
+            self.origin.clone(),
+        );
+        let (frame, hazard) = (batch.frame.clone(), hazard.clone());
+        self.writes
+            .spawn(async move { persist(&store, &evidence, &frame, &hazard, &origin).await });
         None
+    }
+
+    pub async fn wait(&mut self) -> Option<HazardCommit> {
+        if self.writes.is_empty() {
+            if let Some(at) = self.retry_at {
+                tokio::time::sleep_until(at).await;
+            }
+            return None;
+        }
+        self.settle().await
+    }
+
+    pub async fn settle(&mut self) -> Option<HazardCommit> {
+        let result = self.writes.join_next().await?;
+        self.complete(result.unwrap_or(Err(StoreError::Unavailable)))
+    }
+
+    fn complete(
+        &mut self,
+        result: Result<Option<HazardCommit>, StoreError>,
+    ) -> Option<HazardCommit> {
+        let batch = self.queue.front_mut().expect("write must have a batch");
+        let commit = match result {
+            Ok(commit) => commit,
+            Err(
+                error @ (StoreError::NotFound
+                | StoreError::Domain(DomainError::Resolved | DomainError::Stale)),
+            ) => batch.pending[0].recovery.map(|intent| HazardCommit {
+                scope: intent.scope,
+                incident: intent.incident_id,
+                packet: None,
+                recovery: Some((intent, RecoveryOutcome::Superseded)),
+                resolved: matches!(error, StoreError::Domain(DomainError::Resolved)),
+            }),
+            Err(_) => {
+                if self.retry_at.is_none() {
+                    eprintln!("StillWatch could not commit a pending incident or its evidence");
+                }
+                self.retry_at = Some(tokio::time::Instant::now() + Duration::from_millis(500));
+                return None;
+            }
+        };
+        self.retry_at = None;
+        batch.pending.pop_front();
+        if batch.pending.is_empty() {
+            self.queue.pop_front();
+        }
+        commit
     }
 }
 
@@ -1228,6 +1269,132 @@ mod tests {
             },
             write: HazardWrite::Open { packet: false },
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn active_write_allows_one_more_batch_and_retries_before_it() {
+        use sw_protocol::worker::{FrameHeader, PtsQuality};
+        use sw_storage::{CameraLimits, ObservationTime};
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path(), Default::default()).unwrap();
+        let registry = crate::CameraRegistry::new(
+            store.clone(),
+            None,
+            crate::SourceConfig {
+                replay_root: directory.path().to_path_buf(),
+                rtsp_peers: Default::default(),
+                credentials_root: None,
+                onvif: crate::OnvifConfig {
+                    interface: None,
+                    device_endpoints: Vec::new(),
+                    trusted_ca: None,
+                },
+            },
+            CameraLimits {
+                active: 4,
+                raw_bytes: 16 * 1024 * 1024,
+            },
+            1,
+            None,
+        )
+        .unwrap();
+        let manifest = "a".repeat(64);
+        let mut pending =
+            PendingHazards::new(store, Arc::new(EvidenceSampler::new(registry)), &manifest);
+        let scope = SourceScope {
+            camera_id: Uuid::new_v4(),
+            epoch: 1,
+            scene_revision: 1,
+        };
+        let frame = |ordinal, source_us| {
+            let now = Instant::now();
+            Arc::new(CameraFrame {
+                scope,
+                captured_at: now,
+                observation_time: ObservationTime::new(utc_ms(), now),
+                usable_for_analysis: true,
+                transport_valid: true,
+                source_lagging: false,
+                live: true,
+                sampling: Default::default(),
+                priority: Default::default(),
+                inference_lane: 0,
+                visibility: Visibility::Good,
+                scene_signature: sw_domain::SceneSignature([0; sw_domain::SCENE_SIGNATURE_BYTES]),
+                masks: Arc::new([]),
+                controlled: Arc::new([]),
+                frame: crate::Frame::test_frame(FrameHeader {
+                    width: 160,
+                    height: 120,
+                    frame: ordinal,
+                    raw_pts: Some(source_us),
+                    source_micros: Some(source_us),
+                    time_base_num: 1,
+                    time_base_den: 1_000_000,
+                    pts_quality: PtsQuality::Native,
+                    corrupt: false,
+                }),
+            })
+        };
+        let updates = |mut hazard: Hazard, source_us, write| {
+            hazard.source_us = source_us;
+            hazard.write = write;
+            HazardUpdates {
+                hazards: vec![hazard],
+                recovery_courses: None,
+                fire_candidate: false,
+            }
+        };
+        let mut hazard = fire(1, EvidenceVisibility::Good);
+        hazard.id = Uuid::new_v4();
+        pending.push(
+            frame(1, 0),
+            updates(hazard.clone(), 0, HazardWrite::Open { packet: true }),
+        );
+        let (release, held) = oneshot::channel();
+        pending.writes.spawn(async move { held.await.unwrap() });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), pending.advance())
+                .await
+                .is_ok()
+        );
+        assert!(!pending.blocked());
+        pending.push(
+            frame(2, 200_000),
+            updates(hazard, 200_000, HazardWrite::Packet),
+        );
+        assert!(pending.blocked());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), pending.wait())
+                .await
+                .is_err()
+        );
+        release.send(Err(StoreError::Busy)).ok().unwrap();
+        assert!(pending.wait().await.is_none());
+        assert!(pending.blocked());
+        assert_eq!(
+            pending.queue[0].pending[0].write,
+            HazardWrite::Open { packet: false }
+        );
+
+        // The failed head keeps its place until the retry deadline. After
+        // the camera scope is rejected by storage, the next batch can run.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(499), pending.wait())
+                .await
+                .is_err()
+        );
+        assert!(pending.advance().await.is_none());
+        assert!(pending.writes.is_empty());
+        pending.wait().await;
+        tokio::time::resume();
+        assert!(pending.advance().await.is_none());
+        assert_eq!(pending.writes.len(), 1);
+        assert!(pending.settle().await.is_none());
+        assert_eq!(pending.queue.len(), 1);
+        assert_eq!(pending.queue[0].pending[0].source_us, 200_000);
     }
 
     #[test]

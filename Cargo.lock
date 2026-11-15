@@ -2341,6 +2341,7 @@ dependencies = [
  "ring",
  "roxmltree",
  "rustix",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

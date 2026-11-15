@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     CameraFrame, CameraRegistry, WorkerBinary, WorkerError,
     evidence::EvidenceSampler,
-    hazards::{HazardPolicies, PendingHazards},
+    hazards::{HazardCommit, HazardPolicies, PendingHazards},
     inference_process::{CompletedInference, InferenceProcess},
     task_clock::{Claim, FrameKey, TaskClock},
     telemetry::{CameraMetrics, Outcome, record_dispatch, record_misses, record_outcome},
@@ -41,7 +41,7 @@ mod lane_timings {
 
     #[derive(Clone, Copy)]
     pub(super) enum Stage {
-        Persist,
+        HazardQueue,
         Select,
         Worker,
         Apply,
@@ -50,7 +50,7 @@ mod lane_timings {
     }
 
     const NAMES: [&str; 6] = [
-        "persist_hazard",
+        "advance_hazard_writes",
         "select_frame",
         "worker_round_trip",
         "apply_policy",
@@ -472,23 +472,10 @@ impl VisionScheduler {
                             break None;
                         }
                         #[cfg(feature = "diagnostics")]
-                        let persist_began = trace_lane.then(Instant::now);
-                        let commit = pending.flush().await;
+                        let queue_began = trace_lane.then(Instant::now);
+                        apply_hazard_commit(&mut policies, pending.advance().await);
                         #[cfg(feature = "diagnostics")]
-                        timing.record(lane_timings::Stage::Persist, persist_began);
-                        if let Some(commit) = commit
-                            && let Some(policy) = policies.get_mut(&commit.scope.camera_id)
-                        {
-                            if let Some(packet) = commit.packet {
-                                policy.packet_committed(commit.scope, commit.incident, packet);
-                            }
-                            if let Some((intent, outcome)) = commit.recovery {
-                                policy.recovery_committed(intent, outcome);
-                            }
-                            if commit.resolved {
-                                policy.record_resolution(commit.scope, commit.incident);
-                            }
-                        }
+                        timing.record(lane_timings::Stage::HazardQueue, queue_began);
                         if pending.blocked() {
                             self.phase(
                                 lane,
@@ -498,7 +485,10 @@ impl VisionScheduler {
                             #[cfg(feature = "diagnostics")]
                             let wait_began = trace_lane.then(Instant::now);
                             let stopping = tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_millis(100)) => false,
+                                commit = pending.wait() => {
+                                    apply_hazard_commit(&mut policies, commit);
+                                    false
+                                },
                                 _ = shutdown.wait_for(|stop| *stop) => true,
                             };
                             #[cfg(feature = "diagnostics")]
@@ -518,6 +508,10 @@ impl VisionScheduler {
                             #[cfg(feature = "diagnostics")]
                             let wait_began = trace_lane.then(Instant::now);
                             let stopping = tokio::select! {
+                                commit = pending.wait(), if pending.has_work() => {
+                                    apply_hazard_commit(&mut policies, commit);
+                                    false
+                                },
                                 _ = self.cameras.wait_for_analysis_frame(lane) => false,
                                 _ = tokio::time::sleep(Duration::from_millis(25)) => false,
                                 _ = shutdown.wait_for(|stop| *stop) => true,
@@ -609,7 +603,9 @@ impl VisionScheduler {
                             }
                         }
                     };
-                    process.stop().await?;
+                    let (stopped, commit) = tokio::join!(process.stop(), pending.settle());
+                    apply_hazard_commit(&mut policies, commit);
+                    stopped?;
                     if started.elapsed() > Duration::from_secs(30) {
                         attempt = 0;
                     }
@@ -916,6 +912,22 @@ impl VisionScheduler {
             }
             progress.lanes[lane] = Lane { state, failure };
         }
+    }
+}
+
+fn apply_hazard_commit(policies: &mut HashMap<Uuid, HazardPolicies>, commit: Option<HazardCommit>) {
+    let Some(commit) = commit else { return };
+    let Some(policy) = policies.get_mut(&commit.scope.camera_id) else {
+        return;
+    };
+    if let Some(packet) = commit.packet {
+        policy.packet_committed(commit.scope, commit.incident, packet);
+    }
+    if let Some((intent, outcome)) = commit.recovery {
+        policy.recovery_committed(intent, outcome);
+    }
+    if commit.resolved {
+        policy.record_resolution(commit.scope, commit.incident);
     }
 }
 
