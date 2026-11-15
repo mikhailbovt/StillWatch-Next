@@ -121,11 +121,14 @@ def gpu_used_bytes(device, declared):
 def resources(pid, data, device=None, accelerator=None):
     core = psutil.Process(pid)
     tree = [core, *core.children(recursive=True)]
-    measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1,
+    measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1, "cpu_seconds": 0.0,
                     "os_handles": 0, "open_sockets": 0, "pids": []}
     for child in tree:
         try:
             measurements["rss_bytes"] += child.memory_info().rss
+            if measurements["cpu_seconds"] is not None:
+                cpu = child.cpu_times()
+                measurements["cpu_seconds"] += cpu.user + cpu.system
             measurements["pids"].append([child.pid, child.create_time()])
             if measurements["os_handles"] is not None:
                 measures = child.num_handles if sys.platform == "win32" else child.num_fds
@@ -135,6 +138,7 @@ def resources(pid, data, device=None, accelerator=None):
         except psutil.NoSuchProcess:
             continue
         except psutil.AccessDenied:
+            measurements["cpu_seconds"] = None
             measurements["os_handles"] = None
             measurements["open_sockets"] = None
     for path in data.rglob("*"):
