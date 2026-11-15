@@ -23,13 +23,25 @@ from uuid import uuid4
 import av
 import psutil
 
-from fast_rc_contract import ROOT, checked_json, member, sha256, write_json
+from fast_rc_contract import ROOT, checked_json, detail_output_dimensions, member, sha256, write_json
 
 sys.path.insert(0, str(ROOT / "tests/e2e"))
 from lan_core import Client as PinnedClient, encode_uuid, refresh_request, sign
 from replay_core import run_core, until
 from rtsp_core import check_port, launch
 from whep_core import connect, free_port, request
+
+
+def verified_media(root, source, name):
+    media = member(root, source["file"])
+    if media.suffix.lower() not in {".mp4", ".mkv"} or sha256(media) != source["digest"]:
+        raise ValueError(f"Unverified fixture media for {name}")
+    with av.open(str(media)) as container:
+        stream, = container.streams.video
+        native = (stream.codec_context.name, stream.width, stream.height, float(stream.average_rate))
+        if native[:3] != (source["codec"], source["width"], source["height"]) or abs(native[3] - source["fps"]) > 0.02:
+            raise ValueError(f"Declared media parameters differ for {name}")
+    return media
 
 
 def read_sources(path, profile):
@@ -43,17 +55,11 @@ def read_sources(path, profile):
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", name) or name in seen:
             raise ValueError("Invalid or repeated camera fixture ID")
         seen.add(name)
-        path_to_clip = member(path.parent, source["file"])
-        if path_to_clip.suffix.lower() not in {".mp4", ".mkv"} or sha256(path_to_clip) != source["digest"]:
-            raise ValueError(f"Unverified fixture media for {name}")
-        with av.open(str(path_to_clip)) as container:
-            stream, = container.streams.video
-            native = (stream.codec_context.name, stream.width, stream.height, float(stream.average_rate))
-            if native[:3] != (source["codec"], source["width"], source["height"]) or abs(native[3] - source["fps"]) > 0.02:
-                raise ValueError(f"Declared media parameters differ for {name}")
+        source["media"] = verified_media(path.parent, source, name)
+        if "detail" in source:
+            source["detail"]["media"] = verified_media(path.parent, source["detail"], f"{name} detail")
         if source["phase"] not in {"aligned", "staggered"} or not 0 <= source["delay_s"] <= 20:
             raise ValueError(f"Invalid source phase for {name}")
-        source["media"] = path_to_clip
     selected = sources[:profile["workload"]["camera_count"]]
     if len({source["digest"] for source in selected}) != len(selected):
         raise ValueError("Steady camera fixtures must use distinct media digests")
@@ -194,16 +200,20 @@ def resources(pid, data, device=None, accelerator=None):
     return measurements
 
 
-async def view(lan, session, camera, logical_id, profile, counts):
+async def view(lan, session, camera, logical_id, profile, counts, geometry, expected):
     peer, track, grant = await connect(lan, session, camera, None, None, profile=profile,
-                                       dimensions=None, verify_mask=False)
+                                       dimensions=tuple(expected) if expected is not None else None, verify_mask=False)
     counts[logical_id] = counts.get(logical_id, 0) + 1
     last_pts = None
     try:
         while True:
             frame = await asyncio.wait_for(track.recv(), timeout=5)
+            size = [frame.width, frame.height]
+            if expected is not None and size != expected:
+                raise ValueError(f"Detail viewer decoded {size}, expected {expected}")
             if frame.pts != last_pts:
                 counts[logical_id] += 1
+                geometry[logical_id] = size
                 last_pts = frame.pts
     finally:
         await peer.close()
@@ -230,10 +240,16 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
     workload = profile["workload"]
     lan, session, offer, key = await asyncio.to_thread(pair_owner, settings, local, root)
     viewer_frames = {}
+    viewer_geometry = {}
     tasks = []
 
+    def viewer_dimensions(viewer):
+        main = sources[viewer["camera"]].get("detail")
+        return detail_output_dimensions(main) if viewer["profile"] == "detail" and main is not None else None
+
     def start_viewers():
-        return [asyncio.create_task(view(lan, session, cameras[viewer["camera"]], str(index), viewer["profile"], viewer_frames))
+        return [asyncio.create_task(view(lan, session, cameras[viewer["camera"]], str(index), viewer["profile"],
+                                         viewer_frames, viewer_geometry, viewer_dimensions(viewer)))
                 for index, viewer in enumerate(viewers)]
 
     async def stop_viewers():
@@ -297,6 +313,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                                                 profile["host"]["accelerator"]) if tick % 5 == 0 else None
                 file.write(json.dumps({"tick": tick, "elapsed_s": time.monotonic() - started,
                                        "cameras": per_camera, "viewer_frames": viewer_frames,
+                                       "viewer_geometry": viewer_geometry,
                                        "snapshots": snapshots["requests"], "snapshots_ok": snapshots["decoded"],
                                        "resources": usage}) + "\n")
         interval = time.monotonic() - started
@@ -356,9 +373,14 @@ def native_fixture(settings, root, *, start_enabled=True):
         raise ValueError("Use a private test interface address for the qualification receivers")
     router_port = free_port("127.0.0.1")
     peer = f"127.0.0.1:{router_port}"
+    main_paths = {name: f"detail/{name}" for name, source in sources.items() if "detail" in source}
+    if set(main_paths) - distinct["detail"]:
+        raise ValueError("Declared main streams must be viewed in detail mode")
+    feeds = sources | {route: sources[name]["detail"] | {"delay_s": sources[name]["delay_s"]}
+                       for name, route in main_paths.items()}
     router = root / "rtsp.json"
     write_json(router, {"rtspAddress": peer, "rtspTransports": ["tcp"], "logLevel": "warn", "rtmp": False,
-                        "hls": False, "webrtc": False, "srt": False, "moq": False, "paths": {name: {} for name in sources}})
+                        "hls": False, "webrtc": False, "srt": False, "moq": False, "paths": {name: {} for name in feeds}})
     options = ["--model-pack", settings["models"], "--model-manifest-sha256", settings["model_digest"],
                "--ort-library", settings["runtime"], "--ort-library-sha256", settings["runtime_digest"],
                "--inference-workers", str(profile["models"]["workers"]), "--inference-threads", str(profile["models"]["threads_per_worker"]),
@@ -386,14 +408,15 @@ def native_fixture(settings, root, *, start_enabled=True):
             if name in publisher_contexts:
                 publisher_contexts.pop(name).close()
             running = publisher_contexts[name] = stack.enter_context(ExitStack())
-            index = sum(1 for _ in root.glob(f"source-{name}-*.log"))
-            return running.enter_context(launch(publisher(settings["fixture_ffmpeg"], peer, sources[name]),
-                                                root / f"source-{name}-{index}.log"))
+            label = name.replace("/", "@")
+            index = sum(1 for _ in root.glob(f"source-{label}-*.log"))
+            return running.enter_context(launch(publisher(settings["fixture_ffmpeg"], peer, feeds[name]),
+                                                root / f"source-{label}-{index}.log"))
 
-        for name, source in sorted(sources.items(), key=lambda pair: pair[1]["delay_s"]):
+        for name, source in sorted(feeds.items(), key=lambda pair: pair[1]["delay_s"]):
             time.sleep(max(0, begin + source["delay_s"] - time.monotonic()))
             publishers[name] = start_publisher(name)
-        until(lambda: all(rtsp_published(router_port, name) for name in sources), 15)
+        until(lambda: all(rtsp_published(router_port, name) for name in feeds), 15)
 
         def start_core():
             index = sum(1 for _ in root.glob("core-*.log"))
@@ -403,10 +426,13 @@ def native_fixture(settings, root, *, start_enabled=True):
         process, local = start_core()
         rates = {key: workload[key] for key in ("pose_fps", "fire_fps", "evidence_fps")}
         for name in sources:
+            camera_source = {"type": "rtsp", "peer": peer, "stream_path": "/" + name,
+                             "secure": False, "transport": "tcp", "credential_ref": None}
+            if name in main_paths:
+                camera_source["main_stream_path"] = "/" + main_paths[name]
             code, camera = local.call("POST", "/api/v2/cameras", {
                 "name": name, "enabled": start_enabled, "sampling": rates,
-                "source": {"type": "rtsp", "peer": peer, "stream_path": "/" + name, "secure": False,
-                           "transport": "tcp", "credential_ref": None},
+                "source": camera_source,
             }, key=uuid4().hex)
             if code != 201:
                 publisher_code = publishers[name].poll()

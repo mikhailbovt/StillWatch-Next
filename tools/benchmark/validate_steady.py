@@ -5,7 +5,7 @@ import json
 import math
 import statistics
 
-from fast_rc_contract import checked_json, number, sha256
+from fast_rc_contract import checked_json, detail_output_dimensions, number, sha256
 
 
 def resource_caps(profile):
@@ -185,16 +185,28 @@ class Steady:
                     "snapshot_decode_fraction": 1, "evidence_fps": self.workload["evidence_fps"]}
         if not self.rows:
             return required, {}, "INCOMPLETE"
+        main_streams = {stream["id"]: stream["detail"] for stream in self.sources["sources"] if "detail" in stream}
+        detail_geometry = {str(index): detail_output_dimensions(main_streams[viewer["camera"]])
+                           for index, viewer in enumerate(self.sources["viewers"])
+                           if viewer["profile"] == "detail" and viewer["camera"] in main_streams}
+        if detail_geometry:
+            required["detail_frame_geometry"] = detail_geometry
         last = self.rows[-1]
         start = self.start["viewer_frames"]
         viewers = {key: frames - start.get(key, 0) for key, frames in last["viewer_frames"].items()}
         snapshots = last["snapshots"]
         observed = {"decoded_frames_by_viewer": viewers, "snapshot_requests": snapshots, "snapshots_decoded": last["snapshots_ok"],
                     "expected_snapshot_requests": last["tick"] * required["snapshot_requests_per_minute"] // 60}
+        geometries = last.get("viewer_geometry", {})
+        if geometries:
+            observed["frame_geometry_by_viewer"] = geometries
+        if any(key in geometries and geometries[key] != size for key, size in detail_geometry.items()):
+            return required, observed, "FAIL"
         if snapshots != last["snapshots_ok"]:
             return required, observed, "FAIL"
         coverage = len(viewers) == required["decoded_viewer_sessions"] and all(count > 0 for count in viewers.values())
-        if not coverage or observed["expected_snapshot_requests"] != snapshots or self.interval()[2] != "PASS":
+        if (not coverage or not detail_geometry.keys() <= geometries.keys()
+                or observed["expected_snapshot_requests"] != snapshots or self.interval()[2] != "PASS"):
             return required, observed, "INCOMPLETE"
         return required, observed, "PASS"
 

@@ -99,15 +99,37 @@ def checked_execution_profile(path, profile, candidate, sources_path=None):
     return None
 
 
-def execution_profile(profile, candidate, sources, host, decoder, raw_bytes, cuda_device):
+def rtsp_workload(streams):
+    classes = {(s["codec"], s["width"], s["height"], round(s["fps"] * 1000)) for s in streams}
+    if len(classes) != 1:
+        raise ValueError("Core admission requires one measured RTSP source class per stream type")
+    (codec, width, height, millifps), = classes
+    return {"kind": "rtsp_tcp", "codec": codec, "dimensions": {"width": width, "height": height},
+            "min_millifps": millifps, "max_millifps": millifps}
+
+
+def detail_output_dimensions(stream):
+    source_width, source_height = stream["width"], stream["height"]
+    width = max(2, min(1280, source_width) // 2 * 2)
+    height = (source_height * width + source_width) // (2 * source_width) * 2
+    return [width, height]
+
+
+def execution_profile(profile, candidate, manifest, host, decoder, raw_bytes, cuda_device):
     model, workload, budgets = (profile[key] for key in ("models", "workload", "budgets"))
     if workload["semantic_route"] != "disabled":
         raise ValueError("A semantic route requires its own native workload collector")
-    sources = sources["sources"][:workload["camera_count"]]
-    classes = {(s["codec"], s["width"], s["height"], round(s["fps"] * 1000)) for s in sources}
-    if len(sources) != workload["camera_count"] or len(classes) != 1:
-        raise ValueError("Core admission requires one measured RTSP source class")
-    (codec, width, height, millifps), = classes
+    sources = manifest["sources"][:workload["camera_count"]]
+    if len(sources) != workload["camera_count"]:
+        raise ValueError("The inventory does not cover the declared camera workload")
+    source = rtsp_workload(sources)
+    width, height = (source["dimensions"][axis] for axis in ("width", "height"))
+    main_streams = {entry["id"]: entry["detail"] for entry in sources if "detail" in entry}
+    detail_viewers = {entry["camera"] for entry in manifest["viewers"] if entry["profile"] == "detail"}
+    if not main_streams.keys() <= detail_viewers or len(main_streams) > workload["detail_publishers"]:
+        raise ValueError("Each declared main stream needs a detail viewer in the frozen workload")
+    detail_source = rtsp_workload(main_streams.values()) if main_streams else None
+    detail_decoders = len(main_streams)
     if type(raw_bytes) is not int or not width * height * 9 * len(sources) <= raw_bytes <= 2**31:
         raise ValueError("Raw-frame capacity does not cover the declared sources")
     if not isinstance(decoder, str) or not 1 <= len(decoder) <= 256:
@@ -143,14 +165,13 @@ def execution_profile(profile, candidate, sources, host, decoder, raw_bytes, cud
                       "model_manifest": candidate["model_manifest_sha256"], "ort": candidate["ort_sha256"],
                       "pose_balanced": model["roles"]["person"]["digest"][7:], "fire": model["roles"]["hazard"]["digest"][7:],
                       "cuda": cuda, "decoder_identity": decoder},
-        "work": {"cameras": len(sources), "source": {"kind": "rtsp_tcp", "codec": codec,
-                 "dimensions": {"width": width, "height": height}, "min_millifps": millifps, "max_millifps": millifps},
+        "work": {"cameras": len(sources), "source": source,
                  "sampling": {key: workload[key] for key in ("pose_fps", "fire_fps", "evidence_fps")},
                  "min_pose_per_wall_minute": workload["pose_fps"] * 57,
-                 "min_fire_per_wall_minute": workload["fire_fps"] * 57, "detail_source": None,
-                 "media": {"preview_publishers": preview, "detail_publishers": detail, "detail_decoders": 0,
-                           "viewer_sessions": workload["viewer_sessions"], "publisher_units": preview + detail,
-                           "preview_units": 1, "detail_units": 1, "detail_decoder_units": 0, "snapshot_encoders": 1,
+                 "min_fire_per_wall_minute": workload["fire_fps"] * 57, "detail_source": detail_source,
+                 "media": {"preview_publishers": preview, "detail_publishers": detail, "detail_decoders": detail_decoders,
+                           "viewer_sessions": workload["viewer_sessions"], "publisher_units": preview + detail + detail_decoders,
+                           "preview_units": 1, "detail_units": 1, "detail_decoder_units": int(bool(detail_decoders)), "snapshot_encoders": 1,
                            "snapshot_requests_per_minute": workload["snapshot_requests_per_minute"]}},
         "tensor_shapes": model["tensor_shapes"],
         "semantic": None if workload["semantic_route"] == "disabled" else workload["semantic_route"],
