@@ -130,7 +130,7 @@ Preview WHEP, snapshots and evidence use the analysis stream. Detail WHEP opens 
 
 Core passes the TURN signing secret to the MediaMTX child through its environment and writes a hash of the random loopback read credential to its private configuration. Startup also removes abandoned router configuration files from earlier runs under the Core data directory. Check that directory's permissions if startup logs report a cleanup failure. [MediaMTX environment configuration](https://mediamtx.org/docs/features/configuration)
 
-When playback stalls, the Companion can show a masked snapshot with the age of the frame. It continues fetching snapshots while the camera and control route are reachable. Use **Reconnect video** after the media route recovers.
+The Companion rotates an active WHEP session after 25 minutes, before the Core's 30-minute expiry. When playback stalls, the Companion can show a masked snapshot with the age of the frame. It continues fetching snapshots while the camera and control route are reachable. Use **Reconnect video** after the media route recovers.
 
 ## Migration, backup and restore
 

@@ -262,23 +262,32 @@ class _LiveViewState extends State<LiveView> {
     _playback = next;
     try {
       await next
-          .open((reason) {
-            if (!mounted || generation != _generation || _playback != next) {
-              return;
-            }
-            setState(() {
-              _starting = false;
-              _playback = null;
-              _failure = switch (reason) {
-                _PlaybackEnd.stalled =>
-                  'Video stopped updating. Reconnect to resume playback.',
-                _PlaybackEnd.unverified =>
-                  'Video freshness could not be verified. Reconnect to retry.',
-                _PlaybackEnd.disconnected => 'The live connection stopped. Retry or view the latest snapshot.',
-              };
-            });
-            _closePlayback(next);
-          })
+          .open(
+            (reason) {
+              if (!mounted || generation != _generation || _playback != next) {
+                return;
+              }
+              setState(() {
+                _starting = false;
+                _playback = null;
+                _failure = switch (reason) {
+                  _PlaybackEnd.stalled =>
+                    'Video stopped updating. Reconnect to resume playback.',
+                  _PlaybackEnd.unverified => 'Video freshness could not be verified. Reconnect to retry.',
+                  _PlaybackEnd.disconnected => 'The live connection stopped. Retry or view the latest snapshot.',
+                };
+              });
+              _closePlayback(next);
+            },
+            renew: () {
+              if (mounted &&
+                  _active &&
+                  generation == _generation &&
+                  _playback == next) {
+                unawaited(_connect());
+              }
+            },
+          )
           .timeout(const Duration(seconds: 30));
       if (!mounted || generation != _generation || _playback != next) {
         _closePlayback(next);
@@ -424,12 +433,16 @@ final class _Playback {
   bool _playing = false;
   bool _connectionEnded = false;
   Timer? _freshnessTimer;
+  Timer? _renewalTimer;
   static Future<void>? _windowsInitialization;
   final _ice = Completer<void>();
   final _videoTrack = Completer<RTCTrackEvent?>();
   final _firstFrame = Completer<void>();
 
-  Future<void> open(void Function(_PlaybackEnd) interrupted) async {
+  Future<void> open(
+    void Function(_PlaybackEnd) interrupted, {
+    required VoidCallback renew,
+  }) async {
     if (WebRTC.platformIsWindows) {
       await (_windowsInitialization ??= _initializeWindows());
       _check();
@@ -539,6 +552,8 @@ final class _Playback {
     }
     _playing = true;
     _watchFrames(peer, interrupted);
+    // Rotate the grant before the Core's 30-minute media session expires.
+    _renewalTimer = Timer(const Duration(minutes: 25), renew);
   }
 
   void _watchFrames(
@@ -632,7 +647,7 @@ final class _Playback {
 
   Future<void> _release(StreamGrant grant) async {
     try {
-      await client.closeStream(grant);
+      await client.closeStream(grant).timeout(const Duration(seconds: 2));
     } catch (_) {
       // Core expires disconnected sessions and stops the local renderer immediately.
     }
@@ -642,16 +657,18 @@ final class _Playback {
     if (_closed) return;
     _closed = true;
     _freshnessTimer?.cancel();
+    _renewalTimer?.cancel();
     if (!_ice.isCompleted) _ice.complete();
     if (!_videoTrack.isCompleted) _videoTrack.complete(null);
     if (!_firstFrame.isCompleted) _firstFrame.complete();
     final grant = _grant;
-    if (grant != null) unawaited(_release(grant));
+    final release = grant == null ? null : _release(grant);
     final peer = _peer;
     if (_initialized) await _dispose(renderer.dispose);
     if (peer != null) await _disposePeer(peer);
     final stream = _stream;
     if (stream != null) await _dispose(stream.dispose);
+    if (release != null) await release;
   }
 
   Future<void> _disposePeer(RTCPeerConnection peer) async {
