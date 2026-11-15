@@ -327,6 +327,13 @@ def native_fixture(settings, root, *, start_enabled=True):
                "--mediamtx-sha256", settings["mediamtx_digest"], "--media-encoder", settings["encoder"],
                "--media-encoder-sha256", settings["encoder_digest"], "--media-ice-udp", f"{lan_host}:{free_port(lan_host, socket.SOCK_DGRAM)}",
                *settings.get("cuda_args", [])]
+    if (execution := settings.get("execution_profile")) is not None:
+        configuration = root / "workload-settings.json"
+        write_json(configuration, {"media_workload_limits": execution["work"]["media"],
+                                   "media_detail_frame_bytes": execution["detail_frame_bytes"]})
+        options.extend(["--settings-file", str(configuration),
+                        "--evidence-quota-bytes", str(execution["evidence_quota_bytes"]),
+                        "--database-quota-bytes", str(execution["database_quota_bytes"])])
     cameras = {}
     with ExitStack() as stack:
         stack.enter_context(launch([settings["mediamtx"], str(router)], root / "source-router.log"))

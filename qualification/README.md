@@ -6,7 +6,7 @@ The [completion plan](../StillWatch_Next_Completion_Plan_RU.md) sets the sequenc
 
 - [Native qualification](fast-rc-v2.json) fixes the 180-minute stage budget, the isolated 60-minute load interval, the nominal source and wall cadence tests, and the required completed fault counts. At 5/2 fps, a full 60-second wall window requires at least 285 pose and 114 fire results per camera. Source-clock floors remain 4 pose and 1.5 fire fps over ten source seconds.
 - [Profile schema](schemas/profile-v2.schema.json) binds a workload to a candidate, the three acceptance contracts, host, runtime roles and budgets. Freeze the allowed shapes, source manifest, fault schedule and recovery limits before each run. At qualification, the report must cover the exact binaries, models, operating system, driver and workload. A four-camera CPU profile and a 16-camera profile require separate evidence.
-- The execution profile sidecar records `schema_version` 1, the profile ID under `id`, `candidate_digest`, `runtime_digest` for the packaged ONNX Runtime, `native_lock_digest`, and the same `host`, `models`, `workload`, and `budgets` as the frozen profile. Hash the sidecar into `execution_profile_digest`. The runner and validator both compare its contents with the pinned candidate and profile.
+- The production execution profile uses `stillwatch-execution-v1`. The runner and validator independently check its digest, host, capture decoder, binaries, model roles and workload against the frozen inputs. Earlier `schema_version: 1` records support diagnostic runs with mixed source sizes and leave the release verdict incomplete.
 - [Report schema](schemas/report-v2.schema.json) defines the validator's output. The validator derives each criterion from the pinned inputs and evidence. An observed gate violation takes precedence over incomplete coverage.
 - [Quality contract](quality-contract.json) freezes the first-cycle quality gates. The site budget is eight false Reviews per day across 16 cameras. The independent Urgent budget is at most 0.001 false Urgents per camera-hour. Timely fire and fall Review targets are 95% within eight seconds, with independent strata and separately measured urgent decisions. These are product acceptance targets chosen for this plan, not measured accuracy or industry standards.
 - [Release obligations](release-requirements.json) lists all 17 criteria from §23.1 and the owners and evidence for G1–G5. A release requires both the applicable native reports and the remaining release evidence.
@@ -28,6 +28,14 @@ Run the scoring regressions with `python -B -m unittest discover -s tools/benchm
 ## Run Fast RC v2
 
 Stage the native payload and freeze its `manifest.json`, allowed model profiles, workload, media sources and fault schedule before running. Freeze hashes with the `sha256:` prefix. Prepare the qualification Python environment in advance. It uses `jsonschema` for schema checks and `psutil`, `aiortc` and `av` for native load and media measurements. The Core payload runs independently of this environment. Run `python tools/benchmark/prepare_logic.py --output LOGICAL_TEST_BINARIES.json` from the staged candidate’s source revision before the qualification clock starts.
+
+Capture the staged Core's `--execution-host` output and the staged worker's `capture-doctor` output as JSON. Freeze a Core-readable profile for the declared RTSP/TCP codec, image size and nominal frame rate. Use the same CUDA device and raw-frame budget in both commands when applicable.
+
+~~~text
+python tools/benchmark/prepare_execution.py --candidate PAYLOAD/manifest.json --profile PROFILE.json --source-manifest SOURCES.json --execution-host HOST.json --capture-doctor DECODER.json --output FROZEN
+~~~
+
+Use `FROZEN/profile.json` and `FROZEN/execution.json` below. The collector configures the same publisher slots, viewer slots, snapshot limit and storage settings during the native run. A release-qualified report is required to activate the execution profile in Core.
 
 ~~~text
 python tools/benchmark/fast_rc.py --candidate PAYLOAD/manifest.json --profile PROFILE.json --execution-profile EXECUTION_PROFILE.json --logic-test-binaries LOGICAL_TEST_BINARIES.json --node NODE --demo CREDITED_DEMO.mp4 --fixture-ffmpeg FFmpeg --source-manifest SOURCES.json --fault-schedule FAULTS.json --address TEST_INTERFACE --isolated --output FRESH_RUN_DIRECTORY

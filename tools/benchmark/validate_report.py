@@ -63,6 +63,7 @@ class Validation:
         self.models["observation_spec_sha256"] = sha256(ROOT / "qualification/observation-parity-v1.json")[7:]
         self.backend = self.profile["models"]["backend"]
         self.steady = None
+        self.core_profile = None
         if (self.run["protocol"] != PROTOCOL or not RUN_ID.fullmatch(self.run["run_id"])
                 or self.run["candidate_digest"] != self.profile["candidate_digest"]
                 or self.run["contract_digests"] != contract_digests()
@@ -144,15 +145,22 @@ class Validation:
                             and acceleration["memory_mib"] * 1024 * 1024 == locked_gpu["vram_bytes"])
         else:
             host_matches = False
+        decoder_matches = None
+        if self.core_profile is not None:
+            decoder = checked_json(self.artifact(proof, "capture-doctor"))
+            decoder_matches = (decoder.get("rtsp_peer_confined") is True
+                               and decoder.get("decoder_identity") == self.core_profile["artifacts"]["decoder_identity"])
+            host_matches = host_matches and actual_host == self.core_profile["host"]
         observed = {
             "verified_artifacts": len(observations["actual_digests"]),
             "target_os": observations["target_os"],
             "release_diagnostic_commands": sorted(set(re.findall(r"\b(?:diagnose-fire-scale|trace-fire-policy|trace-pose-association)\b", command_lines))),
         }
-        valid = (host_matches and roles_match and models_match and observed == expected
+        valid = (host_matches and decoder_matches is not False and roles_match and models_match and observed == expected
                  and "verify-model-pack" in command_lines and "--data-dir" in command_lines)
         observed["inventory_matches"] = exact
         observed["host_matches"] = host_matches
+        observed["decoder_matches"] = decoder_matches
         observed["active_roles_match"] = roles_match and models_match
         return expected, observed, "PASS" if valid else "FAIL"
 
@@ -566,7 +574,6 @@ class Validation:
         return metric()
 
     def report(self):
-        self.criteria()
         duration = self.run["native_wall_seconds"]
         if duration > self.contract["budget_seconds"]:
             self.problems.append("Native run exceeded the Fast RC v2 deadline")
@@ -576,11 +583,16 @@ class Validation:
         if execution_profile_digest:
             try:
                 pin = self.run["inputs"]["execution_profile"]
-                checked_execution_profile(checked_evidence(self.root, pin), self.profile, self.candidate)
+                source = self.root / "inputs/sources.json"
+                self.core_profile = checked_execution_profile(checked_evidence(self.root, pin), self.profile, self.candidate,
+                                                              source if source.is_file() else None)
+                if self.core_profile is None:
+                    self.problems.append("The frozen diagnostic profile cannot be activated by Core")
             except (KeyError, OSError, TypeError, ValueError) as error:
                 self.problems.append(f"Execution-profile evidence is invalid: {error}")
         else:
             self.problems.append("The frozen profile has no execution-profile sidecar digest")
+        self.criteria()
         if self.problems and all(row["result"] == "PASS" for row in self.results):
             self.results[-1]["result"] = "INCOMPLETE"
         statuses = Counter(row["result"] for row in self.results)

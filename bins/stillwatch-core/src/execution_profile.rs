@@ -390,14 +390,27 @@ impl ExecutionProfile {
             }
             _ => anyhow::bail!("unsupported model input profile"),
         };
-        ensure!(
-            self.tensor_shapes == [shape],
-            "tensor input differs from the qualification"
-        );
         if let Some(contract) = manifest.contract {
             ensure!(
-                contract.tensor_shapes.contains(&[shape[2], shape[3]]),
-                "tensor shape falls outside the model contract"
+                (1..=16).contains(&self.tensor_shapes.len())
+                    && self.tensor_shapes.contains(&shape)
+                    && self
+                        .tensor_shapes
+                        .iter()
+                        .enumerate()
+                        .all(|(index, &entry)| {
+                            let [batch, channels, height, width] = entry;
+                            batch == 1
+                                && channels == 3
+                                && contract.tensor_shapes.contains(&[height, width])
+                                && !self.tensor_shapes[..index].contains(&entry)
+                        }),
+                "tensor inventory falls outside the model contract"
+            );
+        } else {
+            ensure!(
+                self.tensor_shapes == [shape],
+                "tensor input differs from the qualification"
             );
         }
         Ok(())

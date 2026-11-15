@@ -28,8 +28,15 @@ class Run:
         self.candidate = checked_json(args.candidate)
         self.profile = checked_json(args.profile)
         validate_schema("profile", self.profile)
+        self.core_profile = None
         if args.execution_profile is not None:
-            checked_execution_profile(args.execution_profile, self.profile, self.candidate)
+            self.core_profile = checked_execution_profile(
+                args.execution_profile, self.profile, self.candidate, args.source_manifest)
+        if self.core_profile is not None:
+            selected = self.core_profile["artifacts"]["cuda"]
+            if (self.core_profile["raw_frame_bytes"] != args.raw_frame_bytes
+                    or args.cuda_device != (selected["device"] if selected else None)):
+                raise ValueError("Native runner device or frame budget differs from the Core execution profile")
         contracts = contract_digests()
         if self.profile["contract_digests"] != contracts or self.profile["protocol"] != PROTOCOL:
             raise ValueError("Profile was frozen against different qualification contracts")
@@ -179,6 +186,9 @@ class Run:
                                 "--cuda-provider-sha256", self.files[cuda[0]], "--cuda-shared-sha256", self.files[cuda[1]]])
             _, host = self.capture(stage, "execution-host", command)
             sources = {"worker-usage": worker, "core-help": core, "execution-host": host}
+            if self.core_profile is not None:
+                _, decoder = self.capture(stage, "capture-doctor", [self.worker, "capture-doctor"])
+                sources["capture-doctor"] = decoder
         else:
             sources = {}
         self.proof(stage, "artifacts.exact-digests-and-release-features", began, observed,
@@ -340,6 +350,8 @@ class Run:
             "encoder": str(self.ffmpeg), "encoder_digest": self.files[self.ffmpeg.relative_to(self.setup).as_posix()],
             "fixture_ffmpeg": str(self.args.fixture_ffmpeg), "address": self.args.address,
         }
+        if self.core_profile is not None:
+            settings["execution_profile"] = self.core_profile
         if self.profile["models"]["backend"] == "cuda_fp32":
             cuda = self.cuda_paths()
             if not cuda:

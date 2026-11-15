@@ -10,6 +10,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL = "fast-rc-v2"
+EXECUTION_PROTOCOL = "stillwatch-execution-v1"
 CONTRACTS = {
     "native": ROOT / "qualification/fast-rc-v2.json",
     "quality": ROOT / "qualification/quality-contract.json",
@@ -64,9 +65,20 @@ def sha256(path):
         return "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def checked_execution_profile(path, profile, candidate):
+def checked_execution_profile(path, profile, candidate, sources_path=None):
     if sha256(path) != profile.get("execution_profile_digest"):
         raise ValueError("The execution-profile digest differs from the frozen profile")
+    data = checked_json(path)
+    if data.get("protocol") == EXECUTION_PROTOCOL:
+        if sources_path is None or sha256(sources_path) != profile["workload"]["source_manifest_digest"]:
+            raise ValueError("The Core execution profile requires its frozen native source manifest")
+        artifacts = data["artifacts"]
+        device = artifacts["cuda"]["device"] if artifacts["cuda"] is not None else None
+        expected = execution_profile(profile, candidate, checked_json(sources_path), data["host"],
+                                     artifacts["decoder_identity"], data["raw_frame_bytes"], device)
+        if data != expected:
+            raise ValueError("The Core execution profile differs from the frozen native workload")
+        return data
     expected = {
         "schema_version": 1,
         "id": profile["profile_id"],
@@ -75,8 +87,73 @@ def checked_execution_profile(path, profile, candidate):
         "native_lock_digest": "sha256:" + candidate["native_lock_sha256"],
         **{field: profile[field] for field in ("host", "models", "workload", "budgets")},
     }
-    if checked_json(path) != expected:
-        raise ValueError("The execution profile describes a different native payload, host or workload")
+    if data != expected:
+        raise ValueError("The diagnostic profile describes a different native payload, host or workload")
+    return None
+
+
+def execution_profile(profile, candidate, sources, host, decoder, raw_bytes, cuda_device):
+    model, workload, budgets = (profile[key] for key in ("models", "workload", "budgets"))
+    if workload["semantic_route"] != "disabled":
+        raise ValueError("A semantic route requires its own native workload collector")
+    sources = sources["sources"][:workload["camera_count"]]
+    classes = {(s["codec"], s["width"], s["height"], round(s["fps"] * 1000)) for s in sources}
+    if len(sources) != workload["camera_count"] or len(classes) != 1:
+        raise ValueError("Core admission requires one measured RTSP source class")
+    (codec, width, height, millifps), = classes
+    if type(raw_bytes) is not int or not width * height * 9 * len(sources) <= raw_bytes <= 2**31:
+        raise ValueError("Raw-frame capacity does not cover the declared sources")
+    if not isinstance(decoder, str) or not 1 <= len(decoder) <= 256:
+        raise ValueError("The capture worker did not report a decoder identity")
+    locked = profile["host"]
+    host_fields = ("architecture", "os_release", "cpu", "logical_cores", "ram_bytes")
+    if host != {"platform": locked["os"], **{key: locked[key] for key in host_fields},
+                "accelerator": host["accelerator"]}:
+        raise ValueError("Core host fingerprint differs from the frozen profile")
+    accelerator = host["accelerator"]
+    gpu = locked["accelerator"]
+    if (accelerator is None) != (gpu is None) or (accelerator and (
+            accelerator["name"] != gpu["name"] or accelerator["driver"] != gpu["driver"]
+            or accelerator["memory_mib"] * 1024**2 != gpu["vram_bytes"])):
+        raise ValueError("Core accelerator differs from the frozen profile")
+    windows = locked["os"] == "windows"
+    ext = ".exe" if windows else ""
+    files = candidate["files"]
+    cuda = None
+    if model["backend"] == "cuda_fp32":
+        if type(cuda_device) is not int or not 0 <= cuda_device <= 65535:
+            raise ValueError("A CUDA profile must identify the measured device")
+        provider, shared = ("onnxruntime_providers_cuda.dll", "onnxruntime_providers_shared.dll") if windows else (
+            "libonnxruntime_providers_cuda.so", "libonnxruntime_providers_shared.so")
+        cuda = {"device": cuda_device, "provider": files["runtime/" + provider], "shared": files["runtime/" + shared]}
+    preview, detail = (workload[key] for key in ("preview_publishers", "detail_publishers"))
+    return {
+        "protocol": EXECUTION_PROTOCOL, "id": profile["profile_id"],
+        "candidate_sha256": profile["candidate_digest"][7:], "native_contract_sha256": profile["contract_digests"]["native"][7:],
+        "host": host, "inference_workers": model["workers"], "inference_threads": model["threads_per_worker"],
+        "artifacts": {"core": files["bin/stillwatch-core" + ext], "worker": files["bin/stillwatch-worker" + ext],
+                      "mediamtx": candidate["mediamtx_sha256"], "encoder": files["encoder/ffmpeg" + ext],
+                      "model_manifest": candidate["model_manifest_sha256"], "ort": candidate["ort_sha256"],
+                      "pose_balanced": model["roles"]["person"]["digest"][7:], "fire": model["roles"]["hazard"]["digest"][7:],
+                      "cuda": cuda, "decoder_identity": decoder},
+        "work": {"cameras": len(sources), "source": {"kind": "rtsp_tcp", "codec": codec,
+                 "dimensions": {"width": width, "height": height}, "min_millifps": millifps, "max_millifps": millifps},
+                 "sampling": {key: workload[key] for key in ("pose_fps", "fire_fps", "evidence_fps")},
+                 "min_pose_per_wall_minute": workload["pose_fps"] * 57,
+                 "min_fire_per_wall_minute": workload["fire_fps"] * 57, "detail_source": None,
+                 "media": {"preview_publishers": preview, "detail_publishers": detail, "detail_decoders": 0,
+                           "viewer_sessions": workload["viewer_sessions"], "publisher_units": preview + detail,
+                           "preview_units": 1, "detail_units": 1, "detail_decoder_units": 0, "snapshot_encoders": 1,
+                           "snapshot_requests_per_minute": workload["snapshot_requests_per_minute"]}},
+        "tensor_shapes": model["tensor_shapes"],
+        "semantic": None if workload["semantic_route"] == "disabled" else workload["semantic_route"],
+        "raw_frame_bytes": raw_bytes, "detail_frame_bytes": 128 * 1024**2,
+        "evidence_quota_bytes": 500 * 1024**2, "database_quota_bytes": 2 * 1024**3,
+        "limits": {"peak_rss_bytes": budgets["rss_bytes"] - budgets["headroom_bytes"]["rss"],
+                   "peak_vram_mib": (budgets["vram_bytes"] - budgets["headroom_bytes"]["vram"]) // 1024**2,
+                   "peak_disk_bytes": budgets["disk_bytes"] - budgets["headroom_bytes"]["disk"],
+                   "maximum_children": budgets["max_children"], "maximum_open_sockets": budgets["max_open_sockets"]},
+    }
 
 
 def checked_json(path):
