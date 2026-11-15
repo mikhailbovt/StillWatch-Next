@@ -222,7 +222,15 @@ def run(args):
         origin = f"http://127.0.0.1:{port}"
         config.write_text(json.dumps(fake_public_config | {"mode": "hybrid_web"}), encoding="utf8")
         private(app_check, f"{encoded({'alg': 'RS256'})}.{encoded(valid_claims)}.fixture")
-        with launch([str(node), str(entry), str(config), str(port), str(core_token), str(app_check),
+        wall_clock_changed = root / "wall-clock-changed"
+        clock_override = root / "wall-clock.cjs"
+        clock_override.write_text(
+            "const { existsSync } = require('node:fs');\n"
+            "const original = Date.now.bind(Date);\n"
+            f"Date.now = () => original() - (existsSync({json.dumps(str(wall_clock_changed))}) ? 86400000 : 0);\n",
+            encoding="utf8",
+        )
+        with launch([str(node), "--require", str(clock_override), str(entry), str(config), str(port), str(core_token), str(app_check),
                      str(browser_token)], root / "hybrid.log"):
             until(lambda: check_port(port))
             status, page, headers = request(origin, "/", include_headers=True)
@@ -237,9 +245,19 @@ def run(args):
             assert request(origin, "/device/attestation", browser_credential, b"{}")[0] == 409
             assert request(origin, "/evaluate", core_credential, fire_packet(), binary=True)[0] == 503
             verify_waiting_browser(origin, core_credential, browser_credential)
+
+            def local_state():
+                code, body = request(origin, "/health", core_credential)
+                assert code == 200
+                return json.loads(body)["local_state"]
+
+            assert local_state() == "ready"
+            wall_clock_changed.touch()
+            until(lambda: local_state() == "disconnected", 10)
         print(json.dumps({"node_and_hybrid_started": True, "scope_and_origin_enforced": True,
                           "invalid_app_check_fails_closed": True, "core_capability_handshake": bool(args.core),
                           "bounded_browser_long_poll": True, "independent_cloud_ready_during_local_warmup": True,
+                          "browser_lease_expires_after_wall_clock_rollback": True,
                           "local_only_denies_attestation": True,
                           "health_route_and_quota_independent": bool(args.core),
                           "firebase_network_inference": False}))

@@ -83,7 +83,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   const style = hybrid ? await readFile(stylePath, 8192) : null;
   const script = hybrid ? await readFile(browserPath, 2 * 1024 * 1024) : null;
   let localState = "disconnected";
-  let lastBrowserSeen = 0;
+  let lastBrowserSeen = Number.NEGATIVE_INFINITY;
   let waiting = null;
   let job = null;
   let running = false;
@@ -112,7 +112,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   }
 
   function browserState() {
-    return waiting || job?.claimed || Date.now() - lastBrowserSeen < DEVICE_GRACE_MS
+    return waiting || job?.claimed || performance.now() - lastBrowserSeen < DEVICE_GRACE_MS
       ? localState : "disconnected";
   }
 
@@ -160,7 +160,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
         if (!["ready", "unavailable", "initializing"].includes(state)) return reply(res, 400, { error: "invalid_state" });
         if (waiting) return reply(res, 409, { error: "device_poll_active" });
         localState = state;
-        lastBrowserSeen = Date.now();
+        lastBrowserSeen = performance.now();
         return waitForJob(res);
       }
       if (req.method === "POST" && req.url === "/device/result") {
@@ -169,7 +169,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
         const body = JSON.parse((await readBody(req, RESPONSE_LIMIT)).toString("utf8"));
         if (current !== job || current.finished) return reply(res, 409, { error: "expired" });
         current.finished = true;
-        lastBrowserSeen = Date.now();
+        lastBrowserSeen = performance.now();
         current.resolve(body);
         return reply(res, 204, null);
       }
