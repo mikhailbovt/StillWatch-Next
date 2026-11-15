@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-diagnostics = []
+diagnostics = ["rustix/time"]
 
 [dependencies]
 base64.workspace = true

@@ -306,7 +306,8 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
         start_metrics = await asyncio.to_thread(metrics, local, cameras)
         started = time.monotonic()
         start_utc_ms = time.time_ns() // 1_000_000
-        write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms, "metrics": start_metrics,
+        write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms, "sampling_started_monotonic_s": started,
+                                            "metrics": start_metrics,
                                             "viewer_frames": viewer_frames.copy(), "source_scope": sample})
         snapshots = {"requests": 0, "decoded": 0}
         snapshot_task = asyncio.create_task(collect_snapshots(

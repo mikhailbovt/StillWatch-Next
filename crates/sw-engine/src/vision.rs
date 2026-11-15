@@ -36,15 +36,83 @@ const EXTRA_DISPATCH_RESERVE: Duration = Duration::from_millis(10);
 const MAX_COST_SHAPES: usize = 128;
 
 #[cfg(feature = "diagnostics")]
-fn trace_slow_lane_step(lane: usize, stage: &str, began: Option<Instant>) {
-    if let Some(elapsed) = began.map(|start| start.elapsed())
-        && elapsed >= Duration::from_millis(20)
-    {
-        eprintln!(
-            "SW_LANE_TIMING utc_ms={} lane={lane} stage={stage} duration_us={}",
-            sw_storage::utc_ms(),
-            elapsed.as_micros(),
-        );
+mod lane_timings {
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy)]
+    pub(super) enum Stage {
+        Persist,
+        Select,
+        Worker,
+        Apply,
+        Idle,
+        Backpressure,
+    }
+
+    const NAMES: [&str; 6] = [
+        "persist_hazard",
+        "select_frame",
+        "worker_round_trip",
+        "apply_policy",
+        "wait_for_frame",
+        "evidence_backpressure",
+    ];
+
+    pub(super) struct LaneTimings {
+        lane: usize,
+        started: Instant,
+        calls: [u32; NAMES.len()],
+        total_us: [u128; NAMES.len()],
+        maximum_us: [u128; NAMES.len()],
+    }
+
+    impl LaneTimings {
+        pub(super) fn new(lane: usize) -> Self {
+            Self {
+                lane,
+                started: Instant::now(),
+                calls: [0; NAMES.len()],
+                total_us: [0; NAMES.len()],
+                maximum_us: [0; NAMES.len()],
+            }
+        }
+
+        pub(super) fn record(&mut self, stage: Stage, began: Option<Instant>) {
+            let Some(began) = began else { return };
+            let now = Instant::now();
+            let elapsed = (now - began).as_micros();
+            let stage = stage as usize;
+            self.calls[stage] += 1;
+            self.total_us[stage] += elapsed;
+            self.maximum_us[stage] = self.maximum_us[stage].max(elapsed);
+            if elapsed >= 20_000 && stage < Stage::Idle as usize {
+                eprintln!(
+                    "SW_LANE_TIMING utc_ms={} lane={} stage={} duration_us={elapsed}",
+                    sw_storage::utc_ms(),
+                    self.lane,
+                    NAMES[stage],
+                );
+            }
+            let window = now - self.started;
+            if window >= Duration::from_secs(1) {
+                #[cfg(target_os = "linux")]
+                let monotonic_us = {
+                    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+                    Some(now.tv_sec * 1_000_000 + now.tv_nsec / 1_000)
+                };
+                #[cfg(not(target_os = "linux"))]
+                let monotonic_us: Option<i64> = None;
+                eprintln!(
+                    "SW_LANE_WINDOW {}",
+                    serde_json::json!({
+                        "window_us": window.as_micros(), "end_utc_ms": sw_storage::utc_ms(),
+                        "end_monotonic_us": monotonic_us, "lane": self.lane, "stages": NAMES,
+                        "calls": self.calls, "total_us": self.total_us, "maximum_us": self.maximum_us,
+                    })
+                );
+                *self = Self::new(self.lane);
+            }
+        }
     }
 }
 
@@ -381,6 +449,8 @@ impl VisionScheduler {
         };
         #[cfg(feature = "diagnostics")]
         let trace_lane = std::env::var_os("STILLWATCH_LANE_TRACE").is_some();
+        #[cfg(feature = "diagnostics")]
+        let mut timing = lane_timings::LaneTimings::new(lane);
         let mut attempt = 0u32;
         let mut last_camera = None;
         let mut policies = HashMap::<Uuid, HazardPolicies>::new();
@@ -405,7 +475,7 @@ impl VisionScheduler {
                         let persist_began = trace_lane.then(Instant::now);
                         let commit = pending.flush().await;
                         #[cfg(feature = "diagnostics")]
-                        trace_slow_lane_step(lane, "persist_hazard", persist_began);
+                        timing.record(lane_timings::Stage::Persist, persist_began);
                         if let Some(commit) = commit
                             && let Some(policy) = policies.get_mut(&commit.scope.camera_id)
                         {
@@ -425,23 +495,39 @@ impl VisionScheduler {
                                 AnalysisState::Degraded,
                                 Some(InferenceFailure::EvidenceBackpressure),
                             );
-                            tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
-                                _ = shutdown.wait_for(|stop| *stop) => break None,
+                            #[cfg(feature = "diagnostics")]
+                            let wait_began = trace_lane.then(Instant::now);
+                            let stopping = tokio::select! {
+                                _ = tokio::time::sleep(Duration::from_millis(100)) => false,
+                                _ = shutdown.wait_for(|stop| *stop) => true,
+                            };
+                            #[cfg(feature = "diagnostics")]
+                            timing.record(lane_timings::Stage::Backpressure, wait_began);
+                            if stopping {
+                                break None;
                             }
+                            continue;
                         }
                         self.phase(lane, AnalysisState::Ready, None);
                         #[cfg(feature = "diagnostics")]
                         let select_began = trace_lane.then(Instant::now);
                         let next = self.next(lane, last_camera);
                         #[cfg(feature = "diagnostics")]
-                        trace_slow_lane_step(lane, "select_frame", select_began);
+                        timing.record(lane_timings::Stage::Select, select_began);
                         let Some(job) = next else {
-                            tokio::select! {
-                                _ = self.cameras.wait_for_analysis_frame(lane) => continue,
-                                _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
-                                _ = shutdown.wait_for(|stop| *stop) => break None,
+                            #[cfg(feature = "diagnostics")]
+                            let wait_began = trace_lane.then(Instant::now);
+                            let stopping = tokio::select! {
+                                _ = self.cameras.wait_for_analysis_frame(lane) => false,
+                                _ = tokio::time::sleep(Duration::from_millis(25)) => false,
+                                _ = shutdown.wait_for(|stop| *stop) => true,
+                            };
+                            #[cfg(feature = "diagnostics")]
+                            timing.record(lane_timings::Stage::Idle, wait_began);
+                            if stopping {
+                                break None;
                             }
+                            continue;
                         };
                         let dispatched_at = Instant::now();
                         if !self.record_dispatch(&job, dispatched_at) {
@@ -456,9 +542,8 @@ impl VisionScheduler {
                             outcome = process.infer(&job.frame.frame, job.tasks) => outcome,
                         };
                         #[cfg(feature = "diagnostics")]
-                        trace_slow_lane_step(
-                            lane,
-                            "worker_round_trip",
+                        timing.record(
+                            lane_timings::Stage::Worker,
                             trace_lane.then_some(dispatched_at),
                         );
                         match outcome {
@@ -511,7 +596,7 @@ impl VisionScheduler {
                                 }
                                 pending.push(frame, hazards);
                                 #[cfg(feature = "diagnostics")]
-                                trace_slow_lane_step(lane, "apply_policy", policy_began);
+                                timing.record(lane_timings::Stage::Apply, policy_began);
                             }
                             Err(error) => {
                                 let outcome = if matches!(error, WorkerError::Deadline) {
