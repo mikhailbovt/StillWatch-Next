@@ -16,7 +16,7 @@ import time
 from uuid import uuid4
 
 from fast_rc_contract import (
-    CONTRACTS, LOGIC_CASES, PROTOCOL, ROOT, STAGES,
+    CONTRACTS, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, STAGES,
     checked_execution_profile, checked_json, contract_digests, evidence, member, sha256, validate_schema, write_json,
 )
 from validate_report import validate
@@ -186,6 +186,13 @@ class Run:
                                 "--cuda-provider-sha256", self.files[cuda[0]], "--cuda-shared-sha256", self.files[cuda[1]]])
             _, host = self.capture(stage, "execution-host", command)
             sources = {"worker-usage": worker, "core-help": core, "execution-host": host}
+            diagnostics = {}
+            for name, tool in RELEASE_DIAGNOSTICS.items():
+                args = [self.core, name] if tool == "core" else [self.worker, name, "qualification-probe"]
+                outcome, log = self.capture(stage, f"reject-{name}", args)
+                diagnostics[name] = outcome["exit_code"]
+                sources[f"reject-{name}"] = log
+            observed["release_diagnostic_exit_codes"] = diagnostics
             if self.core_profile is not None:
                 _, decoder = self.capture(stage, "capture-doctor", [self.worker, "capture-doctor"])
                 sources["capture-doctor"] = decoder
@@ -475,8 +482,6 @@ class Run:
                       "faults_and_capacity": self.faults, "storage_and_crash": self.storage, "quiet_load": self.quiet_load,
                       "final": self.final}
         for stage in ("preflight", *self.args.stage):
-            if stage not in collectors:
-                continue
             try:
                 collectors[stage]()
             except (OSError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
@@ -495,7 +500,7 @@ def main():
                  "logic-test-binaries", "event-parity"):
         parser.add_argument(f"--{item}", type=lambda p: Path(p).resolve(strict=True), required=item in {"candidate", "profile"})
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--stage", action="append", choices=STAGES[1:], help="Limit execution to selected stages after inputs are verified")
+    parser.add_argument("--stage", action="append", choices=STAGES, help="Limit execution to these stages and preflight")
     parser.add_argument("--cuda-device", type=int)
     parser.add_argument("--address", default="127.0.0.1", help="Private interface for the local TLS/ICE workload")
     parser.add_argument("--raw-frame-bytes", type=int, default=256 * 1024 * 1024)

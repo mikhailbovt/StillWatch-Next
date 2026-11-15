@@ -21,6 +21,11 @@ DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 RUN_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
 MAX_JSON = 32 * 1024 * 1024
 DATABASE_PRESSURE_STATUS = {"sqlite_busy": 503, "pinned_wal": 507}
+RELEASE_DIAGNOSTICS = {
+    "trace-fire-policy": "core",
+    "trace-pose-association": "core",
+    "diagnose-fire-scale": "worker",
+}
 LOGIC_CASES = {
     "clock.source-monotonic-utc-boundaries": (
         ("stillwatch-core", "health::tests::host_clock_intervals_require_observed_stability"),

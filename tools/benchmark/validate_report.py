@@ -13,7 +13,7 @@ import statistics
 import sys
 
 from fast_rc_contract import (
-    CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, ROOT, RUN_ID, STAGES,
+    CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
     camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
     inference_cameras_recovered, inference_worker_replaced, member, number, sha256, validate_schema, write_json,
 )
@@ -123,7 +123,8 @@ class Validation:
         if not isinstance(files, dict) or not files or len(files) > 2048:
             raise ValueError("Candidate inventory is empty or too large")
         platform_name = self.profile["host"]["os"]
-        expected = {"verified_artifacts": len(files), "target_os": platform_name, "release_diagnostic_commands": []}
+        expected = {"verified_artifacts": len(files), "target_os": platform_name, "clean_source_revision": True,
+                    "release_diagnostic_commands": []}
         manifest = self.candidate.get("target", "")
         layout = self.profile["host"].get("architecture") == "x86_64" and platform_name in manifest
         models = self.profile["models"]
@@ -161,6 +162,8 @@ class Validation:
         observed = {
             "verified_artifacts": len(observations["actual_digests"]),
             "target_os": observations["target_os"],
+            "clean_source_revision": self.candidate.get("source_dirty") is False
+            and re.fullmatch(r"[a-f0-9]{40}", str(self.candidate.get("source_revision"))) is not None,
             "release_diagnostic_commands": sorted(set(re.findall(r"\b(?:diagnose-fire-scale|trace-fire-policy|trace-pose-association)\b", command_lines))),
         }
         valid = (host_matches and decoder_matches is not False and roles_match and models_match and observed == expected
@@ -169,7 +172,26 @@ class Validation:
         observed["host_matches"] = host_matches
         observed["decoder_matches"] = decoder_matches
         observed["active_roles_match"] = roles_match and models_match
-        return expected, observed, "PASS" if valid else "FAIL"
+        if not valid:
+            return expected, observed, "FAIL"
+        if "release_diagnostic_exit_codes" not in observations:
+            return expected, observed, "INCOMPLETE"
+        open_commands, missing = [], []
+        exits = observations["release_diagnostic_exit_codes"]
+        for name, tool in RELEASE_DIAGNOSTICS.items():
+            code = exits.get(name)
+            if code is None:
+                missing.append(name)
+                continue
+            transcript = self.read_text(self.artifact(proof, f"reject-{name}"))
+            rejected = (code == 2 and f"unexpected argument '{name}'" in transcript if tool == "core"
+                        else code == 1 and "usage: stillwatch-worker decode-file" in transcript)
+            if not rejected:
+                open_commands.append(name)
+        observed["release_diagnostic_commands"] = open_commands
+        observed["release_diagnostic_probes_missing"] = missing
+        result = "FAIL" if open_commands else "INCOMPLETE" if missing else "PASS"
+        return expected, observed, result
 
     def artifact(self, proof, role):
         roles = proof.get("artifacts", {})
