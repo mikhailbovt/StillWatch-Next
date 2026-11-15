@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { deleteApp, initializeApp } from "firebase/app";
-import { evaluate, makeAI } from "./generate.js";
+import { evaluate, makeAI, warmDevice } from "./generate.js";
 
 function fixture(t, route) {
   const app = initializeApp({ projectId: "stillwatch-local-test", apiKey: "local-test-key",
@@ -44,4 +44,24 @@ test("cloud fallback includes the temporal evidence when the device model is una
   assert.equal(result.inference_source, "in_cloud");
   assert.equal(network.mock.callCount(), 1);
   assert.deepEqual(received, packet.images.map(image => Buffer.from(image.jpeg).toString("base64")));
+});
+
+test("the warmup deadline no longer controls a successfully warmed session", async t => {
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, "timeout", () => deadline.signal);
+  let creationSignal;
+  let imageClosed = false;
+  const session = { async prompt() {}, destroy: t.mock.fn() };
+  globalThis.LanguageModel = { async create({ signal }) { creationSignal = signal; return session; } };
+  globalThis.OffscreenCanvas = class {
+    getContext() { return { fillRect() {} }; }
+    transferToImageBitmap() { return { close() { imageClosed = true; } }; }
+  };
+  t.after(() => { delete globalThis.LanguageModel; delete globalThis.OffscreenCanvas; });
+
+  assert.equal(await warmDevice(), session);
+  assert.equal(imageClosed, true);
+  deadline.abort(new DOMException("Warmup timed out", "TimeoutError"));
+  assert.equal(creationSignal.aborted, false);
+  assert.equal(session.destroy.mock.callCount(), 0);
 });

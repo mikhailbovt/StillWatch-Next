@@ -81,9 +81,14 @@ export function deviceAvailability() {
 }
 
 export async function warmDevice() {
-  const signal = AbortSignal.timeout(60_000);
-  const session = await globalThis.LanguageModel.create({ expectedInputs, signal });
+  const deadline = AbortSignal.timeout(120_000);
+  const controller = new AbortController();
+  const expire = () => controller.abort(deadline.reason);
+  deadline.addEventListener("abort", expire, { once: true });
+  const { signal } = controller;
+  let session;
   try {
+    session = await globalThis.LanguageModel.create({ expectedInputs, signal });
     const canvas = new OffscreenCanvas(320, 180);
     canvas.getContext("2d").fillRect(0, 0, canvas.width, canvas.height);
     const image = canvas.transferToImageBitmap();
@@ -95,8 +100,13 @@ export async function warmDevice() {
     } finally {
       image.close();
     }
+    return session;
+  } catch (error) {
+    session?.destroy();
+    throw error;
   } finally {
-    session.destroy();
+    // Aborting the creation signal also destroys an already-created session.
+    deadline.removeEventListener("abort", expire);
   }
 }
 

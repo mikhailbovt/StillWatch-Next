@@ -27,6 +27,7 @@ let reconnect;
 let configured;
 let ai;
 let state = "unavailable";
+let warmSession;
 let nextWarmup = 0;
 let currentJob;
 let evidenceUrl;
@@ -58,8 +59,21 @@ function hideEvidence() {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") hideEvidence();
 });
-window.addEventListener("pagehide", hideEvidence);
+window.addEventListener("pagehide", () => {
+  hideEvidence();
+  if (warmSession) {
+    releaseWarmSession();
+    state = "unavailable";
+    nextWarmup = 0;
+    prepare.disabled = false;
+  }
+});
 document.addEventListener("freeze", hideEvidence);
+
+function releaseWarmSession() {
+  warmSession?.destroy();
+  warmSession = undefined;
+}
 
 function showPacket(packet) {
   const { meta } = packet;
@@ -169,7 +183,7 @@ prepare.addEventListener("click", async () => {
     await bootstrapDevice(ai).initializeDeviceModel(progress => {
       status.textContent = "Downloading Chrome model (" + Math.round(100 * progress) + "%)";
     });
-    await warmDevice();
+    warmSession = await warmDevice();
     state = "ready";
     status.textContent = "Chrome model ready. Waiting for evidence.";
   } catch {
@@ -194,7 +208,7 @@ async function refreshDeviceAvailability() {
   prepare.disabled = true;
   status.textContent = "Warming the Chrome model…";
   try {
-    await warmDevice();
+    warmSession = await warmDevice();
     state = "ready";
     status.textContent = "Chrome model ready. Waiting for evidence.";
   } catch (error) {
@@ -254,6 +268,7 @@ async function serveJob(response) {
     result = { error: "inference_unavailable" };
     failure = evaluationFailure(error);
     if (error?.message === "route_unavailable" && state === "ready") {
+      releaseWarmSession();
       state = "unavailable";
       nextWarmup = performance.now() + 30_000;
       prepare.disabled = false;
