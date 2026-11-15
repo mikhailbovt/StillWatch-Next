@@ -1,7 +1,9 @@
 """Observe native process resources and Core-owned leases through churn and drain."""
 
 from contextlib import closing
+from pathlib import Path
 import sqlite3
+import sys
 import time
 from uuid import uuid4
 
@@ -32,13 +34,40 @@ class ChurnResources:
             raise RuntimeError(f"Core resource status returned {code}")
         return status
 
+    def measured_usage(self, leader):
+        profile = self.fixture["profile"]
+        usage = resources(leader, self.data, self.settings.get("cuda_device"), profile["host"]["accelerator"])
+        threads = {}
+        for pid, started in usage["pids"]:
+            try:
+                process = psutil.Process(pid)
+                if process.create_time() == started:
+                    threads[str(pid)] = process.num_threads()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        usage["threads_by_pid"] = threads
+        if sys.platform == "linux":
+            try:
+                rollup = Path(f"/proc/{leader}/smaps_rollup").read_text(encoding="ascii")
+            except OSError:
+                return usage
+            fields = {"Anonymous", "Private_Clean", "Private_Dirty", "Pss"}
+            pages = {}
+            for line in rollup.splitlines():
+                key, _, value = line.partition(":")
+                if key in fields:
+                    amount, unit = value.split()
+                    if unit == "kB":
+                        pages[key.lower() + "_bytes"] = int(amount) * 1024
+            usage["core_smaps"] = pages
+        return usage
+
     def record(self, kind, completed=()):
         status = self.status()
         if status.get("resources") is None:
             return
         process = self.fixture["process"]
-        profile = self.fixture["profile"]
-        usage = resources(process.pid, self.data, self.settings.get("cuda_device"), profile["host"]["accelerator"])
+        usage = self.measured_usage(process.pid)
         self.processes.update((pid, created) for pid, created in usage["pids"])
         self.records.append({"elapsed_s": time.monotonic() - self.begin, "kind": kind, "completed": list(completed),
                              "core": process.pid, "usage": usage, "leases": status["resources"]})
@@ -59,7 +88,7 @@ class ChurnResources:
         deadline = began + profile["budgets"]["rtsp_recovery_ms"] / 1_000
         while True:
             status = self.status()
-            usage = resources(leader, self.data, self.settings.get("cuda_device"), profile["host"]["accelerator"])
+            usage = self.measured_usage(leader)
             current = {tuple(record) for record in usage["pids"]}
             detached = []
             for pid, created in self.processes - current:
