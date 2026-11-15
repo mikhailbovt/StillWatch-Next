@@ -92,6 +92,7 @@
         },
         "annotation": {"enum": ["positive", "negative", "uncertain"]},
         "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+        "controlled_fire_regions": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
         "negative_strata": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/stratum"}}
       },
       "if": {"properties": {"annotation": {"const": "positive"}}},

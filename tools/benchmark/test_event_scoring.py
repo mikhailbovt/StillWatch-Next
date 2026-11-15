@@ -1,9 +1,11 @@
-import sqlite3
 from contextlib import closing
 import json
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
 import unittest
 
-from evaluate import opening_event, score_run
+from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, score_run
 from event_scoring import coverage_intervals, score_clip
 
 
@@ -35,6 +37,39 @@ def annotation(id, start, roi):
 
 
 class EventScoring(unittest.TestCase):
+    def test_manifest_requires_schema_category_and_group_disjointness(self):
+        video = {"file": "first.mp4", "sha256": "1" * 64, "group": "shared", "category": "fire",
+                 "duration_s": 20, "cloud_consent": False, "split": "development", "annotation": "positive",
+                 "lineage": {"source_id": "test", "scene_id": "A", "camera_id": "A", "session_id": "A",
+                             "original_segments": [{"sha256": "1" * 64, "start_s": 0, "duration_s": 20}],
+                             "transform": "identity"},
+                 "events": [annotation("fire", 3, [0.1, 0.1, 0.2, 0.2])], "negative_strata": []}
+        manifest = {"schema_version": 2, "dataset_id": "test",
+                    "sources": {"test": {"origin": "local", "rights": "local_evaluation", "license_or_permission": "test"}},
+                    "clips": [video]}
+        contract = json.loads(QUALITY_CONTRACT.read_text(encoding="utf-8"))
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dataset.json"
+
+            def load():
+                path.write_text(json.dumps(manifest), encoding="utf-8")
+                return load_manifest(path, "unused-for-v2", contract, {})
+
+            self.assertEqual(load()[0], [video])
+            video["extra"] = True
+            with self.assertRaisesRegex(ValueError, "Invalid dataset"):
+                load()
+            video.pop("extra")
+            video["category"] = "medical"
+            with self.assertRaisesRegex(ValueError, "Episode category differs"):
+                load()
+            video["category"] = "fire"
+            lineage = dict(video["lineage"], scene_id="B", camera_id="B", session_id="B",
+                           original_segments=[{"sha256": "2" * 64, "start_s": 0, "duration_s": 20}])
+            manifest["clips"].append(dict(video, file="second.mp4", sha256="2" * 64, split="holdout", lineage=lineage))
+            with self.assertRaisesRegex(ValueError, "Source lineage crosses evaluation splits: .*group"):
+                load()
+
     def test_short_follow_up_and_visible_at_start_are_separate(self):
         night = {**clip(34, 39.333333), "last_negative_s": 32}
         course = score_clip(night, {"events": []}, LIMITS)["episodes"][0]

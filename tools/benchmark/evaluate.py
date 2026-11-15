@@ -16,6 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from event_scoring import coverage_intervals, episodes, score_clip, summarize
+from fast_rc_contract import validate_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 QUALITY_CONTRACT = ROOT / "qualification/quality-contract.json"
@@ -164,6 +165,8 @@ def legacy(args, clips, media):
 
 def load_manifest(path, manifest_digest, contract, development):
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") == 2:
+        validate_schema("dataset", manifest)
     clips = manifest["clips"]
     if not clips or len({clip["file"] for clip in clips}) != len(clips):
         raise ValueError("Evaluation requires distinct clip entries")
@@ -174,6 +177,7 @@ def load_manifest(path, manifest_digest, contract, development):
             if lineage["source_id"] not in manifest["sources"]:
                 raise ValueError(f"Missing source lineage in {clip['file']}")
             identities = [(field, lineage[field]) for field in ("scene_id", "camera_id", "session_id")]
+            identities.append(("group", clip["group"]))
             identities.extend(("subject", subject) for subject in lineage.get("subject_ids", []))
             identities.extend(("original_media", segment["sha256"]) for segment in lineage["original_segments"])
             identities.append(("clip_media", clip["sha256"]))
@@ -181,6 +185,8 @@ def load_manifest(path, manifest_digest, contract, development):
                 if lineage_splits.setdefault(identity, split) != split:
                     raise ValueError(f"Source lineage crosses evaluation splits: {identity}")
             truth = episodes(clip)
+            if any(event["category"] != clip["category"] for event in clip["events"]):
+                raise ValueError(f"Episode category differs from its clip in {clip['file']}")
             if len({event.id for event in truth}) != len(truth):
                 raise ValueError(f"Duplicate episode ID in {clip['file']}")
             for event in truth:
