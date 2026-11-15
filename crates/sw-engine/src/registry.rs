@@ -10,10 +10,13 @@ use std::{
 use sw_domain::{SourceScope, UnixMillis, Visibility};
 use sw_protocol::{
     AnalysisCapacity, Camera, CameraConfig, CameraPriority, CameraRuntime, CameraSampling,
-    CameraSource, CaptureState, ControlledFireRegion, Counter, Dimensions, MainStreamProbe,
-    MaskRect, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream, OnvifStreamRequest,
-    SceneReview, SourceProbe, SourceRate, SourceRateQuality,
-    worker::{CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality},
+    CameraSource, CapacityState, CaptureState, ControlledFireRegion, Counter, Dimensions,
+    MainStreamProbe, MaskRect, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
+    OnvifStreamRequest, SceneReview, SourceProbe, SourceRate, SourceRateQuality,
+    worker::{
+        CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality,
+        rectangular_tensor_shape,
+    },
 };
 use sw_storage::{
     AnalysisAdmission, CameraAction, CameraAdmission, CameraCommand, CameraLimits, CameraRecord,
@@ -114,6 +117,7 @@ pub struct CameraRegistry {
     credentials_root: Option<PathBuf>,
     limits: CameraLimits,
     analysis_admission: Option<Arc<AnalysisAdmission>>,
+    model_shapes: Option<Vec<[u16; 2]>>,
     pub(crate) inference_lanes: usize,
     analysis_frames: Box<[Notify]>,
     budget: FrameBudget,
@@ -128,6 +132,8 @@ pub struct SourceConfig {
     pub rtsp_peers: HashSet<SocketAddr>,
     pub credentials_root: Option<PathBuf>,
     pub onvif: OnvifConfig,
+    /// Allowed rectangular model inputs, ordered as height then width.
+    pub model_shapes: Option<Vec<[u16; 2]>>,
 }
 
 pub struct CameraHealth {
@@ -255,6 +261,7 @@ impl CameraRegistry {
             credentials_root: sources.credentials_root,
             limits,
             analysis_admission,
+            model_shapes: sources.model_shapes,
             inference_lanes,
             analysis_frames: (0..inference_lanes).map(|_| Notify::new()).collect(),
             budget: FrameBudget::new(limits.raw_bytes)?,
@@ -614,6 +621,19 @@ impl CameraRegistry {
                 .camera_capacity(probe.dimensions, replacing, self.limits)
                 .await?,
         );
+        if let Some([height, width]) =
+            self.unsupported_model_shape(probe.dimensions.width, probe.dimensions.height)
+        {
+            let mut capacity = self.analysis_capacity();
+            capacity.state = CapacityState::Insufficient;
+            capacity.available_camera_slots = None;
+            capacity.limiting_resource = Some("model_tensor_shape".into());
+            capacity.reason = format!(
+                "The analysis stream requires a {width}x{height} input outside the configured model profile"
+            );
+            probe.analysis_capacity = Some(capacity);
+            return Ok(probe);
+        }
         let capacity = match &self.analysis_admission {
             Some(profile) if profile_id.as_deref().is_none_or(|id| id == profile.id) => {
                 self.store
@@ -638,6 +658,12 @@ impl CameraRegistry {
         };
         probe.analysis_capacity = Some(capacity);
         Ok(probe)
+    }
+
+    fn unsupported_model_shape(&self, width: u32, height: u32) -> Option<[u16; 2]> {
+        let shapes = self.model_shapes.as_ref()?;
+        let shape = rectangular_tensor_shape(width, height);
+        (!shapes.contains(&shape)).then_some(shape)
     }
 
     fn measurements(probe: &SourceProbe) -> CameraSourceMeasurements {
@@ -1244,6 +1270,7 @@ impl CameraRegistry {
         let zones = Arc::from(camera.config.controlled_fire_regions.clone());
         let mut moved_since = None;
         let mut mask_dimensions = (0, 0);
+        let mut supported_model_shape = true;
         let mut masks: Arc<[scene::PixelMask]> = Arc::from([]);
         let mut rate_sample: Option<SourceRateSample> = None;
         let mut qualified_rate = self.analysis_admission.is_none();
@@ -1314,6 +1341,9 @@ impl CameraRegistry {
             }
             if dimensions != mask_dimensions {
                 mask_dimensions = dimensions;
+                supported_model_shape = self
+                    .unsupported_model_shape(dimensions.0, dimensions.1)
+                    .is_none();
                 masks =
                     scene::pixel_masks(&camera.config.privacy_masks, dimensions.0, dimensions.1);
             }
@@ -1324,7 +1354,10 @@ impl CameraRegistry {
             if live && has_native_time {
                 content.observe(&frame.rgb, sample.fingerprint, now);
             }
-            let usable = has_native_time && qualified_rate && !content.unconfirmed(now);
+            let usable = has_native_time
+                && qualified_rate
+                && supported_model_shape
+                && !content.unconfirmed(now);
             let alignment = camera.reviewed_scene.as_ref().map(|reference| {
                 if usable {
                     scene::alignment(reference, &sample)

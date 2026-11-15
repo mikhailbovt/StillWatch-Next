@@ -20,6 +20,7 @@ use crate::{Config, valid_digest};
 
 const MAX_PROFILE_BYTES: u64 = 64 * 1024;
 const MAX_REPORT_BYTES: u64 = 1_000_000;
+const MAX_MODEL_MANIFEST_BYTES: u64 = 128 * 1024;
 const NATIVE_CONTRACT: &str = include_str!("../../../qualification/fast-rc-v2.json");
 
 #[derive(Clone, Deserialize)]
@@ -365,7 +366,7 @@ impl ExecutionProfile {
         let manifest: ModelManifest = read_pinned(
             &models.join("models.lock.json"),
             &artifacts.model_manifest,
-            128 * 1024,
+            MAX_MODEL_MANIFEST_BYTES,
         )?;
         ensure!(
             manifest.models.pose_balanced.sha256 == artifacts.pose_balanced
@@ -445,6 +446,25 @@ struct ModelRoles {
 #[derive(Deserialize)]
 struct ModelArtifact {
     sha256: String,
+}
+
+pub(super) fn rectangular_model_shapes(config: &InferenceConfig) -> Option<Vec<[u16; 2]>> {
+    if let Some(shape) = config.cuda.as_ref().and_then(|cuda| cuda.graph_shape) {
+        return Some(vec![shape]);
+    }
+    let manifest: ModelManifest = read_pinned(
+        &config.models.join("models.lock.json"),
+        &config.manifest_sha256,
+        MAX_MODEL_MANIFEST_BYTES,
+    )
+    .ok()?;
+    if manifest.profile != "cpu_fp32_rect_640" {
+        return None;
+    }
+    match &config.live_profile {
+        Some(profile) => Some(profile.warm_shapes.clone()),
+        None => manifest.contract.map(|contract| contract.tensor_shapes),
+    }
 }
 
 fn read_pinned<T: DeserializeOwned>(path: &Path, digest: &str, max: u64) -> Result<T> {

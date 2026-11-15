@@ -131,6 +131,8 @@ def run(args):
             verify_camera_sampling(args, root, model_options)
         if args.timing:
             verify_timing(args, root, model_options)
+        if args.mixed_tensor_shapes:
+            verify_mixed_tensor_shapes(args, root, model_options)
         if args.slow_source:
             verify_slow_source(args, root, model_options)
         if args.capture_recovery:
@@ -196,6 +198,49 @@ def verify_timing(args, root, model_options):
         assert int(core_status["inference"]["totals"]["pose"]["accepted"]) >= int(second["counts"]["pose"]["accepted"])
         print(json.dumps({"timed_ipc": not args.legacy_worker, "reply_histogram_count": replies,
                           "relative_source_lag_ms": lag, "counters_cross_epoch": True}))
+
+
+def verify_mixed_tensor_shapes(args, root, model_options):
+    manifest = json.loads((args.models / "models.lock.json").read_bytes())
+    shapes = manifest["contract"]["tensor_shapes"]
+    assert manifest["profile"] == "cpu_fp32_rect_640" and [384, 640] in shapes and [448, 640] not in shapes
+    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-i", str(root / "pose.mp4"),
+                    "-vf", "scale=720:480", "-an", "-c:v", "libx264", "-threads", "1",
+                    str(root / "unsupported.mp4")], check=True)
+    with run_core(args.core, args.worker, root / "shape-data", root, root / "shape.log",
+                  *model_options, "--inference-workers", "1") as (_, client):
+        def create(name):
+            source = {"type": "replay", "file": f"{name}.mp4", "pace": True}
+            status, camera = client.call("POST", "/api/v2/cameras", {
+                "name": name, "enabled": True, "source": source,
+            }, key=f"shape-{name}")
+            assert status == 201, (status, camera)
+            return camera["id"]
+
+        def counts():
+            status, details = client.call("GET", "/api/v2/status")
+            assert status == 200, details
+            return details["inference"]["totals"]
+
+        source = {"type": "replay", "file": "unsupported.mp4", "pace": True}
+        status, probe = client.call("POST", "/api/v2/source-probes", {"source": source})
+        assert status == 200 and probe["native_pts"], (status, probe)
+        supported = create("pose")
+        before = until(lambda: current if int((current := counts())["pose"]["accepted"]) >= 4 else None, 12)
+        unsupported = create("unsupported")
+        until(lambda: int(client.camera(unsupported)["runtime"]["frame"] or 0) >= 15, 5)
+        after = until(lambda: current if int((current := counts())["pose"]["accepted"])
+                      >= int(before["pose"]["accepted"]) + 5 else None, 5)
+        for task in ("pose", "fire"):
+            assert after[task]["worker_failed"] == before[task]["worker_failed"] == "0", after
+        good = client.camera(supported)["runtime"]["analysis"]
+        rejected = client.camera(unsupported)["runtime"]["analysis"]
+        assert good["state"] == "ready" and int(good["fire_frames"]) > 0, good
+        assert rejected["state"] == "degraded" and rejected["pose_frames"] == rejected["fire_frames"] == "0", rejected
+        assert probe["analysis_capacity"]["state"] == "insufficient", probe
+        assert probe["analysis_capacity"]["limiting_resource"] == "model_tensor_shape", probe
+        print(json.dumps({"native_unsupported_capture_advanced": True,
+                          "unsupported_analysis_reported": True, "shared_worker_kept_sampling": True}))
 
 
 def verify_cadence(args, root, model_options):
@@ -871,6 +916,8 @@ if __name__ == "__main__":
     parser.add_argument("--cadence", action="store_true", help="Verify measured rates for 2 fps and 15 fps replay cameras")
     parser.add_argument("--camera-sampling", action="store_true", help="Verify camera-specific sampling, evidence and restart")
     parser.add_argument("--timing", action="store_true", help="Verify histograms, task counts and lag across replay epochs")
+    parser.add_argument("--mixed-tensor-shapes", action="store_true",
+                        help="Keep a worker available when a replay falls outside the rectangular ModelPack v3 shapes")
     parser.add_argument("--legacy-worker", action="store_true", help="Expect v1 worker timing compatibility")
     parser.add_argument("--slow-source", action="store_true", help="Measure a 15 fps RTSP fixture delivered at half speed")
     parser.add_argument("--capture-recovery", action="store_true", help="Exercise a targeted failure of SQLite epoch writes")

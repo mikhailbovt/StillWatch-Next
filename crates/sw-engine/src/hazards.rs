@@ -1291,6 +1291,7 @@ mod tests {
                     device_endpoints: Vec::new(),
                     trusted_ca: None,
                 },
+                model_shapes: None,
             },
             CameraLimits {
                 active: 4,

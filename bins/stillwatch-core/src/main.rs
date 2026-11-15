@@ -515,6 +515,9 @@ async fn serve(
         .lan_listen
         .map(|address| (address, config.lan_advertise));
     let capture_worker = worker.clone();
+    let model_shapes = inference
+        .as_ref()
+        .and_then(execution_profile::rectangular_model_shapes);
     let semantic_jobs_enabled =
         config.semantic_worker.is_some() && config.semantic_token_file.is_some();
     let (store, digest, registry, lan, proxy) =
@@ -547,6 +550,7 @@ async fn serve(
                 rtsp_peers: peers.into_iter().collect(),
                 credentials_root,
                 onvif,
+                model_shapes,
             };
             let registry = CameraRegistry::new(
                 store.clone(),
