@@ -35,7 +35,11 @@ def call_policy(child, header, rgb, result):
     size, = struct.unpack("<I", exact(child.stdout, 4))
     if not 0 < size <= 1_500_000:
         raise ValueError("invalid policy result")
-    return json.loads(exact(child.stdout, size))
+    trace = json.loads(exact(child.stdout, size))
+    expected_us, = struct.unpack_from("<q", header, 40)
+    if int(trace["source_us"]) != expected_us:
+        raise ValueError("policy response belongs to a different source timestamp")
+    return trace
 
 
 def decisions(trace):
@@ -44,18 +48,24 @@ def decisions(trace):
                   for r in trace["regions"])
 
 
-def evaluate(args, clip, window, workers, policies):
+def sample_slot(source_us, start_us, fps, phase_us):
+    elapsed_us = source_us - start_us - phase_us
+    return None if elapsed_us < 0 else elapsed_us * fps // 1_000_000
+
+
+def compare_window(args, clip, window, phase_us, workers, policies):
     path = (args.media / clip["file"]).resolve(strict=True)
     if not path.is_relative_to(args.media) or digest(path) != clip["sha256"]:
         raise ValueError("clip does not match development manifest")
-    for policy in policies:
+    for policy in policies.values():
         policy.stdin.write(b"\0" * 4)
     sample_hash = hashlib.sha256()
     source_start = None
-    first_review = [None, None]
-    reviews = [0, 0]
-    mismatches = []
-    samples = 0
+    first_review = dict.fromkeys(workers)
+    reviews = dict.fromkeys(workers, 0)
+    differences = []
+    graph_differences = []
+    selected_source_us = []
     last_slot = -1
     start_us, stop_us = (round(s * 1_000_000) for s in window)
     with process(args.worker, "capture") as capture:
@@ -77,31 +87,36 @@ def evaluate(args, clip, window, workers, policies):
             if source_start is None:
                 source_start = pts
             elapsed = pts - source_start
-            if elapsed < start_us:
-                continue
             if elapsed >= stop_us:
                 break
-            slot = (elapsed - start_us) * args.fps // 1_000_000
-            if slot <= last_slot:
+            slot = sample_slot(elapsed, start_us, args.fps, phase_us)
+            if slot is None or slot <= last_slot:
                 continue
             last_slot = slot
+            selected_source_us.append(elapsed)
             sample_hash.update(header)
             sample_hash.update(rgb)
-            values = [decisions(call_policy(policy, header, rgb, call_inference(worker, header, rgb)))
-                      for worker, policy in zip(workers, policies, strict=True)]
-            for i, row in enumerate(values):
+            outputs = {name: call_inference(worker, header, rgb) for name, worker in workers.items()}
+            if "cuda_graph" in outputs and outputs["cuda_graph"] != outputs["cuda"]:
+                graph_differences.append(elapsed)
+            values = {name: decisions(call_policy(policies[name], header, rgb, output))
+                      for name, output in outputs.items()}
+            for name, row in values.items():
                 if any(item[0] == "review" for item in row):
-                    reviews[i] += 1
-                    if first_review[i] is None:
-                        first_review[i] = elapsed
-            if values[0] != values[1]:
-                mismatches.append({"source_us": elapsed, "cpu": values[0], "cuda": values[1]})
-            samples += 1
-    if not samples:
+                    reviews[name] += 1
+                    if first_review[name] is None:
+                        first_review[name] = elapsed
+            if any(value != values["cpu"] for value in values.values()):
+                differences.append({"source_us": elapsed, **values})
+    if not selected_source_us:
         raise ValueError("empty comparison window")
-    return {"clip": clip["file"], "window_s": window, "matched_input_digest": sample_hash.hexdigest(),
-            "samples": samples, "review_samples": reviews, "first_review_us": first_review,
-            "policy_differences": mismatches}
+    report = {"clip": clip["file"], "window_s": window, "phase_offset_us": phase_us,
+              "matched_input_digest": sample_hash.hexdigest(), "selected_source_us": selected_source_us,
+              "samples": len(selected_source_us), "review_samples": list(reviews.values()),
+              "first_review_us": list(first_review.values()), "policy_differences": differences}
+    if "cuda_graph" in workers:
+        report["cuda_graph_observation_differences_us"] = graph_differences
+    return report
 
 
 def run(args):
@@ -117,22 +132,26 @@ def run(args):
     provider, shared = args.cuda_provider, args.cuda_shared
     reports = []
     pack_digest = digest(args.models / "models.lock.json")
+    configurations = {}
+    cuda = {"device": args.cuda_device, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
+    for name, runtime in (("cpu", args.cpu_runtime), ("cuda", args.cuda_runtime)):
+        body = {"models": str(args.models), "manifest_sha256": pack_digest,
+                "library": str(runtime), "library_sha256": digest(runtime), "threads": 4}
+        configurations[name] = body if name == "cpu" else body | {"cuda": cuda}
+    if args.cuda_graph_shape is not None:
+        configurations["cuda_graph"] = configurations["cuda"] | {"cuda": cuda | {"graph_shape": args.cuda_graph_shape}}
     with ExitStack() as stack:
-        workers = [stack.enter_context(process(args.worker, "infer-v2-proposals")) for _ in range(2)]
-        policies = [stack.enter_context(process(args.policy_core, "trace-fire-policy")) for _ in range(2)]
-        for policy in policies:
+        workers = {name: stack.enter_context(process(args.worker, "infer-v2-proposals")) for name in configurations}
+        policies = {name: stack.enter_context(process(args.policy_core, "trace-fire-policy")) for name in configurations}
+        for policy in policies.values():
             if exact(policy.stdout, 4) != b"SWP1":
                 raise ValueError("invalid policy handshake")
-        for index, (worker, runtime) in enumerate(zip(workers, [args.cpu_runtime, args.cuda_runtime], strict=True)):
-            body = {"models": str(args.models), "manifest_sha256": pack_digest,
-                    "library": str(runtime), "library_sha256": digest(runtime), "threads": 4}
-            if index == 1:
-                body["cuda"] = {"device": 0, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
-            wire = json.dumps(body).encode()
+        for name, worker in workers.items():
+            wire = json.dumps(configurations[name]).encode()
             worker.stdin.write(struct.pack("<I", len(wire)) + wire)
             worker.stdin.flush()
             if exact(worker.stdout, 4) != b"SWI2":
-                raise ValueError("invalid worker handshake")
+                raise ValueError(f"invalid worker handshake for {name}")
         for filename, spec in windows.items():
             clip = clips[filename]
             onset = clip.get("onset_s")
@@ -141,19 +160,25 @@ def run(args):
                 window = [max(0, onset - 2), min(clip["duration_s"], onset + 8)]
             if not window or not 0 <= window[0] < window[1] <= clip["duration_s"] or window[1] - window[0] > 30:
                 raise ValueError("invalid or excessive test window")
-            row = evaluate(args, clip, window, workers, policies)
+            phase_us = spec.get("phase_offset_us", 0)
+            if type(phase_us) is not int or not 0 <= phase_us * args.fps < 1_000_000:
+                raise ValueError("phase offset must be an integer within one sampling period")
+            row = compare_window(args, clip, window, phase_us, workers, policies)
             reports.append(row)
             print(f"{filename} {row['samples']} matched frames, {len(row['policy_differences'])} policy differences", flush=True)
     report = {"manifest_sha256": manifest_hash, "windows_sha256": digest(args.windows),
               "worker_sha256": digest(args.worker), "core_sha256": digest(args.policy_core),
               "model_manifest_sha256": pack_digest, "cpu_runtime_sha256": digest(args.cpu_runtime),
               "cuda_runtime_sha256": digest(args.cuda_runtime), "cuda_provider_sha256": digest(provider),
-              "cuda_shared_sha256": digest(shared), "fps": args.fps,
+              "cuda_shared_sha256": digest(shared), "fps": args.fps, "backends": list(configurations),
               "development_fire_policy_equivalent": all(not row["policy_differences"] for row in reports),
               "scope": "matched native frames and detector-to-policy output; storage and delivery excluded",
               "clips": reports}
+    graph_equal = all(not row.get("cuda_graph_observation_differences_us") for row in reports)
+    if args.cuda_graph_shape is not None:
+        report.update(cuda_graph_shape=args.cuda_graph_shape, cuda_graph_observations_equal=graph_equal)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-    return 0 if report["development_fire_policy_equivalent"] else 1
+    return 0 if report["development_fire_policy_equivalent"] and graph_equal else 1
 
 
 if __name__ == "__main__":
@@ -162,5 +187,12 @@ if __name__ == "__main__":
                  "cuda-runtime", "cuda-provider", "cuda-shared"):
         parser.add_argument(f"--{name}", type=lambda path: Path(path).resolve(strict=True), required=True)
     parser.add_argument("--fps", type=int, choices=(2, 3, 5, 8), default=2)
+    parser.add_argument("--cuda-device", type=int, default=0)
+    parser.add_argument("--cuda-graph-shape", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"))
     parser.add_argument("--output", type=Path, required=True)
-    raise SystemExit(run(parser.parse_args()))
+    args = parser.parse_args()
+    if not 0 <= args.cuda_device <= 65535:
+        parser.error("CUDA device index must be in 0..65535")
+    if args.cuda_graph_shape and any(not 32 <= side <= 640 or side % 32 for side in args.cuda_graph_shape):
+        parser.error("CUDA Graph requires positive stride-32 tensor dimensions up to 640")
+    raise SystemExit(run(args))

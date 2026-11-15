@@ -1,13 +1,17 @@
 from contextlib import closing
+import hashlib
 import json
+import math
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
+from compare_fire_backends import sample_slot
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
 from event_scoring import coverage_intervals, score_clip
 from fast_rc_contract import verified_quiet_window
+from legacy_replay import measured_clip
 from validate_report import canary_matches
 
 
@@ -39,6 +43,63 @@ def annotation(id, start, roi):
 
 
 class EventScoring(unittest.TestCase):
+    def test_fixed_replay_phase_changes_slots_at_exact_microsecond_boundaries(self):
+        window_start = 2_000_000
+        phase_offset = 66_666
+        times = [2_000_000, 2_066_665, 2_066_666, 2_566_665, 2_566_666, 3_066_666]
+        self.assertEqual([sample_slot(at, window_start, 2, phase_offset) for at in times],
+                         [None, None, 0, 0, 1, 2])
+        self.assertEqual(sample_slot(25_000_000, window_start, 2, 0), 46)
+
+    def test_legacy_replay_grounds_only_the_first_candidate_and_matching_pose(self):
+        observed = {"x1": 10, "y1": 20, "x2": 30, "y2": 40}
+        expanded = {"x1": 0, "y1": 0, "x2": 80, "y2": 100}
+        person = {"track_id": 4, "association_uncertain": False, "capture_ts": 4.5, "box": observed}
+        candidate = {"candidate_id": "opening", "category": "medical", "epoch": 1, "last_ts": 4.5,
+                     "reason": "fall_like", "box": expanded, "track_id": 4,
+                     "motion": {"identity_uncertain": False, "track_id": 4}}
+        event = {"incident_id": "incident", "category": "medical", "camera_id": "camera", "epoch": 1,
+                 "detected_ts": 4.5, "reason": "changed", "box": expanded,
+                 "candidate_refs": [{"candidate_id": "opening"}]}
+        rows = [{"source_ts": ts, "width": 100, "height": 100, "inferred_routes": ["pose", "fire"],
+                 "observations": {"pose": []}, "candidates": []} for ts in (4, 4.5, 5)]
+        rows[1].update(candidates=[candidate], observations={"pose": [person]})
+        result = {"events": [event], "camera_id": "camera", "inference_calls": {"pose": 3, "fire": 3},
+                  "source_clock": {"mode": "native_pts", "nominal_frames": 1, "invalid_timestamps": 0,
+                                   "regressed_timestamps": 0}}
+        coverage = json.loads(QUALITY_CONTRACT.read_text(encoding="utf-8"))["coverage"]
+        with TemporaryDirectory() as directory:
+            trace = Path(directory) / "observations.jsonl"
+
+            def replay():
+                raw = "".join(json.dumps(row) + "\n" for row in rows).encode()
+                trace.write_bytes(raw)
+                result["trace_sha256"] = hashlib.sha256(raw).hexdigest()
+                return measured_clip(result, trace, {"duration_s": 1}, {"pose": 2, "fire": 2}, coverage)
+
+            summary = replay()
+            opening, = summary["events"]
+            self.assertEqual(opening["opened_clip_us"], "500000")
+            self.assertEqual(opening["reason"], "fall_like")
+            self.assertEqual(opening["roi"], [0.1, 0.2, 0.3, 0.4])
+            self.assertEqual(summary["coverage"]["source_time"]["pose"]["eligible_seconds"], 1.0)
+            person["association_uncertain"] = True
+            self.assertNotIn("roi", replay()["events"][0])
+
+    def test_negative_rates_keep_gap_openings_outside_the_verified_denominator(self):
+        run = {"events": [event(2, "verified", epoch="1"), event(20, "gap", epoch="1"),
+                          event(3, "elsewhere", epoch="2")],
+               "coverage": measured(intervals=((0, 10), (30, 50)))}
+        summary = score_run([clip(None)], {"building.mp4": run}, LIMITS)["fire_test"]
+        self.assertEqual(summary["events_in_negative_clips"], {"review": 3})
+        self.assertEqual(summary["events_outside_verified_negative_exposure"], {"review": 2})
+        rates = summary["verified_negative_opening_rates"]
+        exposure = 30 / 3600
+        self.assertEqual(rates["review"]["estimated_per_camera_hour"], 1 / exposure)
+        expected_count = rates["review"]["poisson_one_sided_upper_per_hour_iid"] * exposure
+        self.assertAlmostEqual(math.exp(-expected_count) * (1 + expected_count), 0.05)
+        self.assertAlmostEqual(rates["urgent"]["poisson_one_sided_upper_per_hour_iid"], -math.log(0.05) / exposure)
+
     def test_manifest_requires_schema_category_and_group_disjointness(self):
         video = {"file": "first.mp4", "sha256": "1" * 64, "group": "shared", "category": "fire",
                  "duration_s": 20, "cloud_consent": False, "split": "development", "annotation": "positive",

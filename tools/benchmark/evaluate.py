@@ -16,7 +16,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from event_scoring import coverage_intervals, episodes, overlap, score_clip, summarize
+from event_scoring import coverage_intervals, episodes, normalized_region, overlap, score_clip, summarize, valid_rectangle
 from fast_rc_contract import validate_schema
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,20 +88,12 @@ def opening_event(event, committed_at, source_epochs, observation=None):
     facts, region = json.loads(observation)
     if facts["type"] != event["category"]:
         return result
-    width, height = dimensions
-    if width <= 0 or height <= 0:
-        return result
-    roi = [region[key] / side for key, side in zip(("x1", "y1", "x2", "y2"), (width, height, width, height), strict=True)]
-    if valid_rectangle(roi):
+    roi = normalized_region(region, *dimensions)
+    if roi is not None:
         result.update(roi=roi, opened_clip_us=str(relative_us))
         if facts["type"] == "medical":
             result.update(track_id=facts["track_id"], identity_uncertain=facts["identity_uncertain"])
     return result
-
-
-def valid_rectangle(rect):
-    x1, y1, x2, y2 = rect
-    return 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
 
 
 def match_opening_subject(event, subject_frames, minimum_iou):
@@ -231,20 +223,27 @@ def rust_batch(args, clips, media, model_hash, ort_hash, coverage_contract, nati
             return results
 
 
-def legacy(args, clips, media):
+def legacy(args, media, quality_hash):
     if args.legacy_python is None:
         return None
-    result = subprocess.check_output([
-        "git", "-C", str(args.legacy_root), "rev-parse", "HEAD",
-    ], text=True).strip()
-    expected = json.loads((Path(__file__).resolve().parents[2] / "baseline.json").read_text())["revision"]
-    if result != expected:
+    command = ["git", "-C", str(args.legacy_root)]
+    result = subprocess.check_output([*command, "rev-parse", "HEAD"], text=True).strip()
+    expected = json.loads((ROOT / "baseline.json").read_text(encoding="utf-8"))
+    if result != expected["revision"]:
         raise ValueError("Reference checkout does not match baseline.json")
+    changed = subprocess.check_output([*command, "status", "--porcelain", "--untracked-files=all", "--",
+                                       "src", "tools/replay.py", "configs/default.yaml", "models.lock.json", "uv.lock"])
+    if (changed or digest(args.legacy_root / "models.lock.json") != expected["model_lock_sha256"]
+            or digest(args.legacy_root / "uv.lock") != expected["python_lock_sha256"]):
+        raise ValueError("Reference replay must use the original source, settings and dependency locks")
     helper = Path(__file__).with_name("legacy_replay.py")
-    return json.loads(subprocess.check_output([
+    report = json.loads(subprocess.check_output([
         str(args.legacy_python), "-B", str(helper), str(args.legacy_root), str(args.legacy_models),
         str(media), str(args.manifest),
     ]))
+    if report["provenance"]["quality_contract_sha256"] != quality_hash:
+        raise ValueError("Reference replay used a different coverage contract")
+    return report
 
 
 def load_manifest(path, manifest_digest, contract, development):
@@ -297,6 +296,7 @@ def load_manifest(path, manifest_digest, contract, development):
         **manifest.get("thresholds", {}),
         "minimum_roi_iou": contract["matching"]["minimum_roi_iou"],
         "min_verified_negative_fraction": contract["coverage"]["min_verified_negative_fraction"],
+        "confidence_level": contract["uncertainty"]["confidence_level"],
     }
     if manifest.get("schema_version") == 2:
         thresholds.update(max_delay_s=contract["matching"]["max_delay_s"], before_onset_tolerance_s=0,
@@ -306,7 +306,7 @@ def load_manifest(path, manifest_digest, contract, development):
     return clips, thresholds
 
 
-def score_run(clips, outputs, thresholds):
+def score_run(clips, outputs, thresholds, *, reference=False):
     for clip in clips:
         output = outputs[clip["file"]]
         if "events" in clip and clip.get("category") == "medical":
@@ -316,7 +316,8 @@ def score_run(clips, outputs, thresholds):
                 if subject is not None:
                     event["subject_id"] = subject
         output["scoring"] = score_clip(clip, output, thresholds)
-    return summarize(clips, outputs)
+    levels = ("legacy_candidate",) if reference else ("review", "urgent")
+    return summarize(clips, outputs, thresholds.get("confidence_level", 0.95), levels)
 
 
 def run(args):
@@ -334,7 +335,7 @@ def run(args):
         report = {**scoring_inputs, "method": "rescore_saved_openings", "input_report_sha256": digest(args.rescore),
                   "rust": score_run(clips, previous["per_clip_rust"], thresholds),
                   "per_clip_rust": previous["per_clip_rust"],
-                  "legacy": score_run(clips, previous["per_clip_legacy"], thresholds) if previous.get("per_clip_legacy") else None}
+                  "legacy": score_run(clips, previous["per_clip_legacy"], thresholds, reference=True) if previous.get("per_clip_legacy") else None}
         args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         return
     media = args.media.resolve(strict=True)
@@ -346,7 +347,7 @@ def run(args):
     ort_hash = digest(args.runtime)
     inference, native_options = replay_backend(args)
     maximum_lanes = 1 if args.cuda_device is not None else min(args.parallel, len(clips))
-    reference = legacy(args, clips, media)
+    reference = legacy(args, media, scoring_inputs["quality_contract_sha256"])
     outputs = {}
     for start in range(0, len(clips), args.parallel):
         group = clips[start:start + args.parallel]
@@ -371,7 +372,7 @@ def run(args):
         "rust": score_run(clips, outputs, thresholds), "per_clip_rust": outputs,
         "controlled_without_regions": comparison,
         "controlled_without_regions_summary": score_run(controlled, comparison, thresholds),
-        "legacy": score_run(clips, reference["clips"], thresholds) if reference else None,
+        "legacy": score_run(clips, reference["clips"], thresholds, reference=True) if reference else None,
         "legacy_provenance": reference["provenance"] if reference else None,
         "per_clip_legacy": reference["clips"] if reference else None,
     }

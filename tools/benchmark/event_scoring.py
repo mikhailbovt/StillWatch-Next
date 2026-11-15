@@ -77,6 +77,18 @@ def covered_window(coverage, start, end):
     return any(lo <= start + 0.000001 and hi + 0.000001 >= end for lo, hi in coverage["intervals_s"])
 
 
+def valid_rectangle(rect):
+    x1, y1, x2, y2 = rect
+    return 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
+
+
+def normalized_region(region, width, height):
+    if region is None or width <= 0 or height <= 0:
+        return None
+    roi = [region[key] / side for key, side in zip(("x1", "y1", "x2", "y2"), (width, height, width, height), strict=True)]
+    return roi if valid_rectangle(roi) else None
+
+
 def overlap(first, second):
     intersection = max(0.0, min(first[2], second[2]) - max(first[0], second[0])) * max(
         0.0, min(first[3], second[3]) - max(first[1], second[1]))
@@ -181,6 +193,14 @@ def score_clip(clip, run, thresholds):
     annotation = clip.get("annotation", "positive" if truth else "negative")
     negative = annotation == "negative"
     counts = Counter(event["attention"] for event in events) if negative else Counter()
+    verified = Counter()
+    camera = run.get("camera_id")
+    if negative and measured is not None and epoch is not None:
+        for event in events:
+            if event.get("epoch") == epoch and (not grounded or camera is not None and event.get("camera_id") == camera):
+                at = event["opened_source_s"]
+                if at >= 0 and covered_window(measured, at, at):
+                    verified[event["attention"]] += 1
     eligible_negative = (measured["eligible_seconds"] if measured is not None else 0.0) if negative else 0.0
     total_negative = duration if negative else 0.0
     return {
@@ -190,7 +210,8 @@ def score_clip(clip, run, thresholds):
         "unmatched_in_window": sum(index not in used and index not in duplicate_events
                                    and any(start <= event["opened_source_s"] <= end for start, end in windows)
                                    for index, event in enumerate(events)),
-        "negative_events": dict(counts), "nominal_negative_seconds": total_negative,
+        "negative_events": dict(counts), "verified_negative_events": dict(verified),
+        "nominal_negative_seconds": total_negative,
         "verified_negative_seconds": eligible_negative, "unknown_negative_seconds": total_negative - eligible_negative,
         "uncertain_annotation_seconds": duration if annotation == "uncertain" else 0.0,
         "below_negative_coverage_floor": negative and measured is not None
@@ -209,7 +230,37 @@ def wilson(matches, trials):
     return [max(0, center - width), min(1, center + width)]
 
 
-def summarize(clips, runs):
+def poisson_upper_rate(count, exposure_hours, confidence):
+    if not exposure_hours:
+        return None
+    log_tail = math.log1p(-confidence)
+    if count == 0:
+        return -log_tail / exposure_hours
+    log_factorial = math.lgamma(count + 1)
+
+    def log_cdf(mean):
+        # Factor out the last term. Earlier probabilities decrease for mean >= count.
+        relative = term = 1.0
+        for index in range(count, 0, -1):
+            term *= index / mean
+            relative += term
+            if term <= relative * 1e-15:
+                break
+        return count * math.log(mean) - mean - log_factorial + math.log(relative)
+
+    lower, upper = count, 2 * (count + 1)
+    while log_cdf(upper) > log_tail:
+        upper *= 2
+    for _ in range(60):
+        middle = (lower + upper) / 2
+        if log_cdf(middle) > log_tail:
+            lower = middle
+        else:
+            upper = middle
+    return upper / exposure_hours
+
+
+def summarize(clips, runs, confidence, opening_levels):
     groups = defaultdict(list)
     for clip in clips:
         groups[clip["group"]].append((clip, runs[clip["file"]]["scoring"]))
@@ -220,8 +271,10 @@ def summarize(clips, runs):
         matched = [e for e in onset if e["status"] == "timely"]
         misses = [e for e in onset if e["status"] == "miss"]
         counts = Counter()
+        verified_counts = Counter()
         for _, score in rows:
             counts.update(score["negative_events"])
+            verified_counts.update(score["verified_negative_events"])
         nominal = sum(score["nominal_negative_seconds"] for _, score in rows) / 3600
         verified = sum(score["verified_negative_seconds"] for _, score in rows) / 3600
         summary[group] = {
@@ -245,6 +298,14 @@ def summarize(clips, runs):
             "negative_clips_below_coverage_floor": [clip["file"] for clip, score in rows
                                                     if score["below_negative_coverage_floor"]],
             "events_in_negative_clips": dict(sorted(counts.items())),
+            "events_outside_verified_negative_exposure": dict(sorted((counts - verified_counts).items())),
+            "verified_negative_opening_rates": {
+                attention: {"openings": verified_counts[attention], "camera_hours": verified,
+                            "estimated_per_camera_hour": verified_counts[attention] / verified if verified else None,
+                            "poisson_one_sided_upper_per_hour_iid": poisson_upper_rate(verified_counts[attention], verified, confidence)}
+                for attention in opening_levels
+            },
+            "poisson_confidence_level": confidence,
             "nominal_exposure_is_descriptive": True,
             "independent_source_sessions": (len({clip["lineage"]["session_id"] for clip, _ in rows})
                                             if all("lineage" in clip for clip, _ in rows) else None),
