@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import errno
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -24,6 +26,7 @@ CHECKS = {
     "storage.pinned-wal-reader": "pinned_wal",
     "storage.sqlite-quota-and-busy": "sqlite_pressure",
     "capacity.ramp-and-concurrent-admission": "capacity_ramp",
+    "capacity.overload-and-recovery": "capacity_overload",
 }
 FAULTS = {
     "source.reconnect-completed": "rtsp_reconnect",
@@ -296,6 +299,25 @@ class Validation:
                                and row.get("camera_slot_reuse_with_live_analysis") == maximum
                                and row.get("ramps") == [{"count": count, "streams_with_pose_and_fire": count} for count in targets]
                                for row in lines)
+            elif CHECKS[case] == "capacity_overload":
+                expected.update({"excess_requests": 16, "capacity_errors": 16, "capture_cameras": self.profile["workload"]["camera_count"],
+                                 "recovery_ms_maximum": self.profile["budgets"]["rtsp_recovery_ms"],
+                                 "control_ready_http": 200})
+                load = next((row for row in lines if row.get("excess_requests") == expected["excess_requests"]), {})
+                durations = load.get("excess_latency_ms", [])
+                p95 = self.contract["quiet_load"]["api_read_control_p95_ms"]
+                expected["api_p95_ms_maximum"] = p95
+                complete = (len(durations) == expected["excess_requests"] and all(number(item) for item in durations)
+                            and number(load.get("admission_recovery_ms")))
+                if complete:
+                    measured = sorted(durations)[math.ceil(len(durations) * 0.95) - 1]
+                    observed["api_p95_ms"] = measured
+                    maximum = expected["capture_cameras"]
+                    if (load["excess_rejected"] != expected["capacity_errors"] or measured > p95
+                            or load["admission_recovery_ms"] > expected["recovery_ms_maximum"]
+                            or load["control_ready_http"] != 200 or load["active_cameras_progressed"] != maximum
+                            or load["camera_slot_reuse_with_live_analysis"] != maximum):
+                        return expected, observed, "FAIL"
             else:
                 complete = any(self.preaged_retention(row) for row in lines)
         if code != 0:
@@ -333,6 +355,7 @@ class Validation:
         limits = self.profile["budgets"]
         failed = []
         seen = set()
+        seen_incidents = set()
         for row in faults:
             name = row["id"]
             planned = expected_faults.get(name)
@@ -357,10 +380,15 @@ class Validation:
             raw = checked_json(checked_evidence(self.root, canary))
             if raw.get("planned") != planned["canary"] or not isinstance(raw.get("incidents"), list):
                 raise ValueError("Canary is missing the frozen event specification or native incident rows")
-            matches = canary_matches(raw["incidents"], planned["canary"])
-            if not matches:
-                failed.append({"id": name, "matching_canaries": 0})
+            start_utc = raw.get("started_utc_ms")
+            if not number(start_utc):
                 continue
+            matches = [row for row in canary_matches(raw["incidents"], planned["canary"])
+                       if row["utc_ms"] >= start_utc and row["id"] not in seen_incidents]
+            if len(matches) != 1 or planned["canary"]["camera"] != planned["camera"]:
+                failed.append({"id": name, "fresh_unique_matching_canaries": len(matches)})
+                continue
+            seen_incidents.add(matches[0]["id"])
             completed[planned["camera"]] += 1
         minimums = self.contract["minimum_completed_fault_cycles"]
         required_count = minimums[kind] if kind else max(len(scheduled), sum(minimums.values()))
@@ -399,6 +427,36 @@ class Validation:
                   and raw["integrity"] == ["ok"] and raw["invalid_references"] == 0
                   and elapsed <= maximum and len(matching) == 1 and proof["observations"]["exit_code"] == 0)
         return expected, observed, "PASS" if passed else "FAIL"
+
+    def blob_volume_check(self, proof):
+        schedule = self.artifact(proof, "fault-schedule")
+        source = self.artifact(proof, "sources")
+        workload = self.profile["workload"]
+        if sha256(schedule) != workload["fault_schedule_digest"] or sha256(source) != workload["source_manifest_digest"]:
+            raise ValueError("Blob volume input differs from the frozen workload")
+        planned = checked_json(schedule)["storage_enospc"]
+        maximum = self.profile["budgets"]["storage_recovery_ms"]
+        required = {"maximum_volume_bytes": 4 * 1024 * 1024, "probe_errno": errno.ENOSPC,
+                    "recovery_ms_maximum": maximum, "canaries": planned}
+        if "storage" not in proof["artifacts"]:
+            return required, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
+        raw = checked_json(self.artifact(proof, "storage"))
+        if raw["planned"] != planned or not number(raw["released_utc_ms"]) or not number(raw["recovery_ms"]):
+            raise ValueError("Invalid storage fixture identity or timing")
+        pressure, known = raw["pressure_event"], planned["pressure_canary"]
+        pressure_exercised = (all(pressure[key] == known[key] for key in ("camera", "category"))
+                              and int(pressure["epoch"]) == int(known["source_epoch"]) and pressure["live"] is True
+                              and known["earliest_source_us"] <= int(pressure["source_us"]) <= known["latest_source_us"]
+                              and pressure["failed_image_writes"] > 0 and pressure["utc_ms"] <= raw["released_utc_ms"])
+        matches = [row for row in canary_matches(raw["incidents"], planned["recovered_canary"])
+                   if row["id"] != pressure["id"] and row["utc_ms"] >= raw["released_utc_ms"]]
+        checks = raw["checks"]
+        passed = (pressure_exercised and len(matches) == 1 and raw["recovery_ms"] <= maximum
+                  and raw["probe_errno"] == errno.ENOSPC and 0 < raw["free_bytes_after_release"] <= raw["volume_bytes"] <= required["maximum_volume_bytes"]
+                  and checks.get("integrity") == ["ok"] and checks.get("invalid_references") == 0
+                  and checks.get("duplicate_attention_cycles") == 0 and checks.get("verified_blobs", 0) > 0
+                  and checks["expected_blobs"] == checks["verified_blobs"] and proof["observations"]["exit_code"] == 0)
+        return required, raw, "PASS" if passed else "FAIL"
 
     def logic_check(self, case, proof):
         catalog = checked_json(self.artifact(proof, "logical-test-binaries"))
@@ -452,6 +510,8 @@ class Validation:
                         expected, observed, result = self.fault_check(case, proof)
                     elif case == "pipeline.final-live-canary":
                         expected, observed, result = self.final_canary_check(proof)
+                    elif case == "storage.blob-enospc-and-reconciliation":
+                        expected, observed, result = self.blob_volume_check(proof)
                     elif stage == "quiet_load":
                         expected, observed, result = self.steady_check(case, proof)
                     else:

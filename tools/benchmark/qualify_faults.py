@@ -191,6 +191,8 @@ def run(settings, output, evidence_root):
     for case in schedule:
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,79}", case["id"]) or case["kind"] not in LIMITS:
             raise ValueError("Invalid fault label or kind")
+        if case["canary"]["camera"] != case["camera"]:
+            raise ValueError("The canary must demonstrate recovery on the camera named for the fault")
     if len({case["id"] for case in schedule}) != len(schedule):
         raise ValueError("Fault schedule contains a duplicate ID")
 
@@ -235,7 +237,7 @@ def run(settings, output, evidence_root):
                         if verified is None:
                             continue
                         path = output / (case["id"] + ".json")
-                        write_json(path, verified)
+                        write_json(path, verified | {"started_utc_ms": began_utc})
                         row = {"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
                                "canary": evidence(evidence_root, path)}
@@ -343,8 +345,28 @@ def capacity(settings):
             rejected = outcomes[statuses.index(503)][1]
             assert rejected["code"] == "capacity_exceeded"
             winner, waiting = competing_ids[statuses.index(200)], competing_ids[statuses.index(503)]
-            live_at_max = until(lambda: live([*cameras[:-1], winner]), 45)
+            active_ids = [*cameras[:-1], winner]
+            live_at_max = until(lambda: live(active_ids), 45)
             samples.append({"count": len(cameras), "streams_with_pose_and_fire": len(live_at_max)})
+            def excess_request(_):
+                started = time.monotonic()
+                response = enable(waiting, True)
+                return response, (time.monotonic() - started) * 1_000
+
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                excess = list(pool.map(excess_request, range(16)))
+            rejected_count = sum(status == 503 and payload["code"] == "capacity_exceeded"
+                                 for (status, payload), _ in excess)
+            limit = fixture["profile"]["budgets"]["rtsp_recovery_ms"] / 1_000
+            health = local.call("GET", "/health/ready")[0]
+
+            def progressing():
+                current = [latest(camera, local) for camera in active_ids]
+                return current if all(recovered(before, after, False)
+                                      for before, after in zip(live_at_max, current, strict=True)) else None
+
+            progress = until(progressing, limit)
+            released = time.monotonic()
             assert enable(winner, False)[0] == 200
             cell = uuid4().hex
             old_revision = local.camera(waiting)["revision"]
@@ -354,6 +376,10 @@ def capacity(settings):
             assert first[0] == duplicate[0] == 200, (first[0], duplicate[0])
             assert all(first[1][key] == duplicate[1][key] for key in ("id", "revision", "config"))
             assert enable(winner, True)[0] == 503
-            recovered = until(lambda: live([*cameras[:-1], waiting]), 45)
+            restored = until(lambda: live([*cameras[:-1], waiting]), limit)
             print(json.dumps({"ramps": samples, "last_slot_statuses": statuses, "repeated_result": True,
-                              "camera_slot_reuse_with_live_analysis": len(recovered)}))
+                              "camera_slot_reuse_with_live_analysis": len(restored),
+                              "admission_recovery_ms": (time.monotonic() - released) * 1_000,
+                              "excess_requests": len(excess), "excess_rejected": rejected_count,
+                              "excess_latency_ms": [duration for _, duration in excess],
+                              "control_ready_http": health, "active_cameras_progressed": len(progress)}))

@@ -125,15 +125,22 @@ class Steady:
                             failures[camera + ".source_lag_growth"] += 1
                     else:
                         missing[camera + ".source_lag"] += 1
-                wall = analysis.get("wall_cadence")
-                source = analysis.get("cadence")
-                if not wall or not source or wall["window_seconds"] != span:
-                    missing[camera + ".cadence"] += 1
-                    continue
-                for name, value in {
-                    "wall_pose_min": wall["pose_accepted"], "wall_fire_min": wall["fire_accepted"],
-                    "source_pose_per_min": source["pose_frames_per_minute"], "source_fire_per_min": source["fire_frames_per_minute"],
-                }.items():
+                values = {}
+                # Early rolling readings can contain startup samples from before the measured interval.
+                if row["elapsed_s"] >= span:
+                    wall = analysis.get("wall_cadence")
+                    if wall and wall["window_seconds"] == span:
+                        values.update(wall_pose_min=wall["pose_accepted"], wall_fire_min=wall["fire_accepted"])
+                    else:
+                        missing[camera + ".wall_cadence"] += 1
+                if row["elapsed_s"] >= self.limits["source_window_seconds"]:
+                    source = analysis.get("cadence")
+                    if source:
+                        values.update(source_pose_per_min=source["pose_frames_per_minute"],
+                                      source_fire_per_min=source["fire_frames_per_minute"])
+                    else:
+                        missing[camera + ".source_cadence"] += 1
+                for name, value in values.items():
                     minima[camera][name] = min(minima[camera].get(name, value), value)
                     if value < required[name]:
                         failures[camera + "." + name] += 1
@@ -156,7 +163,8 @@ class Steady:
                         or row["timely_p99_count"] < math.ceil(count * 0.99)
                         or row["maximum_age_us"] > required["max_result_age_ms"] * 1_000):
                     failures[camera + f".{task}_latency"] += 1
-        complete = not missing and self.interval()[2] == "PASS"
+        complete = (not missing and set(minima) == set(self.cameras)
+                    and all(len(values) == 4 for values in minima.values()) and self.interval()[2] == "PASS")
         observed = {"minimum_by_camera": minima, "missing": missing, "latency": distributions, "failures": failures}
         return required, observed, "FAIL" if failures else "PASS" if complete else "INCOMPLETE"
 

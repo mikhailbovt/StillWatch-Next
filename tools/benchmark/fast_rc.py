@@ -297,6 +297,27 @@ class Run:
             self.script("storage_and_crash", "storage.refresh-lost-response-and-restart", "lan-refresh",
                         ROOT / "tests/e2e/lan_core.py", *args, "--node", self.args.node)
         self.logical_binaries(stage)
+        if (not self.args.blob_enospc or self.args.node is None or self.args.fixture_ffmpeg is None
+                or self.args.source_manifest is None or self.args.fault_schedule is None):
+            return
+        unshare = shutil.which("unshare") if self.os == "linux" else None
+        if unshare is None:
+            raise ValueError("The blob ENOSPC collector needs a Linux mount namespace")
+        schedule = self.pinned_fault_schedule()
+        if "storage_enospc" not in checked_json(schedule):
+            raise ValueError("The frozen fault schedule has no storage ENOSPC canaries")
+        source, settings = self.native_settings()
+        native = self.root / "raw" / stage / "blob-enospc.json"
+        options = native.with_name("blob-enospc-settings.json")
+        write_json(options, settings | {"fault_schedule": str(schedule)})
+        observations, log = self.capture(stage, "blob-enospc", [unshare, "--mount", "--propagation", "private", "--",
+                                         sys.executable, "-B", ROOT / "tools/benchmark/qualify.py",
+                                         "--native-blob-enospc", options, native])
+        evidence_files = {"sources": source, "settings": options, "fault-schedule": schedule, "stdout": log}
+        if native.is_file():
+            evidence_files["storage"] = native
+        self.proof(stage, "storage.blob-enospc-and-reconciliation", observations["started_s"], observations, evidence_files,
+                   deadline=observations.get("deadline_exceeded", False))
 
     def native_settings(self):
         source = self.root / "inputs" / "sources.json"
@@ -359,8 +380,9 @@ class Run:
         write_json(capacity_options, settings)
         observations, log = self.capture(stage, "capacity-ramp", [sys.executable, "-B", ROOT / "tools/benchmark/qualify.py",
                                          "--native-capacity", capacity_options])
-        self.proof(stage, "capacity.ramp-and-concurrent-admission", observations["started_s"], observations,
-                   {"sources": source, "settings": capacity_options, "stdout": log}, deadline=observations.get("deadline_exceeded", False))
+        for case in ("capacity.ramp-and-concurrent-admission", "capacity.overload-and-recovery"):
+            self.proof(stage, case, observations["started_s"], observations,
+                       {"sources": source, "settings": capacity_options, "stdout": log}, deadline=observations.get("deadline_exceeded", False))
         if self.args.fault_schedule is None or self.args.node is None:
             return
         schedule = self.pinned_fault_schedule()
@@ -441,6 +463,7 @@ def main():
     parser.add_argument("--address", default="127.0.0.1", help="Private interface for the local TLS/ICE workload")
     parser.add_argument("--raw-frame-bytes", type=int, default=256 * 1024 * 1024)
     parser.add_argument("--isolated", action="store_true", help="Attest that the native workload has exclusive use of this host")
+    parser.add_argument("--blob-enospc", action="store_true", help="Use a private Linux mount namespace for the native 4 MiB ENOSPC fixture")
     parser.add_argument("--diagnostic-load-seconds", type=int, choices=range(1, 3600), help="Run a shorter trace that cannot qualify the quiet interval")
     args = parser.parse_args()
     args.stage = tuple(stage for stage in STAGES[1:] if args.stage is None or stage in args.stage)
