@@ -51,6 +51,14 @@ Enable **Allow Firebase cloud analysis** in the camera editor or set cloud_conse
 
 GET /api/v2/semantic-status uses the normal Core authorization. The status reports the SDK, request budget, and the inference source from the last completed SDK response. A healthy loopback handshake establishes transport readiness. Use a licensed replay with --semantic-include-replay to qualify an actual end-to-end call, inspect the attempt in SQLite, and confirm the reported route. Replay is excluded from semantic evaluation by default.
 
+For a repeatable Windows replay, start the hybrid worker, initialize the Chrome model and enable reconnect in the dedicated profile. Close and reopen Chrome and the Node worker on the same loopback address. Wait for the page to report model readiness. From the repository root, use the fixture runner below with the locked model pack, matching runtime and credited demo from `baseline.json`. The private configuration directory supplies the Core worker credential in `core-worker`.
+
+~~~text
+python -B tests/e2e/firebase_worker.py --node NODE --live-config PRIVATE_DIR --running-port 8775 --route local_only --expect-source on_device --core CORE --worker WORKER --demo CREDITED_DEMO --ffmpeg FFMPEG --models MODEL_PACK --runtime ORT_LIBRARY --manifest-sha256 MANIFEST_HASH --runtime-sha256 ORT_HASH
+~~~
+
+The replay requires the saved `on_device` result with cloud consent disabled. Repeat the command with `--route prefer_local --expect-source in_cloud` in a connected Chrome profile where the local model is unavailable. That case requires a cloud result for the opted-in camera and zero submissions for the camera with cloud consent off. Both commands check that replay creates no live alert.
+
 The transport smoke test exercises both worker modes, rejected origin and credential, idle browser polling, delivery to a waiting browser, rejection of invalid result IDs, local-only attestation denial, and the Rust health handshake. Run cloud App Check issuance, actual inference and Chrome session lifecycle checks for the intended deployment. [Firebase AI Logic App Check instructions](https://firebase.google.com/docs/ai-logic/app-check), [Firebase Hybrid Web setup](https://firebase.google.com/docs/ai-logic/hybrid/web/get-started)
 
 ## Core dispatch and recovery
