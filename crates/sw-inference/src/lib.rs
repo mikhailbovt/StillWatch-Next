@@ -200,6 +200,12 @@ impl Model {
             .map_err(ort_error)?
             .with_optimization_level(GraphOptimizationLevel::All)
             .map_err(ort_error)?;
+        // NCHWc exceeds the locked keypoint tensor error on a square RGB fixture.
+        if runtime.cuda.is_none() && id == ModelId::PoseBalanced {
+            builder = builder
+                .with_disabled_optimizers("NchwcTransformer")
+                .map_err(ort_error)?;
+        }
         if let Some(prefix) = profiling_prefix {
             builder = builder.with_profiling(prefix).map_err(ort_error)?;
         }

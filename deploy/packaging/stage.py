@@ -120,9 +120,16 @@ def model_pack(args, out, worker, ort_path, ort_sha256):
             copy(source, fixtures / filename, expected)
     completed = subprocess.run([
         str(worker), "verify-model-pack", str(ort_path), ort_sha256, str(directory.resolve()), args.model_sha256,
-    ], timeout=90, check=True, text=True, capture_output=True)
-    if json.loads(completed.stdout).get("qualified") is not True:
-        raise ValueError("Staged model reference verification did not succeed")
+    ], timeout=90, text=True, capture_output=True)
+    try:
+        qualification = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Missing model verification report (exit {completed.returncode}): "
+                         f"{completed.stderr.strip()[-400:]}") from error
+    if completed.returncode != 0 or qualification.get("qualified") is not True:
+        raise ValueError(f"Staged model verification failed (exit {completed.returncode}). "
+                         f"Numeric failures: {qualification.get('numeric_failures', [])}. "
+                         f"Observation failures: {qualification.get('observation_failures', [])}.")
     return args.model_sha256
 
 
