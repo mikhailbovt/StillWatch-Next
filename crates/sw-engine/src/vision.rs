@@ -24,6 +24,7 @@ use crate::{
 };
 
 const FRAME_MAX_AGE: Duration = Duration::from_secs(3);
+const RETRY_RESET_WORK_TIME: Duration = Duration::from_secs(3);
 const CADENCE_WINDOW_US: i64 = 10_000_000;
 const SOURCE_MINUTE_US: i64 = 60_000_000;
 const FIRE_BURST_FPS: u8 = 3;
@@ -380,6 +381,7 @@ impl VisionScheduler {
                 Ok(mut process) => {
                     self.phase(lane, AnalysisState::Ready, None);
                     let started = Instant::now();
+                    let mut usable_work: Option<(Instant, Instant)> = None;
                     let failure = loop {
                         if *shutdown.borrow() {
                             break None;
@@ -431,6 +433,17 @@ impl VisionScheduler {
                             Ok(result) => {
                                 if !self.finish(&job, dispatched_at, Ok(&result)) {
                                     continue;
+                                }
+                                if attempt > 0 {
+                                    // Clear old failures once the replacement is sustaining useful work.
+                                    let now = Instant::now();
+                                    let first = usable_work
+                                        .filter(|&(_, last)| now - last <= FRAME_MAX_AGE)
+                                        .map_or(now, |(first, _)| first);
+                                    usable_work = Some((first, now));
+                                    if now - first >= RETRY_RESET_WORK_TIME {
+                                        attempt = 0;
+                                    }
                                 }
                                 let Dispatch {
                                     frame, source_us, ..

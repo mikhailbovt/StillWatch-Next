@@ -423,6 +423,9 @@ class Validation:
             if name in seen or planned is None or any(row[key] != planned[key] for key in ("kind", "camera")):
                 raise ValueError("Fault ledger repeats or adds an unplanned case")
             seen.add(name)
+            prepared = row.get("prior_incidents_resolved", 0)
+            if type(prepared) is not int or prepared < 0 or (prepared and not planned.get("resolve_before_fault")):
+                raise ValueError("Fault ledger includes an unplanned incident resolution")
             if row.get("finished_s") is None:
                 if row.get("fault") and number(row.get("ended_s")) and row["ended_s"] >= row["deadline_s"]:
                     failed.append({"id": name, "reason": row["error"], "observed_ms": (row["ended_s"] - row["started_s"]) * 1_000})

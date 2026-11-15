@@ -153,11 +153,21 @@ def close_canary(local, verified):
     if code != 200:
         raise RuntimeError("The completed canary could not be opened for cleanup")
     if active["resolution"] is not None:
-        return
+        return False
     closed, _ = local.call("POST", path + "/resolution", {"reason": "Fast RC controlled canary completed"},
                            key=uuid4().hex, revision=active["revision"])
     if closed != 200:
         raise RuntimeError(f"The completed canary could not be resolved: {closed}")
+    return True
+
+
+def prepare_canary(database, fixture, case):
+    if not case.get("resolve_before_fault"):
+        return 0
+    planned = case["canary"]
+    previous = [event for event in openings(database, fixture["cameras"], 0)
+                if event["live"] and event["camera"] == planned["camera"] and event["category"] == planned["category"]]
+    return sum(close_canary(fixture["local"], {"incidents": [event]}) for event in previous)
 
 
 def batches(schedule):
@@ -188,6 +198,8 @@ def run(settings, output, evidence_root):
             raise ValueError("Invalid fault label or kind")
         if case["canary"]["camera"] != case["camera"]:
             raise ValueError("The canary must demonstrate recovery on the camera named for the fault")
+        if type(case.get("resolve_before_fault", False)) is not bool:
+            raise ValueError("The canary preparation flag must be a boolean")
     if len({case["id"] for case in schedule}) != len(schedule):
         raise ValueError("Fault schedule contains a duplicate ID")
 
@@ -207,6 +219,7 @@ def run(settings, output, evidence_root):
             resources = ChurnResources(fixture, settings, root, receiver)
             for batch in batches(schedule):
                 refresh_receiver(settings, receiver)
+                prepared = {case["id"]: prepare_canary(database, fixture, case) for case in batch}
                 started = offset()
                 began_utc = time.time_ns() // 1_000_000
                 kind = batch[0]["kind"]
@@ -254,6 +267,7 @@ def run(settings, output, evidence_root):
                                                       "source_after": current, "inference_recovery": recovery})
                         row = {"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
+                               "prior_incidents_resolved": prepared[case["id"]],
                                "canary": evidence(evidence_root, path)}
                         log.write(json.dumps(row) + "\n")
                         completed.append(case["id"])
@@ -270,6 +284,7 @@ def run(settings, output, evidence_root):
                     log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                           "ended_s": offset(), "finished_s": None, "capture_progress_s": window[name],
                                           "deadline_s": deadline, "fault": fault,
+                                          "prior_incidents_resolved": prepared[case["id"]],
                                           "canary": evidence(evidence_root, path),
                                           "error": "Recovery did not complete with the pinned live canary"}) + "\n")
                 resources.record(kind, completed)
