@@ -15,9 +15,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sw_domain::SourceScope;
 use sw_protocol::{
-    CameraConfig, CameraSource, Counter, Dimensions, IceServer, MediaStatus, MediaWorkloadLimits,
-    SourceKind, SourceMeasurement, StreamGrant, StreamProfile, StreamRequest, UtcTimestamp,
-    worker::FrameHeader,
+    CameraConfig, CameraSource, Counter, Dimensions, IceServer, MediaResourceUsage, MediaStatus,
+    MediaWorkloadLimits, SourceKind, SourceMeasurement, StreamGrant, StreamProfile, StreamRequest,
+    UtcTimestamp, worker::FrameHeader,
 };
 use sw_storage::{CameraRecord, Store};
 use tempfile::TempDir;
@@ -312,6 +312,21 @@ impl MediaService {
             redacted_transcode: true,
             workload_limits: Some(self.config.workload_limits),
         }
+    }
+
+    pub fn resource_usage(&self) -> Option<MediaResourceUsage> {
+        let state = self.state.lock().ok()?;
+        let limits = self.config.workload_limits;
+        Some(MediaResourceUsage {
+            viewers: state.viewers.len(),
+            publishers: state.publishers.len(),
+            publisher_units_in_use: usize::from(limits.publisher_units)
+                - self.publishers.units.available_permits(),
+            snapshot_encoders_in_use: usize::from(limits.snapshot_encoders)
+                - self.snapshots.available_permits(),
+            detail_frame_bytes_in_use: self.config.detail_frame_bytes
+                - self.detail_frames.available_bytes(),
+        })
     }
 
     pub async fn open(

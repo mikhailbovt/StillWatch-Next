@@ -8,6 +8,17 @@ import statistics
 from fast_rc_contract import checked_json, number, sha256
 
 
+def resource_caps(profile):
+    budgets = profile["budgets"]
+    caps = {"rss_bytes": budgets["rss_bytes"] - budgets["headroom_bytes"]["rss"],
+            "disk_bytes": budgets["disk_bytes"] - budgets["headroom_bytes"]["disk"],
+            "children": budgets["max_children"], "os_handles": budgets["max_os_handles"],
+            "open_sockets": budgets["max_open_sockets"]}
+    if profile["models"]["backend"] == "cuda_fp32":
+        caps["vram_bytes"] = budgets["vram_bytes"] - budgets["headroom_bytes"]["vram"]
+    return caps
+
+
 def percentile(values, fraction):
     return sorted(values)[math.ceil(len(values) * fraction) - 1] if values else None
 
@@ -189,11 +200,7 @@ class Steady:
 
     def resources(self):
         budgets = self.budgets
-        caps = {"rss_bytes": budgets["rss_bytes"] - budgets["headroom_bytes"]["rss"],
-                "disk_bytes": budgets["disk_bytes"] - budgets["headroom_bytes"]["disk"],
-                "children": budgets["max_children"], "os_handles": budgets["max_os_handles"], "open_sockets": budgets["max_open_sockets"]}
-        if self.model["backend"] == "cuda_fp32":
-            caps["vram_bytes"] = budgets["vram_bytes"] - budgets["headroom_bytes"]["vram"]
+        caps = resource_caps({"budgets": budgets, "models": self.model})
         horizon = budgets["growth_horizon_seconds"]
         series = {key: [] for key in caps}
         for row in self.rows:

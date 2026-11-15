@@ -61,6 +61,7 @@ pub use trust::{DeviceAccess, PairingGrant};
 const MAX_PAGE: usize = 200;
 const MAX_CHANGES: usize = 100_000;
 const MAX_SNAPSHOT: usize = 2_000;
+const EVIDENCE_WRITE_BYTES: usize = 64 * 1024 * 1024;
 const WRITE_WINDOW: Duration = Duration::from_secs(10);
 const COMPLETION_BUDGET: Duration = Duration::from_secs(15);
 const WRITER_RESTART_BUDGET: Duration = Duration::from_secs(60);
@@ -266,7 +267,7 @@ impl Store {
             worker,
             identity,
             wake,
-            evidence_inflight: Arc::new(Semaphore::new(64 * 1024 * 1024)),
+            evidence_inflight: Arc::new(Semaphore::new(EVIDENCE_WRITE_BYTES)),
             progress: Arc::default(),
             queue_capacity,
         })
@@ -274,6 +275,10 @@ impl Store {
 
     pub fn identity(&self) -> Identity {
         self.identity
+    }
+
+    pub fn evidence_write_bytes_in_use(&self) -> u32 {
+        (EVIDENCE_WRITE_BYTES - self.evidence_inflight.available_permits()) as u32
     }
 
     pub fn subscribe(&self) -> watch::Receiver<()> {

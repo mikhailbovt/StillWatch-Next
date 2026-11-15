@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 import psutil
 
 from fast_rc_contract import CONTRACTS, checked_json, evidence, sha256, write_json
+from qualify_resources import ChurnResources
 from qualify_steady import latest, native_fixture, openings, pair_owner
 from lan_core import refresh_request
 from replay_core import until
@@ -47,7 +48,7 @@ def recovered(before, after, epoch_changes):
             and all(int(after["analysis"][key]) > int(before["analysis"][key]) for key in ("pose_frames", "fire_frames")))
 
 
-async def viewer_cycle(fixture, receiver, name):
+async def viewer_cycle(fixture, receiver, name, resources):
     lan, session, _, _ = receiver
     peer, track, grant = await connect(lan, session, fixture["cameras"][name], None, None, dimensions=None, verify_mask=False)
     try:
@@ -55,6 +56,8 @@ async def viewer_cycle(fixture, receiver, name):
         second = await asyncio.wait_for(track.recv(), timeout=5)
         if first.pts == second.pts:
             raise ValueError("The viewer did not decode two distinct frame timestamps")
+        if resources is not None:
+            await asyncio.to_thread(resources.record, "viewer_active")
         code, _, _ = await asyncio.to_thread(request, lan, session["access_token"], "DELETE", grant["whep_path"])
         if code != 204:
             raise ValueError(f"Viewer close returned {code}")
@@ -63,7 +66,7 @@ async def viewer_cycle(fixture, receiver, name):
         await peer.close()
 
 
-def inject(fixture, cases, receiver):
+def inject(fixture, cases, receiver, resources=None):
     kind = cases[0]["kind"]
     if kind == "rtsp_reconnect":
         stopped = {case["camera"]: fixture["publishers"][case["camera"]] for case in cases}
@@ -92,7 +95,7 @@ def inject(fixture, cases, receiver):
         old.wait(timeout=10)
         fixture["process"], fixture["local"] = fixture["start_core"]()
         return {"retired_core_pid": old.pid, "replacement_core_pid": fixture["process"].pid}
-    return asyncio.run(viewer_cycle(fixture, receiver, cases[0]["camera"]))
+    return asyncio.run(viewer_cycle(fixture, receiver, cases[0]["camera"], resources))
 
 
 def refresh_receiver(settings, receiver):
@@ -209,6 +212,7 @@ def run(settings, output, evidence_root):
 
             until(ready, 60)
             receiver = pair_owner(settings, fixture["local"], root)
+            resources = ChurnResources(fixture, settings, root, receiver)
             for batch in batches(schedule):
                 refresh_receiver(settings, receiver)
                 started = offset()
@@ -218,7 +222,7 @@ def run(settings, output, evidence_root):
                 before = {case["camera"]: latest(fixture["cameras"][case["camera"]], fixture["local"]) for case in batch}
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
                 try:
-                    fault = inject(fixture, batch, receiver)
+                    fault = inject(fixture, batch, receiver, resources)
                 except (OSError, RuntimeError, ValueError, TimeoutError, AssertionError) as error:
                     for case in batch:
                         log.write(json.dumps({"id": case["id"], "kind": kind, "camera": case["camera"],
@@ -226,6 +230,7 @@ def run(settings, output, evidence_root):
                                               "error": str(error), "deadline_s": deadline}) + "\n")
                     continue
                 outstanding = {case["camera"]: case for case in batch}
+                completed = []
                 window = {case["camera"]: None for case in batch}
                 while outstanding and offset() <= deadline:
                     for name, case in list(outstanding.items()):
@@ -243,6 +248,7 @@ def run(settings, output, evidence_root):
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
                                "canary": evidence(evidence_root, path)}
                         log.write(json.dumps(row) + "\n")
+                        completed.append(case["id"])
                         outstanding.pop(name)
                         close_canary(fixture["local"], verified)
                     if outstanding:
@@ -257,6 +263,8 @@ def run(settings, output, evidence_root):
                                           "deadline_s": deadline, "fault": fault,
                                           "canary": evidence(evidence_root, path),
                                           "error": "Recovery did not complete with the pinned live canary"}) + "\n")
+                resources.record(kind, completed)
+            resources.drain(output / "churn-resources.json")
 
 
 def final_canary(settings, output):

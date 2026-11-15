@@ -432,6 +432,9 @@ class Run:
     def final(self):
         stage = "final"
         self.logical_binaries(stage)
+        churn = self.root / "raw/faults_and_capacity/native-faults/churn-resources.json"
+        if churn.is_file():
+            self.proof(stage, "resources.churn-drain-and-cleanup", self.elapsed(), {}, {"churn": churn})
         if (not self.verified or self.args.source_manifest is None or self.args.fault_schedule is None
                 or self.args.fixture_ffmpeg is None or self.args.node is None):
             return

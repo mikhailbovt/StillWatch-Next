@@ -235,6 +235,10 @@ impl FrameBudget {
     pub(crate) fn try_reserve(&self, bytes: u32) -> Option<OwnedSemaphorePermit> {
         self.0.clone().try_acquire_many_owned(bytes).ok()
     }
+
+    pub(crate) fn available_bytes(&self) -> u32 {
+        self.0.available_permits() as u32
+    }
 }
 
 pub struct Frame {

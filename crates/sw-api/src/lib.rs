@@ -326,6 +326,17 @@ async fn core_status(
             |vision| vision.inference_status(principal.owner().is_ok()),
         ),
         media: state.media.as_ref().map(|media| media.status()),
+        resources: local.then(|| sw_protocol::LocalResourceUsage {
+            capture_frame_bytes_in_use: state
+                .cameras
+                .as_ref()
+                .map_or(0, |cameras| cameras.frame_bytes_in_use()),
+            evidence_write_bytes_in_use: state.store.evidence_write_bytes_in_use(),
+            media: state
+                .media
+                .as_ref()
+                .and_then(|media| media.resource_usage()),
+        }),
         analysis_capacity: if principal.owner().is_ok() {
             state
                 .cameras

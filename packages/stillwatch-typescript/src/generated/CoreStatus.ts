@@ -41,6 +41,7 @@ export interface CoreStatus {
    */
   local_attention_ceiling?: Attention | null;
   media?: MediaStatus | null;
+  resources?: LocalResourceUsage | null;
   version: string;
   writer?: WriterStatus | null;
   [k: string]: unknown;
@@ -167,6 +168,20 @@ export interface MediaStatus {
   router_ready: boolean;
   video_codec: string;
   workload_limits?: MediaWorkloadLimits | null;
+  [k: string]: unknown;
+}
+export interface LocalResourceUsage {
+  capture_frame_bytes_in_use: number;
+  evidence_write_bytes_in_use: number;
+  media?: MediaResourceUsage | null;
+  [k: string]: unknown;
+}
+export interface MediaResourceUsage {
+  detail_frame_bytes_in_use: number;
+  publisher_units_in_use: number;
+  publishers: number;
+  snapshot_encoders_in_use: number;
+  viewers: number;
   [k: string]: unknown;
 }
 export interface WriterStatus {

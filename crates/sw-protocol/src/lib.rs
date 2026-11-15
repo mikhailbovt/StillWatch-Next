@@ -432,6 +432,26 @@ pub struct CoreStatus {
     pub camera_coverage: Option<Vec<CameraCoverage>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_capacity: Option<AnalysisCapacity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<LocalResourceUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct LocalResourceUsage {
+    pub capture_frame_bytes_in_use: u32,
+    pub evidence_write_bytes_in_use: u32,
+    pub media: Option<MediaResourceUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MediaResourceUsage {
+    pub viewers: usize,
+    pub publishers: usize,
+    pub publisher_units_in_use: usize,
+    pub snapshot_encoders_in_use: usize,
+    pub detail_frame_bytes_in_use: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

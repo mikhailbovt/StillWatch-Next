@@ -47,6 +47,16 @@
         }
       ]
     },
+    "resources": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalResourceUsage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "version": {
       "type": "string"
     },
@@ -434,6 +444,72 @@
         "state",
         "ready_workers",
         "configured_workers"
+      ]
+    },
+    "LocalResourceUsage": {
+      "type": "object",
+      "properties": {
+        "capture_frame_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "evidence_write_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaResourceUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "capture_frame_bytes_in_use",
+        "evidence_write_bytes_in_use"
+      ]
+    },
+    "MediaResourceUsage": {
+      "type": "object",
+      "properties": {
+        "detail_frame_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "publisher_units_in_use": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "publishers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "snapshot_encoders_in_use": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "viewers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "viewers",
+        "publishers",
+        "publisher_units_in_use",
+        "snapshot_encoders_in_use",
+        "detail_frame_bytes_in_use"
       ]
     },
     "MediaStatus": {

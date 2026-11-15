@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import errno
 import json
 import math
 from pathlib import Path
 import re
+import statistics
 import sys
 
 from fast_rc_contract import (
@@ -16,7 +17,7 @@ from fast_rc_contract import (
     checked_evidence, checked_execution_profile, checked_json, contract_digests, member, number, sha256,
     validate_schema, write_json,
 )
-from validate_steady import Steady
+from validate_steady import Steady, resource_caps, upper_growth
 
 MODEL_KEYS = ("artifact_validation", "active_profile_numeric", "active_profile_observations",
               "active_profile_events", "full_pack_numeric")
@@ -541,6 +542,8 @@ class Validation:
                         expected, observed, result = self.fault_check(case, proof)
                     elif case == "pipeline.final-live-canary":
                         expected, observed, result = self.final_canary_check(proof)
+                    elif case == "resources.churn-drain-and-cleanup":
+                        expected, observed, result = self.churn_check(proof)
                     elif case == "storage.blob-enospc-and-reconciliation":
                         expected, observed, result = self.blob_volume_check(proof)
                     elif stage == "quiet_load":
@@ -572,6 +575,70 @@ class Validation:
             "pipeline.useful-detections-under-load": run.detections,
         }[case]
         return metric()
+
+    def churn_check(self, proof):
+        trace = checked_json(self.artifact(proof, "churn"))
+        samples, drain = trace["samples"], trace["drain"]
+        caps = resource_caps(self.profile)
+        budgets = self.profile["budgets"]
+        children = self.profile["models"]["workers"] + 1
+        expected = {"children_after_drain": children, "maximum_drain_ms": budgets["rtsp_recovery_ms"],
+                    "resource_max_with_headroom": caps, "growth_horizon_seconds": budgets["growth_horizon_seconds"]}
+        if not 1 <= len(samples) <= 2049 or samples[0]["kind"] != "baseline":
+            raise ValueError("Churn resource evidence is missing its ready baseline")
+        if any(not number(row["elapsed_s"]) for row in samples) or any(
+                left["elapsed_s"] >= right["elapsed_s"] for left, right in zip(samples, samples[1:])):
+            raise ValueError("Churn samples do not have strictly ordered native times")
+        usage = [row["usage"] for row in samples] + [drain["usage"]]
+        peaks = {key: max((row[key] for row in usage if number(row.get(key))), default=None) for key in caps}
+        complete = all(all(number(row.get(key)) for row in usage) for key in caps)
+        failures = [key for key, peak in peaks.items() if peak is not None and peak > caps[key]]
+        workload = defaultdict(list)
+        sampled = Counter()
+        for row in samples[1:]:
+            if row["completed"]:
+                workload[row["kind"]].append(row)
+                sampled.update(row["completed"])
+        growth = {}
+        for kind in FAULTS.values():
+            records = workload[kind]
+            length = len(records) // 3
+            if length == 0:
+                complete = False
+                continue
+            for key in caps.keys() & {"rss_bytes", "vram_bytes"}:
+                blocks = {}
+                for index in range(0, 3 * length, length):
+                    group = records[index:index + length]
+                    if all(number(row["usage"].get(key)) for row in group):
+                        minute = statistics.median(row["elapsed_s"] for row in group) / 60
+                        blocks[minute] = [row["usage"][key] for row in group]
+                if len(blocks) != 3:
+                    complete = False
+                    continue
+                addition = upper_growth(blocks, budgets["growth_horizon_seconds"])
+                growth[f"{kind}/{key}"] = addition
+                if max(row["usage"][key] for row in records if number(row["usage"].get(key))) + addition > caps[key]:
+                    failures.append(f"{kind}/{key}")
+        media = drain["leases"]["media"]
+        drained = (drain["usage"]["children"] == children and not drain["detached"]
+                   and media is not None and all(value == 0 for value in media.values())
+                   and all(drain["leases"][key] == 0 for key in ("capture_frame_bytes_in_use", "evidence_write_bytes_in_use"))
+                   and all(drain[key] == 0 for key in ("enabled_cameras", "reserved_frame_bytes", "semantic_jobs"))
+                   and drain["writer"]["queued"] == 0 and drain["writer"]["running_ms"] is None
+                   and drain["elapsed_ms"] <= expected["maximum_drain_ms"])
+        if not drained:
+            failures.append("drain")
+        fault, _, pending = self.read_case("pipeline.canary-after-each-fault", "faults_and_capacity")
+        if fault is not None:
+            schedule = checked_json(self.artifact(fault, "fault-schedule"))
+            complete = (complete and pending is None and sampled == Counter(row["id"] for row in schedule["faults"])
+                        and self.fault_check("pipeline.canary-after-each-fault", fault)[2] == "PASS")
+        else:
+            complete = False
+        observed = {"peaks": peaks, "growth_upper_bytes": growth, "drain": drain, "failures": failures,
+                    "sample_count": len(samples), "faults_sampled_after_recovery": len(sampled)}
+        return expected, observed, "FAIL" if failures else "PASS" if complete else "INCOMPLETE"
 
     def report(self):
         duration = self.run["native_wall_seconds"]

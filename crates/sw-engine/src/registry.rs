@@ -344,6 +344,10 @@ impl CameraRegistry {
         self.slots.read().ok()?.get(&id)?.latest.borrow().clone()
     }
 
+    pub fn frame_bytes_in_use(&self) -> u32 {
+        self.limits.raw_bytes - self.budget.available_bytes()
+    }
+
     pub fn capture_health(&self) -> Option<Vec<CameraHealth>> {
         let slots = self.slots.read().ok()?;
         Some(
