@@ -34,7 +34,7 @@ def episodes(clip):
     return [Episode(clip["file"], onset, last_negative, onset == 0 and last_negative is None)]
 
 
-def coverage_intervals(samples, task, duration, minimum_accepted_fraction, max_gap_s):
+def coverage_intervals(samples, task, duration, minimum_accepted_fraction, max_gap_periods):
     """Conservative source-time estimate from adjacent snapshots of actual task PTS and counters."""
     totals = defaultdict(int)
     intervals = defaultdict(list)
@@ -48,10 +48,11 @@ def coverage_intervals(samples, task, duration, minimum_accepted_fraction, max_g
                 or previous["capture_state"] != "replaying"
                 or current["analysis_state"] != "ready" or previous["analysis_state"] != "ready"):
             continue
-        span = new_pts - old_pts
+        span_us = round((new_pts - old_pts) * 1_000_000)
         frames = current[f"{task}_frames"] - previous[f"{task}_frames"]
         rate = current[f"{task}_fps"]
-        if frames <= 0 or not 0 < span <= max_gap_s / rate or frames / span < rate * minimum_accepted_fraction:
+        if (frames <= 0 or not 0 < span_us * rate <= max_gap_periods * 1_000_000
+                or frames * 1_000_000 < span_us * rate * minimum_accepted_fraction):
             continue
         start, end = max(0.0, old_pts), min(duration, new_pts)
         if start >= end:

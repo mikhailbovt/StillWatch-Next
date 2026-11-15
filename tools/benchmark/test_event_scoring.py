@@ -113,6 +113,13 @@ class EventScoring(unittest.TestCase):
         scored = score_clip(clip(20), {"events": [], "coverage": measured()}, LIMITS)
         self.assertEqual(scored["episodes"][0]["status"], "miss")
 
+    def test_coverage_compares_sample_gaps_at_native_microsecond_precision(self):
+        snapshots = [dict(sample(at, count), pose_source_s=at, pose_frames=count, pose_fps=5)
+                     for at, count in ((4.0, 20), (4.4, 22), (4.800001, 24))]
+        coverage = coverage_intervals(snapshots, "pose", 16, 0.8, 2)
+        self.assertEqual(coverage["intervals_s"], [[4.0, 4.4]])
+        self.assertEqual(coverage["samples_accepted_in_intervals"], 2)
+
     def test_grounding_and_one_to_one_matching(self):
         left, right = [0.1, 0.1, 0.4, 0.4], [0.6, 0.6, 0.8, 0.8]
         specs = {**clip(15), "events": [annotation("first", 15, left), annotation("second", 16, left)]}
