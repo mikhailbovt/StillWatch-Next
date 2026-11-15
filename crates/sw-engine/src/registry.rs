@@ -34,6 +34,7 @@ use crate::{
 };
 
 pub(crate) const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
+const STABLE_CAPTURE: Duration = Duration::from_secs(3);
 const CONTENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(650);
 const CONTENT_CONFIRM_AFTER: Duration = Duration::from_secs(1);
 const CONTENT_HOLD_AFTER: Duration = Duration::from_secs(6);
@@ -87,6 +88,7 @@ struct State {
     phase: CaptureState,
     dropped: u64,
     last: Option<(u64, Instant)>,
+    usable_since: Option<Instant>,
     first_source: Option<(u64, i64)>,
     relative_lag: Option<(u64, i32)>,
     lagging: Option<bool>,
@@ -278,6 +280,7 @@ impl CameraRegistry {
             },
             dropped: 0,
             last: None,
+            usable_since: None,
             first_source: None,
             relative_lag: None,
             lagging: None,
@@ -1026,6 +1029,7 @@ impl CameraRegistry {
                 phase,
                 dropped: 0,
                 last: None,
+                usable_since: None,
                 first_source: None,
                 relative_lag: None,
                 lagging: None,
@@ -1153,7 +1157,6 @@ impl CameraRegistry {
                 }
                 Err(_) => return Ok(capture_retry(&feed, false)),
             };
-            let connected_at = Instant::now();
             let outcome = self
                 .read_camera(
                     &mut active_camera,
@@ -1194,11 +1197,14 @@ impl CameraRegistry {
                     return Ok(CameraOutcome::ConfigurationFailure);
                 }
                 _ => {
-                    let stable = connected_at.elapsed() >= Duration::from_secs(30)
-                        && state
-                            .borrow()
-                            .last
-                            .is_some_and(|(_, at)| at >= connected_at);
+                    let stable = {
+                        let snapshot = state.borrow();
+                        snapshot.last.zip(snapshot.usable_since).is_some_and(
+                            |((_, last), since)| {
+                                last.saturating_duration_since(since) >= STABLE_CAPTURE
+                            },
+                        )
+                    };
                     return Ok(capture_retry(&feed, stable));
                 }
             }
@@ -1244,6 +1250,7 @@ impl CameraRegistry {
                     state.send_modify(|state| {
                         state.dropped = state.dropped.saturating_add(1);
                         state.phase = CaptureState::CapacityExceeded;
+                        state.usable_since = None;
                         state.repeated_frame = false;
                         state.controlled_scene_suspended = camera.reviewed_scene.is_some();
                         state.relative_lag = None;
@@ -1397,6 +1404,11 @@ impl CameraRegistry {
                         state.first_source = source_us.map(|pts| (scope.epoch, pts));
                     }
                 }
+                if reset || !usable || source_lagging == Some(true) {
+                    state.usable_since = None;
+                } else {
+                    state.usable_since.get_or_insert(now);
+                }
                 state.repeated_frame = content.holding;
                 state.controlled_scene_suspended = camera.reviewed_scene.is_some()
                     && alignment != Some(scene::SceneAlignment::Aligned);
@@ -1461,6 +1473,7 @@ fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
         state.repeated_frame = false;
         state.controlled_scene_suspended = false;
         state.clock_held = false;
+        state.usable_since = None;
         state.relative_lag = None;
         state.lagging = None;
         if phase != CaptureState::Completed {

@@ -237,7 +237,8 @@ def run(settings, output, evidence_root):
                         if verified is None:
                             continue
                         path = output / (case["id"] + ".json")
-                        write_json(path, verified | {"started_utc_ms": began_utc})
+                        write_json(path, verified | {"started_utc_ms": began_utc, "source_before": before[name],
+                                                      "source_after": current})
                         row = {"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
                                "canary": evidence(evidence_root, path)}
@@ -248,7 +249,9 @@ def run(settings, output, evidence_root):
                         time.sleep(0.2)
                 for name, case in outstanding.items():
                     path = output / (case["id"] + ".json")
-                    write_json(path, {"planned": case["canary"], "incidents": openings(database, fixture["cameras"], began_utc)})
+                    write_json(path, {"planned": case["canary"], "source_before": before[name],
+                                      "source_after": latest(affected[name], fixture["local"]),
+                                      "incidents": openings(database, fixture["cameras"], began_utc)})
                     log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                           "ended_s": offset(), "finished_s": None, "capture_progress_s": window[name],
                                           "deadline_s": deadline, "fault": fault,
