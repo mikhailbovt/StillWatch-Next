@@ -42,11 +42,16 @@ pub fn run(mode: Mode) -> Result<()> {
         return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE);
     };
     let using_cuda = config.cuda.is_some();
+    let Ok(capture_shape) = graph_shape(config.cuda.as_ref()) else {
+        return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE);
+    };
     let warm_shapes = if let Some(profile) = &config.live_profile {
         match profile_shapes(&pack, profile) {
-            Some(shapes) => shapes,
-            None => return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE),
+            Some(shapes) if capture_shape.is_none_or(|size| shapes == [size]) => shapes,
+            _ => return startup_failure(&mut output, MODEL_PACK_UNAVAILABLE),
         }
+    } else if let Some(size) = capture_shape {
+        vec![size]
     } else {
         let inventory = pack.declared_shapes().unwrap_or_default();
         inventory
@@ -63,9 +68,12 @@ pub fn run(mode: Mode) -> Result<()> {
         Ok(runtime) => runtime,
         Err(_) => return startup_failure(&mut output, RUNTIME_UNAVAILABLE),
     };
-    let (mut pose, mut fire) = match pack
-        .load(&runtime, ModelId::PoseBalanced)
-        .and_then(|pose| pack.load(&runtime, ModelId::Fire).map(|fire| (pose, fire)))
+    let load = |id| match capture_shape {
+        Some(size) => pack.load_captured(&runtime, id, size),
+        None => pack.load(&runtime, id),
+    };
+    let (mut pose, mut fire) = match load(ModelId::PoseBalanced)
+        .and_then(|pose| load(ModelId::Fire).map(|fire| (pose, fire)))
     {
         Ok(models) => models,
         Err(_) => return startup_failure(&mut output, MODEL_INITIALIZATION_FAILED),
@@ -271,6 +279,13 @@ pub fn cuda_provider(config: CudaConfig) -> CudaProvider {
         provider_sha256: config.provider_sha256,
         shared_sha256: config.shared_sha256,
     }
+}
+
+pub fn graph_shape(config: Option<&CudaConfig>) -> Result<Option<TensorSize>, InferenceError> {
+    config
+        .and_then(|cuda| cuda.graph_shape)
+        .map(|[h, w]| TensorSize::new(usize::from(h), usize::from(w)))
+        .transpose()
 }
 
 fn profile_shapes(pack: &ModelPack, profile: &LiveModelProfile) -> Option<Vec<TensorSize>> {

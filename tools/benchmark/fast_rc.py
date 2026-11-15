@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from fast_rc_contract import (
     CONTRACTS, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, STAGES,
-    checked_execution_profile, checked_json, contract_digests, evidence, member, sha256, validate_schema, write_json,
+    checked_execution_profile, checked_json, contract_digests, cuda_graph_shape, evidence, member, sha256, validate_schema, write_json,
 )
 from validate_report import validate
 
@@ -216,6 +216,9 @@ class Run:
             flags = ["--cuda", str(self.args.cuda_device), self.files[cuda[0]], self.files[cuda[1]]]
             warm_options = ["--cuda", member(self.setup, cuda[0]), member(self.setup, cuda[1]),
                             "--cuda-device", self.args.cuda_device]
+            if (shape := cuda_graph_shape(self.profile["models"])) is not None:
+                flags.extend(["--cuda-graph-shape", *shape])
+                warm_options.append("--cuda-graph")
         for shape in self.profile["models"]["tensor_shapes"]:
             batch, channels, height, width = shape
             if batch != 1 or channels != 3:
@@ -380,6 +383,8 @@ class Run:
                 raise ValueError("The frozen CUDA workload is missing its provider libraries")
             settings["cuda_args"] = ["--cuda-device", str(self.args.cuda_device), "--cuda-provider-sha256", self.files[cuda[0]],
                                      "--cuda-shared-sha256", self.files[cuda[1]]]
+            if (shape := cuda_graph_shape(self.profile["models"])) is not None:
+                settings["cuda_args"].extend(["--cuda-graph-shape", *map(str, shape)])
             settings["cuda_device"] = self.args.cuda_device
         return source, settings
 

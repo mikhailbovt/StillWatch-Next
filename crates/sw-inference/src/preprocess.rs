@@ -39,9 +39,7 @@ pub struct Letterbox {
 
 impl Letterbox {
     fn new(width: usize, height: usize, profile: InputProfile, side: usize) -> Self {
-        let gain = (side as f64 / width as f64).min(side as f64 / height as f64);
-        let resized_width = ((width as f64 * gain).round_ties_even() as usize).clamp(1, side);
-        let resized_height = ((height as f64 * gain).round_ties_even() as usize).clamp(1, side);
+        let [resized_height, resized_width] = sw_domain::letterbox_resize(width, height, side);
         let tensor = if profile == InputProfile::Square {
             TensorSize::SQUARE
         } else {

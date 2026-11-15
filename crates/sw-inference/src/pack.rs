@@ -8,7 +8,7 @@ use std::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::{InferenceError, Model, RUNTIME_VERSION, Runtime};
+use crate::{InferenceError, Model, RUNTIME_VERSION, Runtime, SessionMode};
 
 const BASELINE: &str = "b0d20a20d38a5bbc22178d150999e57cc9e7bfb3";
 pub(crate) const SIDE: usize = 640;
@@ -328,6 +328,35 @@ impl ModelPack {
         id: ModelId,
         profile_prefix: Option<&Path>,
     ) -> Result<Model, InferenceError> {
+        self.load_mode(runtime, id, SessionMode::Dynamic { profile_prefix })
+    }
+
+    pub fn load_captured(
+        &self,
+        runtime: &Runtime,
+        id: ModelId,
+        size: TensorSize,
+    ) -> Result<Model, InferenceError> {
+        if runtime.cuda.is_none() {
+            return Err(InferenceError::CudaUnavailable);
+        }
+        if !matches!(id, ModelId::PoseBalanced | ModelId::Fire)
+            || self.profile() != InputProfile::Rectangular
+            || !self
+                .declared_shapes()
+                .is_some_and(|shapes| shapes.contains(&size.dimensions()))
+        {
+            return Err(InferenceError::Manifest);
+        }
+        self.load_mode(runtime, id, SessionMode::Captured(size))
+    }
+
+    fn load_mode(
+        &self,
+        runtime: &Runtime,
+        id: ModelId,
+        mode: SessionMode<'_>,
+    ) -> Result<Model, InferenceError> {
         let entry = self
             .manifest
             .models
@@ -341,7 +370,7 @@ impl ModelPack {
             &entry.input.shape,
             &entry.output.shape,
             bytes,
-            profile_prefix,
+            mode,
         )
     }
 

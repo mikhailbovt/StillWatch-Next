@@ -87,6 +87,9 @@ struct Config {
     cuda_provider_sha256: Option<String>,
     #[arg(long, requires = "cuda_device")]
     cuda_shared_sha256: Option<String>,
+    /// Capture CUDA graphs for one ModelPack v3 tensor shape (HEIGHT WIDTH).
+    #[arg(long, num_args = 2, requires = "cuda_device", value_names = ["HEIGHT", "WIDTH"])]
+    cuda_graph_shape: Vec<u16>,
     /// Read the administrator's validated model selection at startup.
     #[arg(long)]
     model_selection_file: Option<PathBuf>,
@@ -204,7 +207,8 @@ fn main() -> Result<()> {
                 && config.ort_library_sha256.is_none()
                 && config.cuda_device.is_none()
                 && config.cuda_provider_sha256.is_none()
-                && config.cuda_shared_sha256.is_none(),
+                && config.cuda_shared_sha256.is_none()
+                && config.cuda_graph_shape.is_empty(),
             "configure a model selection file or explicit model runtime settings"
         );
         let file = std::fs::File::open(path).context("open validated model selection")?;
@@ -230,6 +234,9 @@ fn main() -> Result<()> {
             config.cuda_device = Some(cuda.device);
             config.cuda_provider_sha256 = Some(cuda.provider_sha256);
             config.cuda_shared_sha256 = Some(cuda.shared_sha256);
+            config.cuda_graph_shape = cuda
+                .graph_shape
+                .map_or_else(Vec::new, |shape| shape.to_vec());
         }
     }
     if config.check_inference {
@@ -325,6 +332,9 @@ impl Settings {
             config.cuda_device = Some(cuda.device);
             config.cuda_provider_sha256 = Some(cuda.provider_sha256);
             config.cuda_shared_sha256 = Some(cuda.shared_sha256);
+            config.cuda_graph_shape = cuda
+                .graph_shape
+                .map_or_else(Vec::new, |shape| shape.to_vec());
         }
         config.rtsp_peer.extend(self.rtsp_peers);
         config.onvif_interface = config.onvif_interface.or(self.onvif_interface);
@@ -939,10 +949,24 @@ fn inference_config(config: &Config) -> Result<Option<InferenceConfig>> {
                 valid_digest(provider_sha256) && valid_digest(shared_sha256),
                 "CUDA library digests must be SHA-256 hex"
             );
+            let graph_shape = match config.cuda_graph_shape.as_slice() {
+                [] => None,
+                &[h, w]
+                    if [h, w]
+                        .into_iter()
+                        .all(|side| (32..=640).contains(&side) && side % 32 == 0) =>
+                {
+                    Some([h, w])
+                }
+                _ => anyhow::bail!(
+                    "CUDA graph shape requires two positive stride-32 sides up to 640"
+                ),
+            };
             Some(CudaConfig {
                 device,
                 provider_sha256: provider_sha256.clone(),
                 shared_sha256: shared_sha256.clone(),
+                graph_shape,
             })
         }
         (None, None, None) => None,

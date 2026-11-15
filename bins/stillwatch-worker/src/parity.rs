@@ -1,13 +1,19 @@
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::Read,
+    path::Path,
+};
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sw_domain::Observation;
-use sw_inference::{
-    CudaProvider, Image, ModelId, ModelPack, Preprocessor, Runtime, TensorSize, decode,
-};
+use sw_inference::{Image, ModelId, ModelPack, Preprocessor, Runtime, TensorSize, decode};
+use sw_protocol::worker::CudaConfig;
+
+use crate::inference::{cuda_provider, graph_shape};
 
 const OBSERVATION_SPEC: &str = include_str!("../../../qualification/observation-parity-v1.json");
 
@@ -55,7 +61,7 @@ pub fn verify(
     library_sha: &str,
     root: &Path,
     manifest_sha: &str,
-    cuda: Option<CudaProvider>,
+    cuda: Option<CudaConfig>,
 ) -> Result<()> {
     verify_with_profile(library, library_sha, root, manifest_sha, cuda, None)
 }
@@ -65,7 +71,7 @@ pub fn verify_with_profile(
     library_sha: &str,
     root: &Path,
     manifest_sha: &str,
-    cuda: Option<CudaProvider>,
+    cuda: Option<CudaConfig>,
     profile_dir: Option<&Path>,
 ) -> Result<()> {
     let pack = ModelPack::open(root, manifest_sha)?;
@@ -76,7 +82,20 @@ pub fn verify_with_profile(
         "invalid tensor fixture count"
     );
     let provider = if cuda.is_some() { "cuda" } else { "cpu" };
-    let runtime = Runtime::load(library, library_sha, 4, cuda)?;
+    let capture_shape = graph_shape(cuda.as_ref())?;
+    if let Some(shape) = capture_shape {
+        let inputs = report
+            .cases
+            .values()
+            .filter(|case| case.tensor_hw == Some(shape.dimensions()) && case.image.is_some())
+            .map(|case| &case.tensor_sha256)
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            inputs.len() >= 2,
+            "CUDA graph requires distinct locked RGB fixtures at its bound shape"
+        );
+    }
+    let runtime = Runtime::load(library, library_sha, 4, cuda.map(cuda_provider))?;
     let fixtures = root.join("fixtures");
     let mut models = BTreeMap::new();
     let mut prepare = Preprocessor::new(pack.profile());
@@ -86,6 +105,10 @@ pub fn verify_with_profile(
     for id in ModelId::ALL {
         let profile_prefix = profile_dir.map(|dir| dir.join(id.name()));
         let mut model = pack.load_profiled(&runtime, id, profile_prefix.as_deref())?;
+        let mut captured = capture_shape
+            .filter(|_| id != ModelId::Pose)
+            .map(|size| pack.load_captured(&runtime, id, size))
+            .transpose()?;
         let mut cases = BTreeMap::new();
         for (name, case) in &report.cases {
             ensure!(
@@ -103,6 +126,12 @@ pub fn verify_with_profile(
                 .context("missing model fixture")?;
             let [h, w] = case.tensor_hw.unwrap_or(TensorSize::SQUARE.dimensions());
             let shape = TensorSize::new(h, w)?;
+            let captured_case = captured.is_some() && Some(shape) == capture_shape;
+            let selected = if captured_case {
+                captured.as_mut().context("missing captured session")?
+            } else {
+                &mut model
+            };
             let anchors = shape.anchors();
             let expected = read_floats(
                 &fixtures.join(format!("{}_{name}.f32", id.name())),
@@ -114,9 +143,10 @@ pub fn verify_with_profile(
                 &case.tensor_sha256,
                 shape.input_values(),
             )?;
-            let mut metrics = model.run(shape, &input, |actual| {
+            let mut metrics = selected.run(shape, &input, |actual| {
                 compare(id, anchors, &expected, actual)
             })??;
+            metrics["cuda_graph"] = json!(captured_case);
             let case_id = format!("{}/{name}", id.name());
             if metrics["qualified"] != true {
                 numeric_failures.push(case_id.clone());
@@ -148,7 +178,7 @@ pub fn verify_with_profile(
                     .map(|(a, b)| (a - b).abs())
                     .fold(0.0f32, f32::max);
                 let postprocess = decode(id, &expected, view, geometry, 0.0)?;
-                let full = model.run(shape, prepared, |output| {
+                let full = selected.run(shape, prepared, |output| {
                     decode(id, output, view, geometry, 0.0)
                 })??;
                 let same_pixels = prepared
@@ -184,6 +214,7 @@ pub fn verify_with_profile(
         "{}",
         serde_json::to_string_pretty(&json!({
             "ort": runtime.build_info(), "provider": provider,
+            "cuda_graph_shape": capture_shape.map(TensorSize::dimensions),
             "observation_tolerances": tolerance.version,
             "observation_spec_sha256": format!("{:x}", Sha256::digest(OBSERVATION_SPEC)),
             "artifact_validation": "pass",

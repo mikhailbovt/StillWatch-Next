@@ -115,6 +115,10 @@ def detail_output_dimensions(stream):
     return [width, height]
 
 
+def cuda_graph_shape(model):
+    return model["tensor_shapes"][0][-2:] if model.get("cuda_graph") else None
+
+
 def execution_profile(profile, candidate, manifest, host, decoder, raw_bytes, cuda_device):
     model, workload, budgets = (profile[key] for key in ("models", "workload", "budgets"))
     if workload["semantic_route"] != "disabled":
@@ -155,6 +159,12 @@ def execution_profile(profile, candidate, manifest, host, decoder, raw_bytes, cu
         provider, shared = ("onnxruntime_providers_cuda.dll", "onnxruntime_providers_shared.dll") if windows else (
             "libonnxruntime_providers_cuda.so", "libonnxruntime_providers_shared.so")
         cuda = {"device": cuda_device, "provider": files["runtime/" + provider], "shared": files["runtime/" + shared]}
+        if (shape := cuda_graph_shape(model)) is not None:
+            gain = min(640 / width, 640 / height)
+            source_shape = [(max(1, round(side * gain)) + 31) // 32 * 32 for side in (height, width)]
+            if shape != source_shape:
+                raise ValueError("The captured CUDA graph shape must match the native analysis sources")
+            cuda["graph_shape"] = shape
     preview, detail = (workload[key] for key in ("preview_publishers", "detail_publishers"))
     return {
         "protocol": EXECUTION_PROTOCOL, "id": profile["profile_id"],

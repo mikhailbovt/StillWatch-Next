@@ -15,6 +15,7 @@ import sys
 from fast_rc_contract import (
     CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
     camera_quiet, camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
+    cuda_graph_shape,
     inference_cameras_recovered, inference_worker_replaced, member, number, sha256, validate_schema, write_json,
 )
 from validate_steady import Steady, resource_caps, upper_growth
@@ -209,11 +210,17 @@ class Validation:
         data = checked_json(self.artifact(proof, "parity-output"))
         active = case == "models.active-numeric-observation-event-gates"
         expected = {"provider": "cuda" if self.backend == "cuda_fp32" else "cpu", "observation_spec_sha256": self.models["observation_spec_sha256"],
-                    "artifact_validation": "pass"}
+                    "artifact_validation": "pass", "cuda_graph_shape": cuda_graph_shape(self.profile["models"])}
         observed = {key: data.get(key) for key in expected}
         for model in ("pose", "pose_balanced", "fire"):
             if not isinstance(data.get("models", {}).get(model), dict) or not data["models"][model]:
                 raise ValueError(f"Missing numerical fixture results for {model}")
+            if expected["cuda_graph_shape"] is not None:
+                executions = data["models"][model].values()
+                captured_images = sum(item.get("cuda_graph") is True and "image" in item for item in executions)
+                if (model == "pose" and any(item.get("cuda_graph") is True for item in executions)
+                        or model != "pose" and captured_images < 2):
+                    raise ValueError(f"Missing locked CUDA graph observations for {model}")
         if observed != expected or data.get("full_pack_numeric") not in {"pass", "fail"}:
             return expected, observed, "FAIL"
         for key in MODEL_KEYS:
@@ -259,9 +266,11 @@ class Validation:
     def warmup_check(self, proof):
         model = self.profile["models"]
         operator = "cuda" if self.backend == "cuda_fp32" else "cpu"
+        capture = cuda_graph_shape(model)
         limits = self.contract["deadlines_ms"]
         expected = {"shapes": sorted(shape[-2:] for shape in model["tensor_shapes"]),
                     "threads": model["threads_per_worker"], "provider": operator,
+                    "cuda_graph_shape": capture,
                     "model_contract_schema": 3, "compatible_policy": model["policy_version"],
                     "model_roles": {role: item["id"] for role, item in model["roles"].items()},
                     "startup_ms_maximum": limits[operator + "_worker_startup"],
@@ -276,13 +285,15 @@ class Validation:
         host = measured["host_input"]
         observed = {"shapes": sorted(measured["warm_shapes"]), "threads": measured["threads"],
                     "provider": measured["device"], "startup_ms": host["startup_ms"],
+                    "cuda_graph_shape": measured.get("cuda_graph_shape"),
                     "requests": host["requests"], "max_reply_ms": host["max_reply_ms"], "exit_code": code,
                     "unapproved_roles_and_shapes_rejected": measured["unapproved_roles_and_shapes_rejected"]}
         worker_name = "bin/stillwatch-worker.exe" if self.profile["host"]["os"] == "windows" else "bin/stillwatch-worker"
         exact = (measured["worker_sha256"] == self.candidate["files"][worker_name]
                  and measured["runtime_sha256"] == self.candidate["ort_sha256"]
                  and "sha256:" + measured["model_manifest_sha256"] == model["manifest_digest"])
-        valid = (exact and code == 0 and all(observed[key] == expected[key] for key in ("shapes", "threads", "provider"))
+        valid = (exact and code == 0 and all(observed[key] == expected[key] for key in ("shapes", "threads", "provider", "cuda_graph_shape"))
+                 and (capture is None or measured.get("graph_observations_equal") is True)
                  and number(observed["startup_ms"]) and number(observed["max_reply_ms"])
                  and observed["startup_ms"] <= expected["startup_ms_maximum"]
                  and observed["max_reply_ms"] <= expected["inference_ms_maximum"]
@@ -302,10 +313,12 @@ class Validation:
         observed.update({"compatible_policy": contract["compatible_policy"], "model_roles": contract["roles"],
                          "model_contract_shapes": contract["tensor_shapes"]})
         digests = {role: "sha256:" + manifest["models"][name]["sha256"] for role, name in contract["roles"].items()}
+        inventory = observed["model_contract_shapes"]
+        shapes_match = capture in inventory if capture is not None else sorted(inventory) == expected["shapes"]
         matches = (observed["compatible_policy"] == expected["compatible_policy"]
                    and observed["model_roles"] == expected["model_roles"]
                    and digests == {role: item["digest"] for role, item in model["roles"].items()}
-                   and sorted(observed["model_contract_shapes"]) == expected["shapes"]
+                   and shapes_match
                    and contract["observation_spec_sha256"] == self.models["observation_spec_sha256"])
         return expected, observed, "PASS" if matches else "FAIL"
 

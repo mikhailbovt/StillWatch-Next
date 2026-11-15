@@ -97,7 +97,7 @@ fn main() -> Result<()> {
                 text_arg(library_sha)?,
                 Path::new(model_pack),
                 text_arg(manifest_sha)?,
-                cuda_args(flags)?.map(inference::cuda_provider),
+                cuda_args(flags)?,
                 Some(dir),
             )
         }
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
             manifest_sha,
             flags @ ..,
         ] if command == "doctor" || command == "verify-model-pack" => {
-            let cuda = cuda_args(flags)?.map(inference::cuda_provider);
+            let cuda = cuda_args(flags)?;
             let library = Path::new(library);
             let library_sha = text_arg(library_sha)?;
             let model_pack = Path::new(model_pack);
@@ -117,11 +117,21 @@ fn main() -> Result<()> {
             if command == "verify-model-pack" {
                 return parity::verify(library, library_sha, model_pack, manifest_sha, cuda);
             }
+            let capture_shape = inference::graph_shape(cuda.as_ref())?;
             let provider = if cuda.is_some() { "cuda" } else { "cpu" };
             let pack = sw_inference::ModelPack::open(model_pack, manifest_sha)?;
-            let runtime = sw_inference::Runtime::load(library, library_sha, 1, cuda)?;
+            let runtime = sw_inference::Runtime::load(
+                library,
+                library_sha,
+                1,
+                cuda.map(inference::cuda_provider),
+            )?;
             for id in sw_inference::ModelId::ALL {
-                pack.load(&runtime, id)?;
+                if let Some(shape) = capture_shape.filter(|_| id != sw_inference::ModelId::Pose) {
+                    pack.load_captured(&runtime, id, shape)?;
+                } else {
+                    pack.load(&runtime, id)?;
+                }
             }
             println!(
                 "{}",
@@ -137,15 +147,29 @@ fn main() -> Result<()> {
 }
 
 fn cuda_args(flags: &[OsString]) -> Result<Option<CudaConfig>> {
-    match flags {
-        [] => Ok(None),
-        [option, device, provider, shared] if option == "--cuda" => Ok(Some(CudaConfig {
-            device: text_arg(device)?.parse()?,
-            provider_sha256: text_arg(provider)?.to_ascii_lowercase(),
-            shared_sha256: text_arg(shared)?.to_ascii_lowercase(),
-        })),
-        _ => bail!("expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256"),
+    if flags.is_empty() {
+        return Ok(None);
     }
+    let [option, device, provider, shared, extra @ ..] = flags else {
+        bail!("expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256");
+    };
+    ensure!(
+        option == "--cuda",
+        "expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256"
+    );
+    let graph_shape = match extra {
+        [] => None,
+        [option, h, w] if option == "--cuda-graph-shape" => {
+            Some([text_arg(h)?.parse()?, text_arg(w)?.parse()?])
+        }
+        _ => bail!("expected --cuda-graph-shape HEIGHT WIDTH"),
+    };
+    Ok(Some(CudaConfig {
+        device: text_arg(device)?.parse()?,
+        provider_sha256: text_arg(provider)?.to_ascii_lowercase(),
+        shared_sha256: text_arg(shared)?.to_ascii_lowercase(),
+        graph_shape,
+    }))
 }
 
 fn text_arg(value: &OsString) -> Result<&str> {

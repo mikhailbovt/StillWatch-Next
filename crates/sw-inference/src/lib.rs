@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod appearance;
+mod cuda_graph;
 mod onnx;
 mod pack;
 mod postprocess;
@@ -20,6 +21,8 @@ use ort::{
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::cuda_graph::CudaGraph;
 
 pub use pack::{InputProfile, ModelId, ModelPack, TensorSize};
 pub use postprocess::{FireTrace, decode, decode_fire_with_proposals, trace_fire};
@@ -159,9 +162,15 @@ fn verify_library(path: &Path, expected: &str, maximum: u64) -> Result<(), Infer
 
 /// Session for one locked model. Inference is synchronous by design.
 pub struct Model {
+    graph: Option<CudaGraph>,
     session: Session,
     id: ModelId,
     profile: InputProfile,
+}
+
+enum SessionMode<'a> {
+    Dynamic { profile_prefix: Option<&'a Path> },
+    Captured(TensorSize),
 }
 
 /// Synchronous tensor evaluation inside an isolated inference worker.
@@ -194,7 +203,7 @@ impl Model {
         input: &[i64; 4],
         output: &[i64; 3],
         bytes: &[u8],
-        profiling_prefix: Option<&Path>,
+        mode: SessionMode<'_>,
     ) -> Result<Self, InferenceError> {
         let mut builder = Session::builder(&runtime.environment)
             .map_err(ort_error)?
@@ -206,28 +215,66 @@ impl Model {
                 .with_disabled_optimizers("NchwcTransformer")
                 .map_err(ort_error)?;
         }
-        if let Some(prefix) = profiling_prefix {
+        if let SessionMode::Dynamic {
+            profile_prefix: Some(prefix),
+        } = mode
+        {
             builder = builder.with_profiling(prefix).map_err(ort_error)?;
         }
+        let capture_shape = match mode {
+            SessionMode::Captured(size) => Some(size),
+            SessionMode::Dynamic { .. } => None,
+        };
         if let Some(config) = &runtime.cuda {
             let cuda = ort::ep::CUDA::default()
                 .with_device_id(i32::from(config.device))
                 .with_tf32(false)
                 .with_conv_algorithm_search(ort::ep::cuda::ConvAlgorithmSearch::Heuristic)
                 .with_conv_max_workspace(false)
+                .with_cuda_graph(capture_shape.is_some())
                 .build()
                 .error_on_failure();
             builder = builder
                 .with_execution_providers([cuda])
                 .map_err(ort_error)?;
         }
-        let session = builder.commit_from_memory(bytes).map_err(ort_error)?;
-        if !is_tensor(session.inputs(), "images", input)
-            || !is_tensor(session.outputs(), "output0", output)
-        {
-            return Err(InferenceError::Tensor);
+        if let Some(size) = capture_shape {
+            let [height, width] = size.dimensions();
+            builder = builder
+                .with_disable_cpu_fallback()
+                .map_err(ort_error)?
+                .with_dimension_override("height", height as i64)
+                .map_err(ort_error)?
+                .with_dimension_override("width", width as i64)
+                .map_err(ort_error)?
+                .with_dimension_override("anchors", size.anchors() as i64)
+                .map_err(ort_error)?;
         }
+        let session = builder.commit_from_memory(bytes).map_err(ort_error)?;
+        let graph = if let Some(size) = capture_shape {
+            let [height, width] = size.dimensions();
+            let input = [1, 3, height as i64, width as i64];
+            let output = [1, id.channels() as i64, size.anchors() as i64];
+            if !is_tensor(session.inputs(), "images", &input)
+                || !is_tensor(session.outputs(), "output0", &output)
+            {
+                return Err(InferenceError::Tensor);
+            }
+            let cuda = runtime
+                .cuda
+                .as_ref()
+                .ok_or(InferenceError::CudaUnavailable)?;
+            Some(CudaGraph::new(&session, cuda.device, size, id.channels())?)
+        } else {
+            if !is_tensor(session.inputs(), "images", input)
+                || !is_tensor(session.outputs(), "output0", output)
+            {
+                return Err(InferenceError::Tensor);
+            }
+            None
+        };
         Ok(Self {
+            graph,
             session,
             id,
             profile,
@@ -274,12 +321,17 @@ impl Model {
         }
         let [height, width] = size.dimensions();
         let view = TensorRef::from_array_view(([1, 3, height, width], input)).map_err(ort_error)?;
-        let outputs = self.session.run(ort::inputs![view]).map_err(ort_error)?;
-        let (shape, output) = outputs
-            .get("output0")
-            .ok_or(InferenceError::Tensor)?
-            .try_extract_tensor::<f32>()
-            .map_err(ort_error)?;
+        let outputs;
+        let (shape, output) = if let Some(graph) = &mut self.graph {
+            graph.run(&mut self.session, size, view)?
+        } else {
+            outputs = self.session.run(ort::inputs![view]).map_err(ort_error)?;
+            outputs
+                .get("output0")
+                .ok_or(InferenceError::Tensor)?
+                .try_extract_tensor::<f32>()
+                .map_err(ort_error)?
+        };
         if **shape != [1, self.id.channels() as i64, size.anchors() as i64]
             || output.iter().any(|value| !value.is_finite())
         {

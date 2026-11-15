@@ -53,8 +53,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["backend", "manifest_digest", "policy_version", "roles", "tensor_shapes", "workers", "threads_per_worker"],
+      "if": {"required": ["cuda_graph"]},
+      "then": {"properties": {
+        "backend": {"const": "cuda_fp32"}, "workers": {"const": 1}, "tensor_shapes": {"maxItems": 1}
+      }},
       "properties": {
         "backend": {"enum": ["cpu_fp32", "cuda_fp32"]},
+        "cuda_graph": {"const": true},
         "manifest_digest": {"$ref": "#/$defs/digest"},
         "policy_version": {"$ref": "#/$defs/label"},
         "roles": {

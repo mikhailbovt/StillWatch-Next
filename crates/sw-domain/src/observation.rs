@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Resize a non-empty frame into a square while preserving its aspect ratio.
+pub fn letterbox_resize(width: usize, height: usize, side: usize) -> [usize; 2] {
+    let gain = (side as f64 / width as f64).min(side as f64 / height as f64);
+    let resize = |pixels: usize| ((pixels as f64 * gain).round_ties_even() as usize).clamp(1, side);
+    [resize(height), resize(width)]
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Box2d {

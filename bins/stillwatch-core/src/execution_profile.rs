@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use sw_engine::{WorkerBinary, execution_host};
 use sw_protocol::{
     AnalysisWorkload, ExecutionHost, SemanticRoute,
-    worker::{InferenceConfig, LiveModelProfile},
+    worker::{InferenceConfig, LiveModelProfile, rectangular_tensor_shape},
 };
 use sw_storage::AnalysisAdmission;
 
@@ -73,6 +73,7 @@ struct CudaArtifacts {
     device: u16,
     provider: String,
     shared: String,
+    graph_shape: Option<[u16; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -190,7 +191,8 @@ pub(super) async fn verify(
                 && approved
                     .provider
                     .eq_ignore_ascii_case(&cuda.provider_sha256)
-                && approved.shared.eq_ignore_ascii_case(&cuda.shared_sha256),
+                && approved.shared.eq_ignore_ascii_case(&cuda.shared_sha256)
+                && approved.graph_shape == cuda.graph_shape,
             "CUDA configuration differs from the qualification"
         ),
         _ => anyhow::bail!("execution backend differs from the qualification"),
@@ -380,16 +382,21 @@ impl ExecutionProfile {
             "cpu_fp32_square_640" => [1, 3, 640, 640],
             "cpu_fp32_rect_640" => {
                 let dims = self.work.source.dimensions;
-                let gain = 640.0 / f64::from(dims.width.max(dims.height));
-                let side = |pixels| {
-                    ((f64::from(pixels) * gain).round_ties_even() as u16)
-                        .max(1)
-                        .next_multiple_of(32)
-                };
-                [1, 3, side(dims.height), side(dims.width)]
+                let [h, w] = rectangular_tensor_shape(dims.width, dims.height);
+                [1, 3, h, w]
             }
             _ => anyhow::bail!("unsupported model input profile"),
         };
+        if let Some([h, w]) = artifacts.cuda.as_ref().and_then(|cuda| cuda.graph_shape) {
+            ensure!(
+                self.inference_workers == 1
+                    && manifest.profile == "cpu_fp32_rect_640"
+                    && manifest.contract.is_some()
+                    && self.tensor_shapes == [[1, 3, h, w]]
+                    && self.tensor_shapes == [shape],
+                "CUDA graph capture must use the workload's one pinned tensor shape"
+            );
+        }
         if let Some(contract) = manifest.contract {
             ensure!(
                 (1..=16).contains(&self.tensor_shapes.len())

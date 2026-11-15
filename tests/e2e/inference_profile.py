@@ -75,18 +75,18 @@ def run(args):
     unique = {}
     for name, case in fixtures.items():
         shape = tuple(case["tensor_hw"])
-        if case["image"] and shape not in unique:
+        if case["image"]:
             height, width, _ = case["image"]["rgb_shape"]
             path = models / "fixtures" / f"{name}.rgb"
             assert digest(path) == case["image"]["rgb_sha256"]
-            unique[shape] = (width, height, path)
+            unique.setdefault(shape, []).append((width, height, path))
     if args.warm_shape:
         selected = [tuple(value) for value in args.warm_shape]
         assert len(selected) == len(set(selected)) and set(selected) <= set(unique)
     else:
         selected = list(unique)
         assert len(selected) >= 2
-    frames = [unique[shape] for shape in selected]
+    frames = [unique[shape][0] for shape in selected]
     config = {
         "library": str(Path(args.runtime).resolve()), "library_sha256": digest(args.runtime),
         "models": str(models), "manifest_sha256": digest(manifest), "threads": args.threads,
@@ -97,6 +97,12 @@ def run(args):
     if args.cuda:
         provider, shared = args.cuda
         config["cuda"] = {"device": args.cuda_device, "provider_sha256": digest(provider), "shared_sha256": digest(shared)}
+    if args.cuda_graph:
+        assert args.cuda and len(selected) == 1
+        shape, = selected
+        frames = unique[shape]
+        assert len({digest(frame[2]) for frame in frames}) >= 2
+        config["cuda"]["graph_shape"] = shape
     bad = config | {"live_profile": config["live_profile"] | {"pose_balanced_sha256": pack["models"]["pose"]["sha256"]}}
     execute(args, bad, frames, 1, b"SWIM")
     bad = config | {"live_profile": config["live_profile"] | {"warm_shapes": [[1, 1]]}}
@@ -106,15 +112,28 @@ def run(args):
               "warm_shapes": selected, "threads": args.threads, "unapproved_roles_and_shapes_rejected": True}
     original, startup = execute(args, config, frames, args.repeats, b"SWI2")
     result["host_input"] = metrics(original, startup)
+    if args.cuda_graph:
+        other_shape = next(shape for shape in unique if shape != selected[0])
+        mismatch = config | {"live_profile": config["live_profile"] | {"warm_shapes": [other_shape]}}
+        execute(args, mismatch, frames, 1, b"SWIM")
+        dynamic = config | {"cuda": {key: value for key, value in config["cuda"].items() if key != "graph_shape"}}
+        baseline, startup = execute(args, dynamic, frames, args.repeats, b"SWI2")
+        equal = [row[0] for row in original] == [row[0] for row in baseline]
+        assert equal, "Captured and dynamic observations or fire proposals differ"
+        result.update(cuda_graph_shape=selected[0], graph_observations_equal=equal,
+                      dynamic_host_input=metrics(baseline, startup))
     print(json.dumps(result))
 
 
 def metrics(replies, startup):
     durations = sorted(row[1] for row in replies)
     prep = sorted(row[2][1] for row in replies)
+    pose = sorted(row[2][2] for row in replies)
+    fire = sorted(row[2][4] for row in replies)
     index = (95 * len(durations) + 99) // 100 - 1
     return {"requests": len(durations), "startup_ms": startup, "round_trip_p95_ms": durations[index],
-            "preprocess_p95_us": prep[index], "max_reply_ms": durations[-1]}
+            "preprocess_p95_us": prep[index], "pose_run_p95_us": pose[index], "fire_run_p95_us": fire[index],
+            "max_reply_ms": durations[-1]}
 
 
 if __name__ == "__main__":
@@ -123,6 +142,7 @@ if __name__ == "__main__":
         parser.add_argument(f"--{arg}", required=True)
     parser.add_argument("--cuda", nargs=2, metavar=("CUDA_PROVIDER", "SHARED_PROVIDER"))
     parser.add_argument("--cuda-device", type=int, default=0)
+    parser.add_argument("--cuda-graph", action="store_true")
     parser.add_argument("--threads", type=int, choices=range(1, 65), default=4)
     parser.add_argument("--warm-shape", type=int, nargs=2, action="append", metavar=("HEIGHT", "WIDTH"))
     parser.add_argument("--repeats", type=int, choices=range(1, 65), default=10)

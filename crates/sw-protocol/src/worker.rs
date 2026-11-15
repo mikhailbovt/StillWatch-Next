@@ -154,6 +154,20 @@ pub struct CudaConfig {
     pub device: u16,
     pub provider_sha256: String,
     pub shared_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_shape: Option<[u16; 2]>,
+}
+
+impl CudaConfig {
+    pub fn accepts_frame(&self, width: u32, height: u32) -> bool {
+        self.graph_shape
+            .is_none_or(|shape| shape == rectangular_tensor_shape(width, height))
+    }
+}
+
+pub fn rectangular_tensor_shape(width: u32, height: u32) -> [u16; 2] {
+    sw_domain::letterbox_resize(width as usize, height as usize, 640)
+        .map(|side| side.next_multiple_of(32) as u16)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

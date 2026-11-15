@@ -242,7 +242,7 @@ impl VisionScheduler {
             .filter(|frame| frame.scope.epoch == epoch);
         let source_unusable = latest
             .as_ref()
-            .is_some_and(|frame| !frame.usable_for_analysis);
+            .is_some_and(|frame| !self.accepts_frame(frame));
         if let Some(lane) = self.cameras.inference_lane(camera)
             && let Ok(progress) = self.progress.read()
         {
@@ -518,6 +518,14 @@ impl VisionScheduler {
         Ok(())
     }
 
+    fn accepts_frame(&self, frame: &CameraFrame) -> bool {
+        frame.usable_for_analysis
+            && self.config.cuda.as_ref().is_none_or(|config| {
+                let header = &frame.frame.header;
+                config.accepts_frame(header.width, header.height)
+            })
+    }
+
     fn next(&self, lane: usize, last_camera: Option<Uuid>) -> Option<Dispatch> {
         let mut frames = self.cameras.frames();
         frames.sort_unstable_by_key(|frame| frame.scope.camera_id);
@@ -535,7 +543,7 @@ impl VisionScheduler {
         let mut next_base_us = u64::MAX;
         for frame in frames[start..].iter().chain(&frames[..start]) {
             if frame.inference_lane != lane
-                || !frame.usable_for_analysis
+                || !self.accepts_frame(frame)
                 || now.duration_since(frame.captured_at) > FRAME_MAX_AGE
             {
                 continue;

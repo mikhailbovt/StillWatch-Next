@@ -24,7 +24,7 @@ pub fn publish(selection: &Path, model: ModelSelection) -> Result<()> {
         &model.library_sha256,
         &model.models,
         &model.manifest_sha256,
-        model.cuda.map(crate::inference::cuda_provider),
+        model.cuda,
     )?;
 
     let mut staged = NamedTempFile::new_in(directory)?;
