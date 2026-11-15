@@ -589,6 +589,10 @@ impl Database {
             )?;
         }
         tx.commit()?;
+        #[cfg(test)]
+        if due != 0 {
+            crate::tests::pause_at_file_cutpoint(&self.blobs, "blob-retired");
+        }
         if changed {
             self.notify.send_replace(());
         }
@@ -633,6 +637,8 @@ impl Database {
                 self.blob_bytes = None;
             }
             sync_directory(&self.blobs)?;
+            #[cfg(test)]
+            crate::tests::pause_at_file_cutpoint(&self.blobs, "blob-unlinked");
             let tx = self
                 .conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;

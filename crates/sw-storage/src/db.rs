@@ -291,7 +291,11 @@ impl Database {
             )?;
         }
         append_change(&tx, &transition, true, &state)?;
+        #[cfg(test)]
+        crate::tests::pause_at_file_cutpoint(&self.blobs, "incident-before-commit");
         tx.commit()?;
+        #[cfg(test)]
+        crate::tests::pause_at_file_cutpoint(&self.blobs, "incident-committed");
         self.notify.send_replace(());
         Ok(transition.incident)
     }

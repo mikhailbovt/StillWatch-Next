@@ -37,8 +37,10 @@ LOGIC_CASES = {
     ),
     "storage.incident-outbox-and-blob-cutpoints": (
         ("sw-storage", "tests::incident_change_and_outbox_rollback_together"),
+        ("sw-storage", "tests::process_crash_around_incident_and_outbox_commit_is_idempotent"),
         ("sw-storage", "tests::evidence_commit_failure_leaves_a_reconcilable_orphan"),
         ("sw-storage", "tests::process_crash_around_jpeg_and_metadata_recovers_the_same_storage"),
+        ("sw-storage", "tests::process_crash_during_retirement_keeps_live_references"),
         ("sw-storage", "tests::evidence_retention_tracks_references_across_restarts"),
         ("sw-storage", "tests::uncertain_blob_bytes_recount_in_maintenance_slices"),
         ("sw-storage", "tests::quota_partial_packet_and_missing_blob_are_visible_after_restart"),

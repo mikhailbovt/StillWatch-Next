@@ -2594,14 +2594,10 @@ fn process_crash_around_jpeg_and_metadata_recovers_the_same_storage() {
         } else {
             assert!(saved.is_none() && fs::read_dir(&blobs).unwrap().next().is_none());
             let refreshed = recovered.get(active.id).unwrap();
-            let next = EvidenceStamp {
-                packet_id: Uuid::new_v4(),
-                version: 2,
-                ..stamp
-            };
+            assert!(refreshed.evidence.is_none());
             assert!(matches!(
                 recovered
-                    .persist_evidence(evidence_write(&refreshed, next, &[BLACK]), 2_100)
+                    .persist_evidence(evidence_write(&refreshed, stamp, &[BLACK]), 2_100)
                     .unwrap(),
                 EvidenceOutcome::Persisted(_)
             ));
@@ -2615,5 +2611,118 @@ fn process_crash_around_jpeg_and_metadata_recovers_the_same_storage() {
         assert_eq!(packets, 1);
         assert_eq!(counts(&recovered.conn).2, 1);
         assert_eq!(fs::read_dir(&blobs).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn process_crash_during_retirement_keeps_live_references() {
+    let quota = 4 * 1024 * 1024;
+    if let Some(root) = std::env::var_os(CUTPOINT_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        database(&root, quota)
+            .retire_evidence(1_500, 3_000)
+            .unwrap();
+        panic!("child retirement passed the requested cutpoint");
+    }
+
+    for point in ["blob-retired", "blob-unlinked"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut db = database(root.path(), quota);
+        let mut references = Vec::new();
+        for (captured, images) in [(1_000, vec![BLACK, WHITE]), (2_000, vec![BLACK])] {
+            let active = db.create(incident(), captured).unwrap();
+            let stamp = EvidenceStamp {
+                packet_id: Uuid::new_v4(),
+                version: 1,
+                scope: active.scope,
+                expires_at: 9_000,
+            };
+            db.persist_evidence(evidence_write(&active, stamp, &images), captured)
+                .unwrap();
+            references.push((active.id, stamp.packet_id));
+        }
+        let staged = db
+            .blobs
+            .join(format!("{}.jpg", crate::evidence::hex_digest(WHITE)));
+        drop(db);
+
+        let mut child = launch_crash_cutpoint(
+            "tests::process_crash_during_retirement_keeps_live_references",
+            root.path(),
+            point,
+        );
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert_eq!(staged.exists(), point == "blob-retired");
+        let raw = Connection::open(root.path().join(DATABASE_FILE)).unwrap();
+        assert_eq!(
+            raw.query_row("SELECT count(*) FROM retired_blob_cleanup", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
+        drop(raw);
+
+        let mut recovered = database(root.path(), quota);
+        assert!((0..4).any(|_| !recovered.retire_evidence(1_500, 3_000).unwrap()));
+        assert!(!staged.exists());
+        assert_eq!(
+            recovered
+                .conn
+                .query_row("SELECT count(*) FROM retired_blob_cleanup", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        let (first, expired) = references[0];
+        let (second, live) = references[1];
+        assert!(
+            recovered
+                .read_evidence(first, expired, 0)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            recovered.read_evidence(second, live, 0).unwrap().as_deref(),
+            Some(BLACK)
+        );
+        crate::backup::validate_database(&recovered.conn, SCHEMA_VERSION).unwrap();
+    }
+}
+
+#[test]
+fn process_crash_around_incident_and_outbox_commit_is_idempotent() {
+    fn request() -> NewIncident {
+        let mut new = incident();
+        new.id = Uuid::from_u128(0x52a1);
+        new.scope.camera_id = Uuid::from_u128(0x52a2);
+        new
+    }
+
+    if let Some(root) = std::env::var_os(CUTPOINT_ROOT) {
+        database(Path::new(&root), 0)
+            .create(request(), 1_000)
+            .unwrap();
+        panic!("child incident creation passed the requested cutpoint");
+    }
+
+    for (point, committed) in [("incident-before-commit", 0), ("incident-committed", 1)] {
+        let root = tempfile::tempdir().unwrap();
+        let mut child = launch_crash_cutpoint(
+            "tests::process_crash_around_incident_and_outbox_commit_is_idempotent",
+            root.path(),
+            point,
+        );
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+
+        let mut recovered = database(root.path(), 0);
+        assert_eq!(counts(&recovered.conn), (committed, committed, committed));
+        let saved = recovered.create(request(), 1_000).unwrap();
+        assert_eq!(saved, recovered.create(request(), 2_000).unwrap());
+        assert_eq!(counts(&recovered.conn), (1, 1, 1));
+        crate::backup::validate_database(&recovered.conn, SCHEMA_VERSION).unwrap();
     }
 }
