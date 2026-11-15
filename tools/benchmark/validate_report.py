@@ -225,6 +225,8 @@ class Validation:
         limits = self.contract["deadlines_ms"]
         expected = {"shapes": sorted(shape[-2:] for shape in model["tensor_shapes"]),
                     "threads": model["threads_per_worker"], "provider": operator,
+                    "model_contract_schema": 3, "compatible_policy": model["policy_version"],
+                    "model_roles": {role: item["id"] for role, item in model["roles"].items()},
                     "startup_ms_maximum": limits[operator + "_worker_startup"],
                     "inference_ms_maximum": limits["live_inference"]}
         transcript = self.read_text(self.artifact(proof, "stdout"))
@@ -248,7 +250,27 @@ class Validation:
                  and observed["startup_ms"] <= expected["startup_ms_maximum"]
                  and observed["max_reply_ms"] <= expected["inference_ms_maximum"]
                  and observed["requests"] >= len(expected["shapes"]) and observed["unapproved_roles_and_shapes_rejected"] is True)
-        return expected, observed, "PASS" if valid else "FAIL"
+        if not valid:
+            return expected, observed, "FAIL"
+        if "model-lock" not in proof["artifacts"]:
+            return expected, observed, "INCOMPLETE"
+        lock = self.artifact(proof, "model-lock")
+        if sha256(lock) != model["manifest_digest"]:
+            raise ValueError("Native warmup evidence includes a different model lock")
+        manifest = checked_json(lock)
+        observed["model_contract_schema"] = manifest["schema_version"]
+        if observed["model_contract_schema"] != 3:
+            return expected, observed, "INCOMPLETE"
+        contract = manifest["contract"]
+        observed.update({"compatible_policy": contract["compatible_policy"], "model_roles": contract["roles"],
+                         "model_contract_shapes": contract["tensor_shapes"]})
+        digests = {role: "sha256:" + manifest["models"][name]["sha256"] for role, name in contract["roles"].items()}
+        matches = (observed["compatible_policy"] == expected["compatible_policy"]
+                   and observed["model_roles"] == expected["model_roles"]
+                   and digests == {role: item["digest"] for role, item in model["roles"].items()}
+                   and sorted(observed["model_contract_shapes"]) == expected["shapes"]
+                   and contract["observation_spec_sha256"] == self.models["observation_spec_sha256"])
+        return expected, observed, "PASS" if matches else "FAIL"
 
     @staticmethod
     def json_lines(logfile):

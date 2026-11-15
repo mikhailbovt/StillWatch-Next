@@ -183,10 +183,13 @@ class Run:
             sources = {}
         self.proof(stage, "artifacts.exact-digests-and-release-features", began, observed,
                    {"candidate-scan": path, **sources})
-        if not self.verified or not self.runtime.is_file() or not (self.models / "models.lock.json").is_file():
+        model_lock = self.models / "models.lock.json"
+        if not self.verified or not self.runtime.is_file() or not model_lock.is_file():
             return
-        if sha256(self.models / "models.lock.json") != self.profile["models"]["manifest_digest"]:
+        if sha256(model_lock) != self.profile["models"]["manifest_digest"]:
             return
+        model_evidence = self.root / "inputs" / "model-lock.json"
+        shutil.copyfile(model_lock, model_evidence)
         flags = []
         warm_options = []
         if self.profile["models"]["backend"] == "cuda_fp32":
@@ -203,7 +206,8 @@ class Run:
             warm_options.extend(["--warm-shape", height, width])
         self.script(stage, "models.native-warmup-all-shapes", "warmup", ROOT / "tests/e2e/inference_profile.py",
                     "--worker", self.worker, "--runtime", self.runtime, "--models", self.models,
-                    "--threads", self.profile["models"]["threads_per_worker"], *warm_options)
+                    "--threads", self.profile["models"]["threads_per_worker"], *warm_options,
+                    input_artifacts={"model-lock": model_evidence})
         observed, raw = self.capture(stage, "parity-output", [self.worker, "verify-model-pack", self.runtime,
                                      self.candidate["ort_sha256"], self.models, self.candidate["model_manifest_sha256"], *flags])
         # The worker can exit nonzero with a complete full-pack report on narrowed CUDA profiles.
@@ -281,9 +285,9 @@ class Run:
             self.proof(stage, case, started, {"statuses": statuses}, outputs,
                        deadline=any(item.get("deadline_exceeded") for item in statuses))
 
-    def script(self, stage, case, name, script, *args):
+    def script(self, stage, case, name, script, *args, input_artifacts=None):
         observed, raw = self.capture(stage, name, [sys.executable, "-B", script, *args])
-        self.proof(stage, case, observed["started_s"], observed, {"stdout": raw},
+        self.proof(stage, case, observed["started_s"], observed, {"stdout": raw, **(input_artifacts or {})},
                    deadline=observed.get("deadline_exceeded", False))
 
     def storage(self):
