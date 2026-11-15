@@ -6,7 +6,7 @@ Install the Core on the machine that can reach the cameras. Use a local filesyst
 
 The Windows x64 MSI installs the StillWatchCore service under LocalService. Service settings are in the StillWatch subdirectory of ProgramData. Back up that directory before changing versions. On Linux, install the DEB on Ubuntu 24.04 x64 or the RPM on Fedora 44 x64, review the environment in /etc/stillwatch/core.conf, then enable the service with the command below. Allow USB access through the specific device's operating system permissions if needed.
 
-The Linux package version comes from the three-part version in the staged manifest. Before an upgrade, stop the Core and any enabled notification relay, then take an offline backup. Install the newer package and restart the services with their saved configuration. Keep the previous package and matching backup for rollback across a schema change.
+The Linux package version comes from the three-part version in the staged manifest. See [upgrade and rollback](#upgrade-or-roll-back-linux-core) for the service and data sequence.
 
 The Windows Core installer includes the locked Microsoft Visual C++ x64 runtime beside the executables. The SCM restarts the Core after up to two unexpected exits, with a three-second delay. Review the System event log if restarts are exhausted. The failure count resets after a day without an unexpected exit.
 
@@ -146,6 +146,29 @@ stillwatch-cli restore --backup BACKUP --destination RESTORED_DATA
 Compare the source snapshot digest and row counts from both migration runs. The migration manifest also records how many historical images are available and the digest of the new database. Archived assessments remain associated with their original provider. Previously open incidents require reassessment and the migration creates no notification intents. For cutover, use a separate directory for the new Core and keep the old backup for rollback. Restore data compatible with the previous binary when rolling back a schema change.
 
 Each backup and restore defaults to a 4 GiB per-operation budget. The `--max-bytes` option overrides it. The check includes the database, manifest and evidence, and requires 64 MiB of additional free space on the destination volume at preflight. Backups and restores use a private `.stillwatch-archive` staging directory beside the requested destination. One operation holds its lock at a time. A retry clears an abandoned staged copy under that lock before checking available space. The destination becomes visible after metadata and evidence validation. Account for previously saved backups in the destination volume's quota.
+
+### Upgrade or roll back Linux Core
+
+Keep the installed version's package, model pack and settings together with its offline backup. Include the Core environment, configured settings file, camera credentials and replay media in your host backup. The CLI archive covers the database and its evidence blobs. Record which notification relay services are enabled so you can start them again after checking Core.
+
+1. Stop `stillwatch.service` and any active `stillwatch-apns.service`. Use a new private directory for each offline backup.
+
+   ~~~sh
+   sudo install -d -m 0700 /var/backups/stillwatch
+   sudo stillwatch-cli backup-offline --data-dir /var/lib/stillwatch --destination /var/backups/stillwatch/before-upgrade
+   ~~~
+
+2. Install the newer DEB with `sudo dpkg -i ./PACKAGE.deb` or the newer RPM with `sudo dnf upgrade ./PACKAGE.rpm`. Review your saved configuration and start `stillwatch.service`. Run the CLI doctor as `stillwatch`, then check a new incident and JPEG from an authorized test source.
+3. To roll back across a schema change, stop the services again. Install the previous DEB or use `sudo dnf downgrade ./PACKAGE.rpm`. Move the upgraded data directory aside under a distinct name. Restore the matching backup with the previous version's CLI into the now-vacant data directory.
+
+   ~~~sh
+   sudo mv /var/lib/stillwatch /var/lib/stillwatch-before-rollback
+   sudo stillwatch-cli restore --backup /var/backups/stillwatch/before-upgrade --destination /var/lib/stillwatch
+   sudo chown -R stillwatch:stillwatch /var/lib/stillwatch
+   sudo chmod 0700 /var/lib/stillwatch
+   ~~~
+
+4. Restore the saved host settings, credentials and source files where needed. Start Core and re-pair the devices. Restore keeps the Core identity, starts a new stream generation and expires queued notices from the backup. Check readiness and confirm the next live incident before restarting the notification relay.
 
 Core retains evidence JPEGs for 24 hours by default. Set evidence_retention_hours before cutover to choose how long copied images should stay accessible. Retention applies to the original capture time. Expired evidence keeps its historical metadata and is shown as unavailable.
 
