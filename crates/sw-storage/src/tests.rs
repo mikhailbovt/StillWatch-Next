@@ -1031,6 +1031,15 @@ async fn history_retention_preserves_open_incidents_and_advances_the_sse_floor()
 
 #[tokio::test]
 async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
+    exercise_semantic_evidence(true).await;
+}
+
+#[tokio::test]
+async fn local_evidence_does_not_queue_disabled_semantics() {
+    exercise_semantic_evidence(false).await;
+}
+
+async fn exercise_semantic_evidence(semantic_jobs_enabled: bool) {
     use std::time::{Duration, Instant};
 
     use sw_protocol::{
@@ -1041,7 +1050,14 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
     };
 
     let root = tempfile::tempdir().unwrap();
-    let store = Store::open(root.path(), StoreConfig::default()).unwrap();
+    let store = Store::open(
+        root.path(),
+        StoreConfig {
+            semantic_jobs_enabled,
+            ..StoreConfig::default()
+        },
+    )
+    .unwrap();
     let actor = Uuid::new_v4();
     let limits = crate::CameraLimits {
         active: 2,
@@ -1218,6 +1234,19 @@ async fn semantic_consent_controls_claim_and_invalidates_inflight_evidence() {
     assert!(!before_step.evidence_fresh(10_100, observed + Duration::from_secs(3)));
     assert!(!before_step.evidence_fresh(15_000, observed + Duration::from_millis(500)));
     let local = evidence(default_epoch, 2_000, false).await;
+    if !semantic_jobs_enabled {
+        let pending: i64 = store
+            .call(|db| {
+                Ok(db
+                    .conn
+                    .query_row("SELECT count(*) FROM semantic_jobs", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(pending, 0);
+        assert!(claim(SemanticRoute::LocalOnly, true).await.is_none());
+        return;
+    }
     assert!(claim(SemanticRoute::CloudOnly, true).await.is_none());
     assert!(claim(SemanticRoute::PreferLocal, false).await.is_none());
     assert!(claim(SemanticRoute::LocalOnly, false).await.is_none());

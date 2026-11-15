@@ -112,6 +112,19 @@ impl Database {
              UPDATE semantic_jobs SET state = 'unknown_outcome', dispatch_until = NULL
              WHERE state = 'dispatched';",
         )?;
+        if !self.semantic_jobs_enabled {
+            tx.execute(
+                "UPDATE semantic_attempts SET finished_at = ?, outcome = 'stale'
+                 WHERE finished_at IS NULL AND packet_id IN (
+                    SELECT packet_id FROM semantic_jobs WHERE state = 'response_ready'
+                 )",
+                [now],
+            )?;
+            tx.execute(
+                "UPDATE semantic_jobs SET state = 'completed' WHERE state = 'response_ready'",
+                [],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }

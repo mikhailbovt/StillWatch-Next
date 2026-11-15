@@ -505,6 +505,8 @@ async fn serve(
         .lan_listen
         .map(|address| (address, config.lan_advertise));
     let capture_worker = worker.clone();
+    let semantic_jobs_enabled =
+        config.semantic_worker.is_some() && config.semantic_token_file.is_some();
     let (store, digest, registry, lan, proxy) =
         tokio::task::spawn_blocking(move || -> Result<_> {
             let store = Store::open(
@@ -514,6 +516,7 @@ async fn serve(
                     database_quota_bytes: config
                         .database_quota_bytes
                         .unwrap_or(DEFAULT_DATABASE_QUOTA_BYTES),
+                    semantic_jobs_enabled,
                     ..StoreConfig::default()
                 },
             )?;

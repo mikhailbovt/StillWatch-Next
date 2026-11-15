@@ -376,8 +376,10 @@ impl Database {
             "UPDATE evidence_packets SET persisted_at = ?, semantic_eligible = ?, has_retirable_images = ? WHERE id = ?",
             params![committed_at, eligible, has_retirable_images, packet],
         )?;
-        let queued =
-            eligible && write.context.is_some() && matches!(outcome, EvidenceOutcome::Persisted(_));
+        let queued = self.semantic_jobs_enabled
+            && eligible
+            && write.context.is_some()
+            && matches!(outcome, EvidenceOutcome::Persisted(_));
         if queued {
             tx.execute(
                 "INSERT INTO semantic_jobs(packet_id, request_id, state) VALUES (?, ?, 'queued')",

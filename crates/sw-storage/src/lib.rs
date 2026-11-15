@@ -181,6 +181,7 @@ pub struct StoreConfig {
     pub evidence_quota_bytes: u64,
     pub database_quota_bytes: u64,
     pub queue_capacity: usize,
+    pub semantic_jobs_enabled: bool,
 }
 
 impl Default for StoreConfig {
@@ -189,6 +190,7 @@ impl Default for StoreConfig {
             evidence_quota_bytes: 500 * 1024 * 1024,
             database_quota_bytes: DEFAULT_DATABASE_QUOTA_BYTES,
             queue_capacity: 64,
+            semantic_jobs_enabled: true,
         }
     }
 }

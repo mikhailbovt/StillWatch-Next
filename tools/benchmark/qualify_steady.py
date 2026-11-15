@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import base64
+from collections import deque
 from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
@@ -57,6 +58,32 @@ def read_sources(path, profile):
     if len({source["digest"] for source in selected}) != len(selected):
         raise ValueError("Steady camera fixtures must use distinct media digests")
     return {source["id"]: source for source in selected}, manifest["viewers"]
+
+
+async def collect_snapshots(lan, session, cameras, started, seconds, rate, counts):
+    expected = seconds * rate // 60
+    spacing = 60 / rate
+    starts = deque(maxlen=rate)
+    for index in range(expected):
+        next_start = started + index * spacing
+        if len(starts) == rate:
+            # Bound each rolling minute despite jitter in local request processing.
+            next_start = max(next_start, starts[0] + 60 + min(0.05, spacing / 100))
+        await asyncio.sleep(max(0, next_start - time.monotonic()))
+        if time.monotonic() >= started + seconds:
+            break
+        starts.append(time.monotonic())
+        camera = cameras[index % len(cameras)]
+        code, headers, jpeg = await asyncio.to_thread(
+            request, lan, session["access_token"], "GET", f"/api/v2/cameras/{camera}/snapshot.jpg")
+        if time.monotonic() > started + seconds:
+            break
+        headers = {key.lower(): value for key, value in headers.items()}
+        if code == 200 and headers.get("cache-control") == "no-store" and 0 <= int(headers["x-frame-age-ms"]) <= 3000:
+            with av.open(io.BytesIO(jpeg), format="mjpeg") as image:
+                if next(image.decode(video=0), None) is not None:
+                    counts["decoded"] += 1
+        counts["requests"] += 1
 
 
 def publisher(ffmpeg, peer, source):
@@ -122,10 +149,12 @@ def resources(pid, data, device=None, accelerator=None):
     core = psutil.Process(pid)
     tree = [core, *core.children(recursive=True)]
     measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1, "cpu_seconds": 0.0,
-                    "os_handles": 0, "open_sockets": 0, "pids": []}
+                    "os_handles": 0, "open_sockets": 0, "pids": [], "rss_by_pid": {}}
     for child in tree:
         try:
-            measurements["rss_bytes"] += child.memory_info().rss
+            rss = child.memory_info().rss
+            measurements["rss_bytes"] += rss
+            measurements["rss_by_pid"][str(child.pid)] = rss
             if measurements["cpu_seconds"] is not None:
                 cpu = child.cpu_times()
                 measurements["cpu_seconds"] += cpu.user + cpu.system
@@ -211,6 +240,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                 raise RuntimeError("WHEP viewer closed during its observation window")
 
     tasks = start_viewers()
+    snapshot_task = None
     try:
         warmup_end = time.monotonic() + 95
         while True:
@@ -229,11 +259,16 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
         start_utc_ms = time.time_ns() // 1_000_000
         write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms, "metrics": start_metrics,
                                             "viewer_frames": viewer_frames.copy(), "source_scope": sample})
-        snapshots = viewer_renewals = snapshots_ok = 0
+        snapshots = {"requests": 0, "decoded": 0}
+        snapshot_task = asyncio.create_task(collect_snapshots(
+            lan, session, list(cameras.values()), started, seconds, workload["snapshot_requests_per_minute"], snapshots))
+        viewer_renewals = 0
         with (output / "samples.jsonl").open("x", encoding="utf-8", newline="\n", buffering=1) as file:
             for tick in range(seconds + 1):
                 await asyncio.sleep(max(0, started + tick - time.monotonic()))
                 check_viewers()
+                if snapshot_task.done():
+                    snapshot_task.result()
                 token_expiry = datetime.fromisoformat(session["access_expires_at"])
                 if (token_expiry - datetime.now(timezone.utc)).total_seconds() < 90:
                     proof = await asyncio.to_thread(refresh_request, settings["node"], key, offer, session)
@@ -246,23 +281,12 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                     tasks = start_viewers()
                     viewer_renewals += 1
                 per_camera = await camera_sample()
-                target = tick * workload["snapshot_requests_per_minute"] // 60
-                # At most the scheduled rate for this clock interval, with no catch-up bursts.
-                for _ in range(target - snapshots):
-                    camera = list(cameras.values())[snapshots % len(cameras)]
-                    code, headers, jpeg = await asyncio.to_thread(
-                        request, lan, session["access_token"], "GET", f"/api/v2/cameras/{camera}/snapshot.jpg")
-                    headers = {key.lower(): value for key, value in headers.items()}
-                    if code == 200 and headers.get("cache-control") == "no-store" and 0 <= int(headers["x-frame-age-ms"]) <= 3000:
-                        with av.open(io.BytesIO(jpeg), format="mjpeg") as image:
-                            if next(image.decode(video=0), None) is not None:
-                                snapshots_ok += 1
-                    snapshots += 1
                 usage = await asyncio.to_thread(resources, process.pid, root / "data", settings.get("cuda_device"),
                                                 profile["host"]["accelerator"]) if tick % 5 == 0 else None
                 file.write(json.dumps({"tick": tick, "elapsed_s": time.monotonic() - started,
                                        "cameras": per_camera, "viewer_frames": viewer_frames,
-                                       "snapshots": snapshots, "snapshots_ok": snapshots_ok, "resources": usage}) + "\n")
+                                       "snapshots": snapshots["requests"], "snapshots_ok": snapshots["decoded"],
+                                       "resources": usage}) + "\n")
         interval = time.monotonic() - started
         end_metrics = await asyncio.to_thread(metrics, local, cameras)
         observed = await asyncio.to_thread(openings, root / "data/stillwatch.sqlite3", cameras, start_utc_ms)
@@ -274,9 +298,13 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
             if first["epoch"] == last["epoch"] and before is not None and after is not None and int(after) >= int(before):
                 source_spans[camera] = (int(after) - int(before)) / 1_000_000
         write_json(output / "end.json", {"elapsed_s": interval, "metrics": end_metrics, "openings": observed,
-                                          "viewer_renewals": viewer_renewals, "snapshots": snapshots, "snapshots_ok": snapshots_ok,
+                                          "viewer_renewals": viewer_renewals, "snapshots": snapshots["requests"],
+                                          "snapshots_ok": snapshots["decoded"],
                                           "source_camera_count": len(sources), "source_seconds_by_camera": source_spans})
     finally:
+        if snapshot_task is not None:
+            snapshot_task.cancel()
+            await asyncio.gather(snapshot_task, return_exceptions=True)
         await stop_viewers()
 
 

@@ -49,6 +49,7 @@ LOGIC_CASES = {
     ),
     "storage.semantic-recovery-cutpoints": (
         ("sw-storage", "tests::semantic_consent_controls_claim_and_invalidates_inflight_evidence"),
+        ("sw-storage", "tests::local_evidence_does_not_queue_disabled_semantics"),
         ("sw-storage", "tests::a_running_command_can_commit_after_a_completion_timeout"),
     ),
     "storage.backup-publish-cutpoint": (
