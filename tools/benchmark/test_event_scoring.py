@@ -13,6 +13,7 @@ from event_scoring import coverage_intervals, score_clip
 from fast_rc_contract import verified_quiet_window
 from legacy_replay import measured_clip
 from validate_report import canary_matches
+from validate_steady import Steady
 
 
 LIMITS = {"before_onset_tolerance_s": 2, "max_delay_s": 8, "minimum_roi_iou": 0.3,
@@ -43,6 +44,25 @@ def annotation(id, start, roi):
 
 
 class EventScoring(unittest.TestCase):
+    def test_stalled_viewer_fails_despite_decoding_at_the_start(self):
+        steady = Steady.__new__(Steady)
+        steady.workload = {"viewer_sessions": 2, "snapshot_requests_per_minute": 8, "evidence_fps": 1}
+        steady.budgets = {"viewer_recovery_ms": 15_000}
+        steady.sources = {"sources": [], "viewers": []}
+        steady.cameras = ["camera"]
+        steady.limits = {"minimum_seconds": 30}
+        steady.start = {"cameras": {"camera": "id"}, "viewer_frames": {"0": 100, "1": 100}}
+        steady.end = {"elapsed_s": 30}
+        steady.observations = {"isolated": True, "exit_code": 0}
+        steady.rows = [{"tick": tick, "elapsed_s": tick, "viewer_frames": {"0": 100 + tick, "1": 100 + tick},
+                        "snapshots": tick * 8 // 60, "snapshots_ok": tick * 8 // 60} for tick in range(31)]
+        self.assertEqual(steady.media()[2], "PASS")
+        for row in steady.rows[5:]:
+            row["viewer_frames"]["1"] = 104
+        _, observed, verdict = steady.media()
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(observed["stalled_viewers"], ["1"])
+
     def test_fixed_replay_phase_changes_slots_at_exact_microsecond_boundaries(self):
         window_start = 2_000_000
         phase_offset = 66_666

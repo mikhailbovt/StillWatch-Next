@@ -61,6 +61,25 @@ def read_samples(path):
     return rows
 
 
+def viewer_gaps_ms(rows, start):
+    progress = {key: (count, 0.0) for key, count in start.items()}
+    longest = dict.fromkeys(start, 0.0)
+    for row in rows:
+        counters = row["viewer_frames"]
+        if counters.keys() != start.keys():
+            return None
+        for key, count in counters.items():
+            previous, advanced_at = progress[key]
+            if type(count) is not int or count < previous:
+                return None
+            now = row["elapsed_s"]
+            if count > previous:
+                progress[key] = count, now
+            else:
+                longest[key] = max(longest[key], (now - advanced_at) * 1000)
+    return longest
+
+
 class Steady:
     def __init__(self, artifacts, profile, contract, proof):
         self.rows = read_samples(artifacts("samples"))
@@ -182,8 +201,9 @@ class Steady:
     def media(self):
         required = {"decoded_viewer_sessions": self.workload["viewer_sessions"],
                     "snapshot_requests_per_minute": self.workload["snapshot_requests_per_minute"],
-                    "snapshot_decode_fraction": 1, "evidence_fps": self.workload["evidence_fps"]}
-        if not self.rows:
+                    "snapshot_decode_fraction": 1, "evidence_fps": self.workload["evidence_fps"],
+                    "maximum_viewer_gap_ms": self.budgets["viewer_recovery_ms"]}
+        if not self.rows or not self.start:
             return required, {}, "INCOMPLETE"
         main_streams = {stream["id"]: stream["detail"] for stream in self.sources["sources"] if "detail" in stream}
         detail_geometry = {str(index): detail_output_dimensions(main_streams[viewer["camera"]])
@@ -194,17 +214,21 @@ class Steady:
         last = self.rows[-1]
         start = self.start["viewer_frames"]
         viewers = {key: frames - start.get(key, 0) for key, frames in last["viewer_frames"].items()}
+        expected_ids = {str(index) for index in range(required["decoded_viewer_sessions"])}
+        gaps = viewer_gaps_ms(self.rows, start) if start.keys() == expected_ids else None
+        stalled = sorted(key for key, gap in (gaps or {}).items() if gap > required["maximum_viewer_gap_ms"])
         snapshots = last["snapshots"]
         observed = {"decoded_frames_by_viewer": viewers, "snapshot_requests": snapshots, "snapshots_decoded": last["snapshots_ok"],
-                    "expected_snapshot_requests": last["tick"] * required["snapshot_requests_per_minute"] // 60}
+                    "expected_snapshot_requests": last["tick"] * required["snapshot_requests_per_minute"] // 60,
+                    "maximum_observed_viewer_gap_ms": gaps, "stalled_viewers": stalled}
         geometries = last.get("viewer_geometry", {})
         if geometries:
             observed["frame_geometry_by_viewer"] = geometries
         if any(key in geometries and geometries[key] != size for key, size in detail_geometry.items()):
             return required, observed, "FAIL"
-        if snapshots != last["snapshots_ok"]:
+        if stalled or snapshots != last["snapshots_ok"]:
             return required, observed, "FAIL"
-        coverage = len(viewers) == required["decoded_viewer_sessions"] and all(count > 0 for count in viewers.values())
+        coverage = gaps is not None and all(count > 0 for count in viewers.values())
         if (not coverage or not detail_geometry.keys() <= geometries.keys()
                 or observed["expected_snapshot_requests"] != snapshots or self.interval()[2] != "PASS"):
             return required, observed, "INCOMPLETE"
