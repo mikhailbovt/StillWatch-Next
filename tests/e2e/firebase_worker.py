@@ -225,7 +225,11 @@ def run(args):
         with launch([str(node), str(entry), str(config), str(port), str(core_token), str(app_check),
                      str(browser_token)], root / "hybrid.log"):
             until(lambda: check_port(port))
-            assert request(origin, "/")[0] == 200
+            status, page, headers = request(origin, "/", include_headers=True)
+            assert status == 200 and b'id="evaluation-frame"' in page and b'id="evaluation-route"' in page
+            assert headers["Cache-Control"] == "no-store" and "img-src 'self' blob:" in headers["Content-Security-Policy"]
+            status, _, headers = request(origin, "/worker.css", include_headers=True)
+            assert status == 200 and headers.get_content_type() == "text/css"
             assert request(origin, "/hybrid.js")[0] == 200
             assert request(origin, "/device/config", core_credential)[0] == 401
             status, body = request(origin, "/device/config", browser_credential)

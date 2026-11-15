@@ -9,6 +9,18 @@ const connect = document.querySelector("#connect");
 const keep = document.querySelector("#keep");
 const disconnect = document.querySelector("#disconnect");
 const prepare = document.querySelector("#prepare");
+const evaluation = document.querySelector("#evaluation");
+const incident = document.querySelector("#evaluation-incident");
+const evidenceVersion = document.querySelector("#evaluation-version");
+const requestedRoute = document.querySelector("#evaluation-requested");
+const executionRoute = document.querySelector("#evaluation-route");
+const evaluationModel = document.querySelector("#evaluation-model");
+const evaluationClassification = document.querySelector("#evaluation-classification");
+const evaluationResult = document.querySelector("#evaluation-result");
+const evidence = document.querySelector("#evaluation-evidence");
+const frame = document.querySelector("#evaluation-frame");
+const frameTime = document.querySelector("#evaluation-frame-time");
+const routeNames = { cloud_only: "Cloud only", local_only: "On-device only", prefer_local: "Prefer on-device" };
 const savedCredential = "stillwatch.worker.credential";
 let credential = "";
 let reconnect;
@@ -17,6 +29,8 @@ let ai;
 let state = "unavailable";
 let nextWarmup = 0;
 let currentJob;
+let evidenceUrl;
+let evidenceTimer;
 
 function request(path, options = {}) {
   const { headers, ...init } = options;
@@ -27,10 +41,44 @@ function request(path, options = {}) {
 
 connect.addEventListener("click", () => void connectBrowser(key.value.trim(), keep.checked));
 disconnect.addEventListener("click", () => {
+  hideEvidence();
   rememberCredential(null);
   credential = "";
   window.location.reload();
 });
+
+function hideEvidence() {
+  clearTimeout(evidenceTimer);
+  evidence.hidden = true;
+  frame.removeAttribute("src");
+  if (evidenceUrl) URL.revokeObjectURL(evidenceUrl);
+  evidenceUrl = undefined;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") hideEvidence();
+});
+window.addEventListener("pagehide", hideEvidence);
+document.addEventListener("freeze", hideEvidence);
+
+function showPacket(packet) {
+  const { meta } = packet;
+  incident.textContent = meta.incident_id;
+  evidenceVersion.textContent = meta.evidence_version;
+  requestedRoute.textContent = routeNames[meta.route];
+  executionRoute.textContent = "Waiting for the provider";
+  evaluationModel.textContent = "Pending";
+  evaluationClassification.textContent = "Pending";
+  evaluationResult.textContent = "";
+  evaluation.hidden = false;
+  if (document.visibilityState !== "visible") return;
+  const overview = packet.images.findLast(image => image.kind === "overview");
+  evidenceUrl = URL.createObjectURL(new Blob([overview.jpeg], { type: "image/jpeg" }));
+  frame.src = evidenceUrl;
+  frameTime.textContent = `Masked overview ${overview.id} at ${overview.source_s.toFixed(2)} s`;
+  evidence.hidden = false;
+  evidenceTimer = setTimeout(hideEvidence, meta.timeout_ms);
+}
 
 function rememberCredential(value) {
   try {
@@ -182,6 +230,8 @@ async function poll() {
       if (response.status === 200) await serveJob(response);
     } catch {
       reconnecting = true;
+      hideEvidence();
+      evaluation.hidden = true;
       status.textContent = "Connection interrupted. Reconnecting…";
       await new Promise(resolve => setTimeout(resolve, 1_000));
     }
@@ -191,24 +241,48 @@ async function poll() {
 async function serveJob(response) {
   const requestId = response.headers.get("X-StillWatch-Request");
   currentJob = requestId;
+  hideEvidence();
+  evaluation.hidden = true;
   let result;
+  let failure;
   try {
     const packet = await decodePacket(await response.arrayBuffer());
+    showPacket(packet);
     result = await evaluate(ai, configured.model, packet, AbortSignal.timeout(packet.meta.timeout_ms),
       { browser: true, deviceReady: state === "ready" });
-    status.textContent = result.inference_source === "on_device" ? "Last evaluation ran on this device." : "Last evaluation ran in the cloud.";
   } catch (error) {
     result = { error: "inference_unavailable" };
-    const reason = evaluationFailure(error);
-    status.textContent = `Evaluation unavailable (${reason}). Waiting for the next request.`;
+    failure = evaluationFailure(error);
+    hideEvidence();
   } finally {
     currentJob = undefined;
   }
-  await request("/device/result", {
+  const submitted = await request("/device/result", {
     method: "POST", body: JSON.stringify(result),
     headers: { "Content-Type": "application/json", "X-StillWatch-Request": requestId },
     signal: AbortSignal.timeout(4_000),
   });
+  if (submitted.status === 409) {
+    hideEvidence();
+    evaluation.hidden = true;
+    status.textContent = "The worker discarded the result after its deadline.";
+    return;
+  }
+  if (!submitted.ok) throw new Error("result_submission");
+  if (failure) {
+    executionRoute.textContent = "Unavailable";
+    evaluationModel.textContent = "Unavailable";
+    evaluationClassification.textContent = "Unavailable";
+    evaluationResult.textContent = `Evaluation unavailable (${failure}).`;
+    status.textContent = `Evaluation unavailable (${failure}). Waiting for the next request.`;
+    return;
+  }
+  const local = result.inference_source === "on_device";
+  executionRoute.textContent = local ? "On this device" : "In the cloud";
+  evaluationModel.textContent = result.model;
+  evaluationClassification.textContent = result.observation.classification.replaceAll("_", " ");
+  evaluationResult.textContent = result.observation.brief_description;
+  status.textContent = local ? "Last evaluation ran on this device." : "Last evaluation ran in the cloud.";
 }
 
 function evaluationFailure(error) {

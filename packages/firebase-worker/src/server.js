@@ -12,6 +12,7 @@ const DEVICE_WAIT_MS = 4_000;
 const DEVICE_GRACE_MS = 8_000;
 const browserPath = new URL("../dist/hybrid.js", import.meta.url);
 const pagePath = new URL("../public/index.html", import.meta.url);
+const stylePath = new URL("../public/worker.css", import.meta.url);
 
 async function readFile(path, limit, privateFile = false) {
   const file = await open(path, "r");
@@ -79,6 +80,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
   const origin = "http://" + host;
   const hybrid = config.mode === "hybrid_web";
   const page = hybrid ? await readFile(pagePath, 8192) : null;
+  const style = hybrid ? await readFile(stylePath, 8192) : null;
   const script = hybrid ? await readFile(browserPath, 2 * 1024 * 1024) : null;
   let localState = "disconnected";
   let lastBrowserSeen = 0;
@@ -100,7 +102,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY",
       // The Firebase Chrome adapter decodes an inline JPEG with fetch(data:).
-      "Content-Security-Policy": "default-src 'self'; script-src 'self' https://www.google.com https://www.gstatic.com https://www.recaptcha.net; connect-src 'self' data: https://*.googleapis.com https://www.google.com https://www.recaptcha.net; frame-src https://www.google.com https://www.recaptcha.net; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "Content-Security-Policy": "default-src 'self'; img-src 'self' blob:; script-src 'self' https://www.google.com https://www.gstatic.com https://www.recaptcha.net; connect-src 'self' data: https://*.googleapis.com https://www.google.com https://www.recaptcha.net; frame-src https://www.google.com https://www.recaptcha.net; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     });
     res.end(contentType === "application/json" ? JSON.stringify(body) : body);
   }
@@ -146,6 +148,7 @@ async function serve(path, port, coreTokenFile, appCheckFile, browserTokenFile) 
       return reply(res, 403, { error: "origin_denied" });
     }
     if (hybrid && req.method === "GET" && req.url === "/") return reply(res, 200, page, "text/html; charset=utf-8");
+    if (hybrid && req.method === "GET" && req.url === "/worker.css") return reply(res, 200, style, "text/css; charset=utf-8");
     if (hybrid && req.method === "GET" && req.url === "/hybrid.js") return reply(res, 200, script, "text/javascript; charset=utf-8");
     if (hybrid && req.url?.startsWith("/device/")) {
       if (!authenticated(req, browserDigest)) return reply(res, 401, { error: "unauthorized" });
