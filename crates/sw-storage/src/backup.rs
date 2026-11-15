@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, OpenOptions, TryLockError},
+    fs::{self, File, OpenOptions},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::{
     Identity, StoreError,
     db::{
-        APPLICATION_ID, DATABASE_FILE, Database, SCHEMA_VERSION, id, migrate, private_dir,
-        read_identity,
+        APPLICATION_ID, DATABASE_FILE, Database, ExclusiveFileLock, SCHEMA_VERSION, id, migrate,
+        private_dir, read_identity,
     },
     evidence::{BlobInfo, available_blobs, blob_path, file_digest, sync_directory, verify_blob},
 };
@@ -89,7 +89,7 @@ struct Manifest {
 
 struct ArchiveStage {
     path: PathBuf,
-    _lock: File,
+    _lock: ExclusiveFileLock,
 }
 
 impl ArchiveStage {
@@ -110,17 +110,7 @@ impl ArchiveStage {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(lock_path)?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(StoreError::ArchiveInUse),
-            Err(TryLockError::Error(error)) => return Err(error.into()),
-        }
+        let lock = ExclusiveFileLock::acquire(&lock_path, StoreError::ArchiveInUse)?;
         // Only the owner of the lock can stage or clear an unfinished copy.
         let path = staging.join("pending");
         match fs::symlink_metadata(&path) {

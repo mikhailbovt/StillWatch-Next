@@ -29,6 +29,31 @@ pub const SCHEMA_VERSION: i64 = 17;
 pub(crate) const IDEMPOTENCY_TTL: i64 = 7 * 24 * 60 * 60 * 1_000;
 const ALERT_TTL: i64 = 60 * 60 * 1_000;
 
+pub(crate) struct ExclusiveFileLock(File);
+
+impl ExclusiveFileLock {
+    pub(crate) fn acquire(path: &Path, conflict: StoreError) -> Result<Self, StoreError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self(file)),
+            Err(TryLockError::WouldBlock) => Err(conflict),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+}
+
+impl Drop for ExclusiveFileLock {
+    fn drop(&mut self) {
+        // A concurrent fork can retain a descriptor until its exec closes it.
+        let _ = self.0.unlock();
+    }
+}
+
 pub(crate) struct Database {
     pub(crate) conn: Connection,
     pub(crate) budget: DatabaseBudget,
@@ -41,13 +66,30 @@ pub(crate) struct Database {
     evidence_recovery_pending: bool,
     pub(crate) notify: watch::Sender<()>,
     pub(crate) refresh_key: ring::aead::LessSafeKey,
-    _lock: File,
+    // Drop the connection before unlocking the data directory.
+    _lock: ExclusiveFileLock,
 }
 
 struct HazardObservation {
     time: crate::ObservationTime,
     facts: Option<String>,
     geometry: Option<(SceneSignature, Box2d, bool)>,
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn clean_shutdown_unlocks_even_with_an_inherited_descriptor() {
+    let root = tempfile::tempdir().unwrap();
+    let config = StoreConfig::default();
+    let database = Database::open(root.path(), &config, watch::channel(()).0).unwrap();
+    let inherited = database._lock.0.try_clone().unwrap();
+    assert!(matches!(
+        Database::open(root.path(), &config, watch::channel(()).0),
+        Err(StoreError::InUse)
+    ));
+    drop(database);
+    Database::open(root.path(), &config, watch::channel(()).0).unwrap();
+    drop(inherited);
 }
 
 impl Database {
@@ -57,17 +99,7 @@ impl Database {
         notify: watch::Sender<()>,
     ) -> Result<Self, StoreError> {
         private_dir(root)?;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(root.join("instance.lock"))?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(StoreError::InUse),
-            Err(TryLockError::Error(error)) => return Err(error.into()),
-        }
+        let lock = ExclusiveFileLock::acquire(&root.join("instance.lock"), StoreError::InUse)?;
         let blobs = root.join("blobs");
         private_dir(&blobs)?;
         let file = root.join(DATABASE_FILE);
