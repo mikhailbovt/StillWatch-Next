@@ -381,6 +381,8 @@ impl Database {
             )?;
         }
         tx.commit()?;
+        #[cfg(test)]
+        crate::tests::pause_at_file_cutpoint(&self.blobs, "evidence-committed");
         if queued && let Some(time) = write.observation_time {
             let now = Instant::now();
             self.evidence_monotonic
@@ -896,10 +898,14 @@ pub(crate) fn write_blob(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), S
         .tempfile_in(root)?;
     staging.write_all(bytes)?;
     staging.as_file().sync_all()?;
+    #[cfg(test)]
+    crate::tests::pause_at_file_cutpoint(root, "jpeg-synced");
     staging
         .persist_noclobber(path)
         .map_err(|error| error.error)?;
     sync_directory(root)?;
+    #[cfg(test)]
+    crate::tests::pause_at_file_cutpoint(root, "blob-renamed");
     Ok(())
 }
 

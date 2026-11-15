@@ -12,7 +12,7 @@ use crate::{
     BackupLimits, CameraAction, CameraCommand, CameraLimits, ChangeCursor, EvidenceFailure,
     EvidenceImage, EvidenceOutcome, EvidenceWrite, HealthIssue, HealthObservation, OperatorCommand,
     Store, StoreConfig, StoreError,
-    db::{DATABASE_FILE, Database},
+    db::{DATABASE_FILE, Database, SCHEMA_VERSION},
     restore_backup, restore_backup_with_limits,
 };
 
@@ -2400,4 +2400,220 @@ async fn restore_checks_blob_integrity_and_rotates_stream_generation() {
     let rejected = root.path().join("rejected");
     assert!(restore_backup(&backup, &rejected).is_err());
     assert!(!rejected.exists());
+}
+
+const CUTPOINT_ROOT: &str = "STILLWATCH_TEST_CUTPOINT_ROOT";
+const CUTPOINT_NAME: &str = "STILLWATCH_TEST_CUTPOINT_NAME";
+
+pub(crate) fn pause_at_file_cutpoint(path: &Path, name: &str) {
+    let Some(root) = std::env::var_os(CUTPOINT_ROOT) else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    if !path.starts_with(&root) || std::env::var(CUTPOINT_NAME).ok().as_deref() != Some(name) {
+        return;
+    }
+    fs::write(root.join("at-cutpoint"), name.as_bytes()).unwrap();
+    loop {
+        std::thread::park();
+    }
+}
+
+fn launch_crash_cutpoint(test: &str, root: &Path, name: &str) -> std::process::Child {
+    use std::{
+        process::{Command, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test])
+        .env(CUTPOINT_ROOT, root)
+        .env(CUTPOINT_NAME, name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let ready = root.join("at-cutpoint");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while fs::read_to_string(&ready).ok().as_deref() != Some(name) {
+        if Instant::now() >= deadline || child.try_wait().unwrap().is_some() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child test did not reach {name}");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    child
+}
+
+#[test]
+fn backup_crash_before_publish_reclaims_the_staged_snapshot() {
+    if let Some(root) = std::env::var_os(CUTPOINT_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        database(&root.join("live"), 4 * 1024 * 1024)
+            .backup(&root.join("backup"), BackupLimits::default())
+            .unwrap();
+        panic!("child backup passed the pre-publish cutpoint");
+    }
+
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let live = root.join("live");
+    let backup = root.join("backup");
+    let mut db = database(&live, 4 * 1024 * 1024);
+    let incident = db.create(incident(), 1_000).unwrap();
+    let stamp = EvidenceStamp {
+        packet_id: Uuid::new_v4(),
+        version: 1,
+        scope: incident.scope,
+        expires_at: 9_000,
+    };
+    db.persist_evidence(evidence_write(&incident, stamp, &[BLACK]), 2_000)
+        .unwrap();
+    let identity = db.identity;
+    drop(db);
+
+    let mut child = launch_crash_cutpoint(
+        "tests::backup_crash_before_publish_reclaims_the_staged_snapshot",
+        root,
+        "backup-before-publish",
+    );
+    let mut concurrent = database(&root.join("secondary"), 4 * 1024 * 1024);
+    let concurrent_result = concurrent.backup(&root.join("other"), BackupLimits::default());
+    let was_published = backup.exists();
+    let _ = child.kill();
+    let child_status = child.wait().unwrap();
+
+    let staging = root.join(".stillwatch-archive/pending");
+    assert!(!child_status.success() && !was_published);
+    assert!(matches!(concurrent_result, Err(StoreError::ArchiveInUse)));
+    assert!(staging.join("manifest.json").is_file());
+    // The reopened writer must replace this abandoned copy before publishing.
+    fs::write(staging.join("abandoned"), b"check cleanup").unwrap();
+    let mut db = database(&live, 4 * 1024 * 1024);
+    let integrity: String = db
+        .conn
+        .pragma_query_value(None, "integrity_check", |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    let invalid: i64 = db
+        .conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(invalid, 0);
+    assert_eq!(db.identity, identity);
+    db.backup(&backup, BackupLimits::default()).unwrap();
+    assert!(!staging.exists() && !backup.join("abandoned").exists());
+
+    let target = root.join("restored");
+    let restored_identity = restore_backup(&backup, &target).unwrap();
+    assert_eq!(restored_identity.instance_id, identity.instance_id);
+    assert_ne!(restored_identity.generation, identity.generation);
+    let restored = database(&target, 4 * 1024 * 1024);
+    assert_eq!(
+        restored
+            .read_evidence(incident.id, stamp.packet_id, 0)
+            .unwrap()
+            .as_deref(),
+        Some(BLACK)
+    );
+}
+
+#[test]
+fn process_crash_around_jpeg_and_metadata_recovers_the_same_storage() {
+    let quota = 4 * 1024 * 1024;
+    let packet_id = Uuid::from_u128(0x69c1);
+    if let Some(root) = std::env::var_os(CUTPOINT_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        let mut db = database(&root, quota);
+        let bytes: Vec<u8> = db
+            .conn
+            .query_row("SELECT id FROM incidents", [], |row| row.get(0))
+            .unwrap();
+        let active = db.get(Uuid::from_slice(&bytes).unwrap()).unwrap();
+        let stamp = EvidenceStamp {
+            packet_id,
+            version: 1,
+            scope: active.scope,
+            expires_at: 9_000,
+        };
+        db.persist_evidence(evidence_write(&active, stamp, &[BLACK]), 2_000)
+            .unwrap();
+        panic!("child evidence write passed the requested cutpoint");
+    }
+
+    for point in ["jpeg-synced", "blob-renamed", "evidence-committed"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut db = database(root.path(), quota);
+        let created = db.create(incident(), 1_000).unwrap();
+        drop(db);
+        let db = database(root.path(), quota);
+        let active = db.get(created.id).unwrap();
+        let blobs = db.blobs.clone();
+        let stamp = EvidenceStamp {
+            packet_id,
+            version: 1,
+            scope: active.scope,
+            expires_at: 9_000,
+        };
+        drop(db);
+        let mut child = launch_crash_cutpoint(
+            "tests::process_crash_around_jpeg_and_metadata_recovers_the_same_storage",
+            root.path(),
+            point,
+        );
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+
+        let staged: Vec<_> = fs::read_dir(&blobs)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(
+            staged[0].to_string_lossy().starts_with(".pending-"),
+            point == "jpeg-synced"
+        );
+        let mut recovered = database(root.path(), quota);
+        let integrity = recovered
+            .conn
+            .pragma_query_value(None, "integrity_check", |row| row.get::<_, String>(0))
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        crate::backup::validate_database(&recovered.conn, SCHEMA_VERSION).unwrap();
+        let saved = recovered
+            .read_evidence(active.id, stamp.packet_id, 0)
+            .unwrap();
+        if point == "evidence-committed" {
+            assert_eq!(saved.as_deref(), Some(BLACK));
+            recovered
+                .persist_evidence(evidence_write(&active, stamp, &[BLACK]), 2_100)
+                .unwrap();
+        } else {
+            assert!(saved.is_none() && fs::read_dir(&blobs).unwrap().next().is_none());
+            let refreshed = recovered.get(active.id).unwrap();
+            let next = EvidenceStamp {
+                packet_id: Uuid::new_v4(),
+                version: 2,
+                ..stamp
+            };
+            assert!(matches!(
+                recovered
+                    .persist_evidence(evidence_write(&refreshed, next, &[BLACK]), 2_100)
+                    .unwrap(),
+                EvidenceOutcome::Persisted(_)
+            ));
+        }
+        let packets: i64 = recovered
+            .conn
+            .query_row("SELECT count(*) FROM evidence_packets", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(packets, 1);
+        assert_eq!(counts(&recovered.conn).2, 1);
+        assert_eq!(fs::read_dir(&blobs).unwrap().count(), 1);
+    }
 }

@@ -1,7 +1,7 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    path::Path,
+    fs::{self, File, OpenOptions, TryLockError},
+    io::{ErrorKind, Read, Write},
+    path::{Path, PathBuf},
 };
 
 use rusqlite::{
@@ -21,6 +21,7 @@ use crate::{
 };
 
 const MANIFEST: &str = "manifest.json";
+const ARCHIVE_STAGING: &str = ".stillwatch-archive";
 const MANIFEST_LIMIT: u64 = 16 * 1024 * 1024;
 const DEFAULT_BACKUP_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const DESTINATION_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
@@ -86,6 +87,70 @@ struct Manifest {
     blobs: Vec<BlobInfo>,
 }
 
+struct ArchiveStage {
+    path: PathBuf,
+    _lock: File,
+}
+
+impl ArchiveStage {
+    fn new(parent: &Path, destination: &Path) -> Result<Self, StoreError> {
+        if destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(ARCHIVE_STAGING))
+        {
+            return Err(StoreError::Invalid);
+        }
+        let staging = parent.join(ARCHIVE_STAGING);
+        private_dir(&staging)?;
+        let lock_path = staging.join("operation.lock");
+        match fs::symlink_metadata(&lock_path) {
+            Ok(entry) if !entry.file_type().is_file() => return Err(StoreError::Invalid),
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Err(StoreError::ArchiveInUse),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        // Only the owner of the lock can stage or clear an unfinished copy.
+        let path = staging.join("pending");
+        match fs::symlink_metadata(&path) {
+            Ok(entry) if entry.file_type().is_dir() => fs::remove_dir_all(&path)?,
+            Ok(_) => return Err(StoreError::Invalid),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        private_dir(&path)?;
+        Ok(Self { path, _lock: lock })
+    }
+
+    fn publish(&self, destination: &Path) -> Result<(), StoreError> {
+        sync_directory(&self.path)?;
+        let parent = fresh_destination(destination)?;
+        #[cfg(test)]
+        crate::tests::pause_at_file_cutpoint(destination, "backup-before-publish");
+        fs::rename(&self.path, destination)?;
+        sync_directory(parent)?;
+        sync_directory(&parent.join(ARCHIVE_STAGING))?;
+        Ok(())
+    }
+}
+
+impl Drop for ArchiveStage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 impl Database {
     pub fn backup(&mut self, destination: &Path, limits: BackupLimits) -> Result<(), StoreError> {
         let parent = fresh_destination(destination)?;
@@ -108,11 +173,9 @@ impl Database {
         if manifest_bytes > MANIFEST_LIMIT {
             return Err(StoreError::Invalid);
         }
+        let stage = ArchiveStage::new(parent, destination)?;
         limits.plan(parent, size, manifest_bytes, &manifest.blobs)?;
-        let stage = tempfile::Builder::new()
-            .prefix(".stillwatch-backup-")
-            .tempdir_in(parent)?;
-        let db_path = stage.path().join(DATABASE_FILE);
+        let db_path = stage.path.join(DATABASE_FILE);
         let mut target = Connection::open(&db_path)?;
         copy_database(&self.conn, &mut target, pages)?;
         target.execute_batch("PRAGMA journal_mode = DELETE; PRAGMA trusted_schema = OFF;")?;
@@ -124,7 +187,7 @@ impl Database {
         if actual > size {
             return Err(StoreError::BackupCapacity);
         }
-        let target_blobs = stage.path().join("blobs");
+        let target_blobs = stage.path.join("blobs");
         private_dir(&target_blobs)?;
         copy_blobs(&manifest.blobs, &self.blobs, &target_blobs)?;
         drop(target);
@@ -134,15 +197,11 @@ impl Database {
         if bytes.len() as u64 > MANIFEST_LIMIT {
             return Err(StoreError::Invalid);
         }
-        let mut output = File::create(stage.path().join(MANIFEST))?;
+        let mut output = File::create(stage.path.join(MANIFEST))?;
         output.write_all(&bytes)?;
         output.sync_all()?;
         drop(output);
-        sync_directory(stage.path())?;
-        fresh_destination(destination)?;
-        fs::rename(stage.path(), destination)?;
-        sync_directory(parent)?;
-        Ok(())
+        stage.publish(destination)
     }
 }
 
@@ -175,11 +234,9 @@ pub fn restore_backup_with_limits(
         return Err(StoreError::Invalid);
     }
     let length = source_metadata.len();
+    let stage = ArchiveStage::new(parent, destination)?;
     let planned = limits.plan(parent, length, bytes.len() as u64, &manifest.blobs)?;
-    let stage = tempfile::Builder::new()
-        .prefix(".stillwatch-restore-")
-        .tempdir_in(parent)?;
-    let restored_db = stage.path().join(DATABASE_FILE);
+    let restored_db = stage.path.join(DATABASE_FILE);
     copy_file(&source_db, &restored_db, length)?;
     if file_digest(&restored_db)? != manifest.database_sha256 {
         return Err(StoreError::Invalid);
@@ -203,7 +260,7 @@ pub fn restore_backup_with_limits(
     let allowed_pages = database_budget / page_size as u64;
     let allowed_pages = allowed_pages.min(current_limit as u64) as i64;
     conn.pragma_update(None, "max_page_count", allowed_pages)?;
-    let blobs = stage.path().join("blobs");
+    let blobs = stage.path.join("blobs");
     private_dir(&blobs)?;
     copy_blobs(&manifest.blobs, &backup.join("blobs"), &blobs)?;
     let generation = Uuid::new_v4();
@@ -222,10 +279,7 @@ pub fn restore_backup_with_limits(
         .write(true)
         .open(restored_db)?
         .sync_all()?;
-    sync_directory(stage.path())?;
-    fresh_destination(destination)?;
-    fs::rename(stage.path(), destination)?;
-    sync_directory(parent)?;
+    stage.publish(destination)?;
     Ok(Identity {
         generation,
         ..original

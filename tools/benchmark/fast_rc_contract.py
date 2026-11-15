@@ -38,6 +38,7 @@ LOGIC_CASES = {
     "storage.incident-outbox-and-blob-cutpoints": (
         ("sw-storage", "tests::incident_change_and_outbox_rollback_together"),
         ("sw-storage", "tests::evidence_commit_failure_leaves_a_reconcilable_orphan"),
+        ("sw-storage", "tests::process_crash_around_jpeg_and_metadata_recovers_the_same_storage"),
         ("sw-storage", "tests::evidence_retention_tracks_references_across_restarts"),
         ("sw-storage", "tests::uncertain_blob_bytes_recount_in_maintenance_slices"),
         ("sw-storage", "tests::quota_partial_packet_and_missing_blob_are_visible_after_restart"),
@@ -46,6 +47,9 @@ LOGIC_CASES = {
     "storage.semantic-recovery-cutpoints": (
         ("sw-storage", "tests::semantic_consent_controls_claim_and_invalidates_inflight_evidence"),
         ("sw-storage", "tests::a_running_command_can_commit_after_a_completion_timeout"),
+    ),
+    "storage.backup-publish-cutpoint": (
+        ("sw-storage", "tests::backup_crash_before_publish_reclaims_the_staged_snapshot"),
     ),
     "storage.restore-integrity-and-generation": (
         ("sw-storage", "tests::restore_checks_blob_integrity_and_rotates_stream_generation"),

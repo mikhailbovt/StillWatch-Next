@@ -90,6 +90,8 @@ pub enum StoreError {
     DatabaseCapacity,
     #[error("backup exceeds its byte budget or available destination space")]
     BackupCapacity,
+    #[error("another backup or restore is staging a copy in the destination parent")]
+    ArchiveInUse,
     #[error("incident does not exist")]
     NotFound,
     #[error("incident already exists with different creation facts")]
