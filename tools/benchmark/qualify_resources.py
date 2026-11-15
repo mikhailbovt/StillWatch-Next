@@ -108,7 +108,7 @@ class ChurnResources:
             if time.monotonic() >= deadline:
                 break
             time.sleep(0.2)
-        write_json(output, {"samples": self.records,
+        write_json(output, {"sampling_started_monotonic_s": self.begin, "samples": self.records,
                             "drain": {"elapsed_ms": (time.monotonic() - began) * 1_000,
                                       "usage": usage, "leases": leases, "writer": writer, "detached": detached,
                                       "enabled_cameras": cameras[0], "reserved_frame_bytes": cameras[1],
