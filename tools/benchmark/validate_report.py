@@ -13,9 +13,9 @@ import statistics
 import sys
 
 from fast_rc_contract import (
-    CONTRACTS, DIGEST, LOGIC_CASES, PROTOCOL, ROOT, RUN_ID, STAGES,
-    checked_evidence, checked_execution_profile, checked_json, contract_digests, member, number, sha256,
-    validate_schema, write_json,
+    CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, ROOT, RUN_ID, STAGES,
+    camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
+    inference_cameras_recovered, inference_worker_replaced, member, number, sha256, validate_schema, write_json,
 )
 from validate_steady import Steady, resource_caps, upper_growth
 
@@ -45,6 +45,12 @@ def canary_matches(incidents, planned):
             and planned["earliest_source_us"] <= int(incident["source_us"]) <= planned["latest_source_us"]
             and incident["live"] is True and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
             and incident["utc_ms"] <= incident["receipt_utc_ms"]]
+
+
+def persisted_blobs_clean(checks):
+    return (checks.get("integrity") == ["ok"] and checks.get("invalid_references") == 0
+            and checks.get("duplicate_attention_cycles") == 0 and checks.get("verified_blobs", 0) > 0
+            and checks["expected_blobs"] == checks["verified_blobs"])
 
 
 class Validation:
@@ -388,6 +394,7 @@ class Validation:
         failed = []
         seen = set()
         seen_incidents = set()
+        tracked = None
         for row in faults:
             name = row["id"]
             planned = expected_faults.get(name)
@@ -412,6 +419,39 @@ class Validation:
             raw = checked_json(checked_evidence(self.root, canary))
             if raw.get("planned") != planned["canary"] or not isinstance(raw.get("incidents"), list):
                 raise ValueError("Canary is missing the frozen event specification or native incident rows")
+            progress = row.get("capture_progress_s")
+            new_epoch = row["kind"] in {"rtsp_reconnect", "core_restart"}
+            if not number(progress) or not started <= progress <= finished or not camera_recovered(
+                    raw["source_before"], raw["source_after"], new_epoch):
+                continue
+            fault = row["fault"]
+            if row["kind"] == "inference_child_restart":
+                observed_recovery = raw.get("inference_recovery")
+                if not observed_recovery:
+                    continue
+                if tracked is None:
+                    source = self.artifact(proof, "sources")
+                    workload = self.profile["workload"]
+                    if sha256(source) != workload["source_manifest_digest"]:
+                        raise ValueError("Inference recovery source input differs from the frozen workload")
+                    tracked = {item["id"] for item in checked_json(source)["sources"][:workload["camera_count"]]}
+                    if len(tracked) != workload["camera_count"]:
+                        raise ValueError("Inference recovery source input repeats or omits cameras")
+                camera = row["camera"]
+                if (not inference_worker_replaced(fault, self.profile["models"]["workers"])
+                        or not inference_cameras_recovered(observed_recovery, tracked)
+                        or observed_recovery["before"][camera] != raw["source_before"]
+                        or observed_recovery["after"][camera] != raw["source_after"]):
+                    continue
+            if row["kind"] == "viewer_grant_offer_close" and (
+                    fault.get("viewer_frames_decoded") != 2 or fault.get("stream_closed_status") != 204):
+                continue
+            if row["kind"] == "core_restart" and (
+                    not all(type(fault.get(key)) is int and fault[key] > 0 for key in ("retired_core_pid", "replacement_core_pid"))
+                    or fault["retired_core_pid"] == fault["replacement_core_pid"]):
+                continue
+            if row["kind"] == "rtsp_reconnect" and not 1 <= fault.get("stopped_publishers", 0) <= self.profile["workload"]["camera_count"]:
+                continue
             start_utc = raw.get("started_utc_ms")
             if not number(start_utc):
                 continue
@@ -485,10 +525,60 @@ class Validation:
         checks = raw["checks"]
         passed = (pressure_exercised and len(matches) == 1 and raw["recovery_ms"] <= maximum
                   and raw["probe_errno"] == errno.ENOSPC and 0 < raw["free_bytes_after_release"] <= raw["volume_bytes"] <= required["maximum_volume_bytes"]
-                  and checks.get("integrity") == ["ok"] and checks.get("invalid_references") == 0
-                  and checks.get("duplicate_attention_cycles") == 0 and checks.get("verified_blobs", 0) > 0
-                  and checks["expected_blobs"] == checks["verified_blobs"] and proof["observations"]["exit_code"] == 0)
+                  and persisted_blobs_clean(checks) and proof["observations"]["exit_code"] == 0)
         return required, raw, "PASS" if passed else "FAIL"
+
+    def storage_canary_check(self, proof):
+        workload = self.profile["workload"]
+        schedule = self.artifact(proof, "fault-schedule")
+        source = self.artifact(proof, "sources")
+        if sha256(schedule) != workload["fault_schedule_digest"] or sha256(source) != workload["source_manifest_digest"]:
+            raise ValueError("Storage recovery inputs differ from the frozen workload")
+        planned = checked_json(schedule)["storage_database"]
+        cameras = {row["id"] for row in checked_json(source)["sources"][:workload["camera_count"]]}
+        minimum_wal = 16 * 1024 * 1024
+        maximum = self.profile["budgets"]["storage_recovery_ms"]
+        required = {"canaries": planned, "fresh_database_and_blob_canaries": True, "minimum_pinned_wal_bytes": minimum_wal,
+                    "statuses": DATABASE_PRESSURE_STATUS, "maximum_recovery_ms": maximum,
+                    "surviving_capture_cameras": sorted(cameras)}
+        if (set(planned) != DATABASE_PRESSURE_STATUS.keys() or len(cameras) != workload["camera_count"]
+                or any(spec["camera"] not in cameras for spec in planned.values())):
+            raise ValueError("Storage recovery schedule omits or adds a fault or camera")
+        if "database" not in proof["artifacts"]:
+            return required, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
+        raw = checked_json(self.artifact(proof, "database"))
+        verdicts, used_incidents = {}, set()
+        for kind, status in DATABASE_PRESSURE_STATUS.items():
+            trial = raw["cases"].get(kind)
+            if trial is None:
+                verdicts[kind] = "INCOMPLETE"
+                continue
+            if trial["planned"] != planned[kind] or not number(trial["released_utc_ms"]) or not number(trial["recovery_ms"]):
+                raise ValueError(f"Invalid storage recovery identity or timing for {kind}")
+            pressure = trial["during_pressure"]
+            before, during = pressure["before"], pressure["during"]
+            matches = [event for event in canary_matches(trial["incidents"], planned[kind])
+                       if event["utc_ms"] >= trial["released_utc_ms"] and event["id"] not in used_incidents]
+            held_wal = kind != "pinned_wal" or (number(pressure["wal_bytes"]) and pressure["wal_bytes"] >= minimum_wal)
+            selected = planned[kind]["camera"]
+            passed = (set(before) == set(during) == cameras
+                      and all(capture_progressed(before[name], during[name]) for name in cameras)
+                      and pressure["status"] == status and pressure["code"] == "storage_unavailable"
+                      and number(pressure["refusal_ms"]) and pressure["live_status"] == 200 and held_wal
+                      and trial["idempotent_write"] is True and trial["recovery_ms"] <= maximum
+                      and camera_recovered(before[selected], trial["source_after_release"], True)
+                      and len(matches) == 1 and persisted_blobs_clean(trial["checks"]))
+            verdicts[kind] = "PASS" if passed else "FAIL"
+            if passed:
+                used_incidents.add(matches[0]["id"])
+        blob, _, pending = self.read_case("storage.blob-enospc-and-reconciliation", "storage_and_crash")
+        verdicts["blob_enospc"] = "INCOMPLETE"
+        if blob is not None:
+            state = self.blob_volume_check(blob)[2]
+            verdicts["blob_enospc"] = pending if state == "PASS" and pending else state
+        observed = {"statuses": verdicts, **raw}
+        complete = all(value == "PASS" for value in verdicts.values()) and proof["observations"]["exit_code"] == 0
+        return required, observed, "FAIL" if "FAIL" in verdicts.values() else "PASS" if complete else "INCOMPLETE"
 
     def logic_check(self, case, proof):
         catalog = checked_json(self.artifact(proof, "logical-test-binaries"))
@@ -546,6 +636,8 @@ class Validation:
                         expected, observed, result = self.churn_check(proof)
                     elif case == "storage.blob-enospc-and-reconciliation":
                         expected, observed, result = self.blob_volume_check(proof)
+                    elif case == "pipeline.canary-after-storage-faults":
+                        expected, observed, result = self.storage_canary_check(proof)
                     elif stage == "quiet_load":
                         expected, observed, result = self.steady_check(case, proof)
                     else:

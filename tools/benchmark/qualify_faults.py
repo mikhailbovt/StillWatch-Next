@@ -16,7 +16,10 @@ from uuid import UUID, uuid4
 
 import psutil
 
-from fast_rc_contract import CONTRACTS, checked_json, evidence, sha256, write_json
+from fast_rc_contract import (
+    CONTRACTS, camera_recovered, checked_json, evidence, inference_camera_interrupted,
+    inference_cameras_recovered, inference_worker_replaced, sha256, write_json,
+)
 from qualify_resources import ChurnResources
 from qualify_steady import latest, native_fixture, openings, pair_owner
 from lan_core import refresh_request
@@ -36,16 +39,6 @@ def inference_children(process):
         except psutil.NoSuchProcess:
             continue
     return result
-
-
-def recovered(before, after, epoch_changes):
-    if after["capture_state"] != "streaming" or not after["analysis"] or after["analysis"]["state"] != "ready":
-        return False
-    previous_epoch, new_epoch = int(before["epoch"]), int(after["epoch"])
-    if epoch_changes:
-        return new_epoch > previous_epoch and all(int(after["analysis"][key]) > 0 for key in ("pose_frames", "fire_frames"))
-    return (new_epoch == previous_epoch and int(after["frame"]) > int(before["frame"])
-            and all(int(after["analysis"][key]) > int(before["analysis"][key]) for key in ("pose_frames", "fire_frames")))
 
 
 async def viewer_cycle(fixture, receiver, name, resources):
@@ -87,8 +80,7 @@ def inject(fixture, cases, receiver, resources=None):
         ident = min(previous)
         previous[ident].kill()
         previous[ident].wait(timeout=10)
-        until(lambda: bool(inference_children(fixture["process"]).keys() - previous.keys()), 65)
-        return {"reaped_child_pid": ident[0], "replacement_pids": sorted(pid for pid, _ in inference_children(fixture["process"]))}
+        return {"retired_worker": list(ident), "workers_before": [list(identity) for identity in sorted(previous)]}
     if kind == "core_restart":
         old = fixture["process"]
         old.kill()
@@ -219,8 +211,9 @@ def run(settings, output, evidence_root):
                 began_utc = time.time_ns() // 1_000_000
                 kind = batch[0]["kind"]
                 deadline = started + profile["budgets"][LIMITS[kind]] / 1_000
-                before = {case["camera"]: latest(fixture["cameras"][case["camera"]], fixture["local"]) for case in batch}
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
+                tracked = fixture["cameras"] if kind == "inference_child_restart" else affected
+                before = {name: latest(camera, fixture["local"]) for name, camera in tracked.items()}
                 try:
                     fault = inject(fixture, batch, receiver, resources)
                 except (OSError, RuntimeError, ValueError, TimeoutError, AssertionError) as error:
@@ -232,10 +225,25 @@ def run(settings, output, evidence_root):
                 outstanding = {case["camera"]: case for case in batch}
                 completed = []
                 window = {case["camera"]: None for case in batch}
+                recovery = None
+                if kind == "inference_child_restart":
+                    recovery = {"before": before, "interrupted": {}, "after": {}}
                 while outstanding and offset() <= deadline:
+                    if recovery is not None:
+                        recovery["after"] = {name: latest(camera, fixture["local"]) for name, camera in tracked.items()}
+                        for name, current in recovery["after"].items():
+                            if inference_camera_interrupted(before[name], current):
+                                recovery["interrupted"].setdefault(name, current)
+                        workers = inference_children(fixture["process"])
+                        fault["workers_after"] = [list(identity) for identity in sorted(workers)]
+                        if (not inference_worker_replaced(fault, profile["models"]["workers"])
+                                or not inference_cameras_recovered(recovery, tracked.keys())):
+                            time.sleep(0.2)
+                            continue
                     for name, case in list(outstanding.items()):
-                        current = latest(affected[name], fixture["local"])
-                        if not recovered(before[name], current, kind in {"rtsp_reconnect", "core_restart"}):
+                        current = (recovery["after"][name] if recovery is not None
+                                   else latest(affected[name], fixture["local"]))
+                        if not camera_recovered(before[name], current, kind in {"rtsp_reconnect", "core_restart"}):
                             continue
                         window[name] = window[name] or offset()
                         verified = canary(database, fixture, receiver, case["canary"], began_utc)
@@ -243,7 +251,7 @@ def run(settings, output, evidence_root):
                             continue
                         path = output / (case["id"] + ".json")
                         write_json(path, verified | {"started_utc_ms": began_utc, "source_before": before[name],
-                                                      "source_after": current})
+                                                      "source_after": current, "inference_recovery": recovery})
                         row = {"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                "finished_s": offset(), "capture_progress_s": window[name], "fault": fault,
                                "canary": evidence(evidence_root, path)}
@@ -257,6 +265,7 @@ def run(settings, output, evidence_root):
                     path = output / (case["id"] + ".json")
                     write_json(path, {"planned": case["canary"], "source_before": before[name],
                                       "source_after": latest(affected[name], fixture["local"]),
+                                      "inference_recovery": recovery,
                                       "incidents": openings(database, fixture["cameras"], began_utc)})
                     log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                           "ended_s": offset(), "finished_s": None, "capture_progress_s": window[name],
@@ -373,7 +382,7 @@ def capacity(settings):
 
             def progressing():
                 current = [latest(camera, local) for camera in active_ids]
-                return current if all(recovered(before, after, False)
+                return current if all(camera_recovered(before, after, False)
                                       for before, after in zip(live_at_max, current, strict=True)) else None
 
             progress = until(progressing, limit)

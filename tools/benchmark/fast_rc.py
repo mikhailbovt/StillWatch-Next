@@ -313,14 +313,29 @@ class Run:
             self.script("storage_and_crash", "storage.refresh-lost-response-and-restart", "lan-refresh",
                         ROOT / "tests/e2e/lan_core.py", *args, "--node", self.args.node)
         self.logical_binaries(stage)
-        if (not self.args.blob_enospc or self.args.node is None or self.args.fixture_ffmpeg is None
-                or self.args.source_manifest is None or self.args.fault_schedule is None):
+        if any(option is None for option in (self.args.node, self.args.fixture_ffmpeg,
+                                              self.args.source_manifest, self.args.fault_schedule)):
+            return
+        schedule = self.pinned_fault_schedule()
+        frozen = checked_json(schedule)
+        if "storage_database" in frozen:
+            source, settings = self.native_settings()
+            evidence_path = self.root / "raw" / stage / "database-pressure.json"
+            options = evidence_path.with_name("database-pressure-settings.json")
+            write_json(options, settings | {"fault_schedule": str(schedule)})
+            observed, log = self.capture(stage, "database-pressure", [sys.executable, "-B", ROOT / "tools/benchmark/qualify.py",
+                                         "--native-db-pressure", options, evidence_path])
+            artifacts = {"sources": source, "settings": options, "fault-schedule": schedule, "stdout": log}
+            if evidence_path.is_file():
+                artifacts["database"] = evidence_path
+            self.proof(stage, "pipeline.canary-after-storage-faults", observed["started_s"], observed, artifacts,
+                       deadline=observed.get("deadline_exceeded", False))
+        if not self.args.blob_enospc:
             return
         unshare = shutil.which("unshare") if self.os == "linux" else None
         if unshare is None:
             raise ValueError("The blob ENOSPC collector needs a Linux mount namespace")
-        schedule = self.pinned_fault_schedule()
-        if "storage_enospc" not in checked_json(schedule):
+        if "storage_enospc" not in frozen:
             raise ValueError("The frozen fault schedule has no storage ENOSPC canaries")
         source, settings = self.native_settings()
         native = self.root / "raw" / stage / "blob-enospc.json"

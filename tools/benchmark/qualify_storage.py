@@ -1,4 +1,4 @@
-"""Measure live evidence recovery after real ENOSPC on an isolated Linux blob volume."""
+"""Measure live evidence recovery after native storage faults in isolated data directories."""
 
 from contextlib import closing, contextmanager
 import errno
@@ -10,11 +10,11 @@ from tempfile import TemporaryDirectory
 import time
 from uuid import UUID
 
-from fast_rc_contract import checked_json, sha256, write_json
-from qualify_faults import canary, close_canary, inject, recovered
+from fast_rc_contract import DATABASE_PRESSURE_STATUS, camera_recovered, capture_progressed, checked_json, sha256, write_json
+from qualify_faults import canary, close_canary, inject
 from qualify_steady import latest, native_fixture, openings, pair_owner
 from replay_core import until
-
+from storage_budget import camera, pinned_wal, readiness
 
 @contextmanager
 def exhausted_volume(path):
@@ -80,6 +80,96 @@ def persisted_blobs(database, directory, incident):
             "expected_blobs": len(records), "verified_blobs": verified}
 
 
+@contextmanager
+def external_writer(database):
+    with closing(sqlite3.connect(database)) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        yield
+        writer.rollback()
+
+
+def database_trial(fixture, receiver, database, planned, kind, limit_ms):
+    local = fixture["local"]
+    cameras = fixture["cameras"]
+
+    def snapshot():
+        return {name: latest(camera_id, local) for name, camera_id in cameras.items()}
+
+    def ready():
+        states = snapshot()
+        return states if all(state["capture_state"] == "streaming"
+                             and (state["analysis"] or {}).get("state") == "ready" for state in states.values()) else None
+
+    before = until(ready, 60)
+    attempt = "recovered-" + kind
+    pressure = pinned_wal(database) if kind == "pinned_wal" else external_writer(database)
+    with pressure as wal:
+        if wal is not None:
+            camera(local, "committed-before-live-checkpoint")
+        began = time.monotonic()
+        status, body = camera(local, attempt)
+        refusal_ms = (time.monotonic() - began) * 1_000
+        live_status, _ = local.call("GET", "/health/live")
+        wal_bytes = wal.stat().st_size if wal is not None else None
+        during = snapshot()
+        deadline = time.monotonic() + 5
+        while not all(capture_progressed(before[name], state) for name, state in during.items()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+            during = snapshot()
+    released = time.monotonic()
+    utc_ms = time.time_ns() // 1_000_000
+    source = planned["camera"]
+    proof = {"planned": planned, "during_pressure": {"before": before, "during": during, "status": status,
+             "code": (body or {}).get("code"), "live_status": live_status, "wal_bytes": wal_bytes,
+             "refusal_ms": refusal_ms}, "released_utc_ms": utc_ms, "idempotent_write": False}
+    end = released + limit_ms / 1_000
+    verified = None
+    try:
+        until(lambda: readiness(local, 200, "ready"), max(0, end - time.monotonic()))
+        created, saved = camera(local, attempt)
+        proof["idempotent_write"] = created == 201 and camera(local, attempt) == (201, saved)
+        inject(fixture, [{"kind": "rtsp_reconnect", "camera": source}], receiver)
+
+        def fresh_event():
+            if camera_recovered(before[source], latest(cameras[source], local), epoch_changes=True):
+                return canary(database, fixture, receiver, planned, utc_ms)
+            return None
+
+        verified = until(fresh_event, max(0, end - time.monotonic()))
+    except (AssertionError, TimeoutError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+        proof["recovery_error"] = str(error)
+    proof["recovery_ms"] = (time.monotonic() - released) * 1_000
+    proof["source_after_release"] = latest(cameras[source], local)
+    proof["incidents"] = verified["incidents"] if verified else []
+    proof["checks"] = persisted_blobs(database, database.parent / "blobs", proof["incidents"][0]["id"]) if verified else {}
+    if verified is not None:
+        close_canary(local, verified)
+    return proof
+
+
+def run_database(settings, output):
+    profile = checked_json(Path(settings["profile"]))
+    schedule = Path(settings["fault_schedule"])
+    if sha256(schedule) != profile["workload"]["fault_schedule_digest"]:
+        raise ValueError("Storage database schedule differs from the frozen workload")
+    planned = checked_json(schedule)["storage_database"]
+    if set(planned) != DATABASE_PRESSURE_STATUS.keys():
+        raise ValueError("Storage database schedule must cover a writer lock and a pinned WAL reader")
+    limit_ms = profile["budgets"]["storage_recovery_ms"]
+    with TemporaryDirectory(prefix="stillwatch-live-sqlite-") as temporary:
+        root = Path(temporary)
+        database = root / "data/stillwatch.sqlite3"
+        with native_fixture(settings, root) as fixture:
+            receiver = pair_owner(settings, fixture["local"], root)
+            trials, errors = {}, {}
+            for kind in DATABASE_PRESSURE_STATUS:
+                try:
+                    trials[kind] = database_trial(fixture, receiver, database, planned[kind], kind, limit_ms)
+                except (AssertionError, RuntimeError, OSError, sqlite3.Error, subprocess.SubprocessError) as error:
+                    errors[kind] = str(error)
+            write_json(output, {"cases": trials, "collection_errors": errors})
+
+
 def run(settings, output):
     profile = checked_json(Path(settings["profile"]))
     schedule = Path(settings["fault_schedule"])
@@ -111,7 +201,7 @@ def run(settings, output):
                 inject(fixture, [{"kind": "rtsp_reconnect", "camera": camera}], receiver)
 
                 def fresh_event():
-                    if recovered(before, latest(source, local), epoch_changes=True):
+                    if camera_recovered(before, latest(source, local), epoch_changes=True):
                         return canary(database, fixture, receiver, planned["recovered_canary"], released_utc)
                     return None
 

@@ -366,6 +366,14 @@ if __name__ == "__main__":
             raise SystemExit("usage: qualify.py --native-blob-enospc SETTINGS.json EVIDENCE.json")
         run(checked_json(Path(sys.argv[2])), Path(sys.argv[3]))
         sys.exit(0)
+    if sys.argv[1:2] == ["--native-db-pressure"]:
+        from fast_rc_contract import checked_json
+        from qualify_storage import run_database
+
+        if len(sys.argv) != 4:
+            raise SystemExit("usage: qualify.py --native-db-pressure SETTINGS.json EVIDENCE.json")
+        run_database(checked_json(Path(sys.argv[2])), Path(sys.argv[3]))
+        sys.exit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("core", "worker", "demo", "models", "runtime", "ffmpeg"):
         parser.add_argument("--" + name, type=lambda path: Path(path).resolve(strict=True), required=True)

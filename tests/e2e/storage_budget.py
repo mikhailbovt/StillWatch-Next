@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from contextlib import closing, contextmanager
 import json
 from pathlib import Path
 import sqlite3
@@ -100,6 +100,24 @@ def metadata_quota(args, root, inputs):
     return index
 
 
+@contextmanager
+def pinned_wal(database):
+    with closing(sqlite3.connect(database)) as writer:
+        writer.execute("CREATE TABLE wal_fixture(payload TEXT)")
+        writer.execute("INSERT INTO wal_fixture VALUES('initial')")
+        writer.commit()
+        assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+        with closing(sqlite3.connect(database)) as reader:
+            reader.execute("BEGIN")
+            assert reader.execute("SELECT payload FROM wal_fixture").fetchone() == ("initial",)
+            writer.execute("UPDATE wal_fixture SET payload = hex(zeroblob(?))", (WAL_THRESHOLD // 2,))
+            writer.commit()
+            wal_path = Path(f"{database}-wal")
+            assert wal_path.stat().st_size >= WAL_THRESHOLD
+            yield wal_path
+            reader.commit()
+
+
 def held_wal(args, root, inputs):
     data = root / "wal-data"
     db_path = data / "stillwatch.sqlite3"
@@ -107,32 +125,21 @@ def held_wal(args, root, inputs):
     with run_core(args.core, args.worker, data, inputs, root / "wal-core.log") as (_, client):
         code, saved = camera(client, "read-during-wal-pressure")
         assert code == 201, saved
-        with closing(sqlite3.connect(db_path)) as writer:
-            writer.execute("CREATE TABLE wal_fixture(payload TEXT)")
-            writer.execute("INSERT INTO wal_fixture VALUES('initial')")
-            writer.commit()
-            assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
-            with closing(sqlite3.connect(db_path)) as reader:
-                reader.execute("BEGIN")
-                assert reader.execute("SELECT payload FROM wal_fixture").fetchone() == ("initial",)
-                writer.execute("UPDATE wal_fixture SET payload = hex(zeroblob(?))", (WAL_THRESHOLD // 2,))
-                writer.commit()
-                assert wal_path.stat().st_size >= WAL_THRESHOLD
-                code, saved_after_threshold = camera(client, "committed-before-checkpoint")
-                assert code == 201, saved_after_threshold
-                assert readiness(client, 503, "degraded")
-                assert client.call("GET", "/health/live")[0] == 200
-                assert client.camera(saved["id"])["id"] == saved["id"]
-                held_bytes = wal_path.stat().st_size
-                code, failed = camera(client, "resume-after-wal")
-                assert code == 507 and failed["code"] == "storage_unavailable", failed
-                assert wal_path.stat().st_size == held_bytes
-                reader.commit()
-            until(lambda: readiness(client, 200, "ready"))
-            code, resumed = camera(client, "resume-after-wal")
-            assert code == 201, resumed
-            assert wal_path.stat().st_size < WAL_THRESHOLD
-            assert client.camera(saved_after_threshold["id"])["id"] == saved_after_threshold["id"]
+        with pinned_wal(db_path):
+            code, saved_after_threshold = camera(client, "committed-before-checkpoint")
+            assert code == 201, saved_after_threshold
+            assert readiness(client, 503, "degraded")
+            assert client.call("GET", "/health/live")[0] == 200
+            assert client.camera(saved["id"])["id"] == saved["id"]
+            held_bytes = wal_path.stat().st_size
+            code, failed = camera(client, "resume-after-wal")
+            assert code == 507 and failed["code"] == "storage_unavailable", failed
+            assert wal_path.stat().st_size == held_bytes
+        until(lambda: readiness(client, 200, "ready"))
+        code, resumed = camera(client, "resume-after-wal")
+        assert code == 201, resumed
+        assert wal_path.stat().st_size < WAL_THRESHOLD
+        assert client.camera(saved_after_threshold["id"])["id"] == saved_after_threshold["id"]
     return held_bytes
 
 

@@ -20,6 +20,7 @@ STAGES = ("preflight", "logical", "faults_and_capacity", "storage_and_crash", "q
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 RUN_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
 MAX_JSON = 32 * 1024 * 1024
+DATABASE_PRESSURE_STATUS = {"sqlite_busy": 503, "pinned_wal": 507}
 LOGIC_CASES = {
     "clock.source-monotonic-utc-boundaries": (
         ("stillwatch-core", "health::tests::host_clock_intervals_require_observed_stability"),
@@ -207,6 +208,46 @@ def checked_evidence(root, record):
 
 def number(value):
     return type(value) in (int, float) and value >= 0 and math.isfinite(value)
+
+
+def capture_progressed(before, after):
+    return (after["capture_state"] == "streaming" and int(after["epoch"]) == int(before["epoch"])
+            and int(after["frame"]) > int(before["frame"]))
+
+
+def camera_recovered(before, after, epoch_changes):
+    analysis = after["analysis"]
+    if after["capture_state"] != "streaming" or not analysis or analysis["state"] != "ready":
+        return False
+    tasks = ("pose_frames", "fire_frames")
+    if epoch_changes:
+        return int(after["epoch"]) > int(before["epoch"]) and all(int(analysis[key]) > 0 for key in tasks)
+    return (capture_progressed(before, after) and bool(before["analysis"])
+            and all(int(analysis[key]) > int(before["analysis"][key]) for key in tasks))
+
+
+def inference_worker_replaced(fault, count):
+    before = {tuple(identity) for identity in fault["workers_before"]}
+    after = {tuple(identity) for identity in fault["workers_after"]}
+    retired = tuple(fault["retired_worker"])
+    if not all(type(pid) is int and pid > 0 and number(created) and created > 0 for pid, created in before | after):
+        return False
+    return len(before) == len(after) == count and before - after == {retired} and len(after - before) == 1
+
+
+def inference_camera_interrupted(before, during):
+    return ((before["analysis"] or {}).get("state") == "ready" and during["capture_state"] == "streaming"
+            and during["epoch"] == before["epoch"] and not during.get("source_lagging")
+            and (during["analysis"] or {}).get("state") in {"degraded", "starting"})
+
+
+def inference_cameras_recovered(recovery, names):
+    before, interrupted, after = (recovery[key] for key in ("before", "interrupted", "after"))
+    if set(before) != names or set(after) != names or not interrupted or not set(interrupted) <= names:
+        return False
+    return (all(camera_recovered(before[name], after[name], False) for name in names)
+            and all(inference_camera_interrupted(before[name], during) and camera_recovered(during, after[name], False)
+                    for name, during in interrupted.items()))
 
 
 def contract_digests():

@@ -1,4 +1,4 @@
-"""Assemble a native CPU payload with verified artifacts and an inventory."""
+"""Assemble a verified native payload and record its artifact inventory."""
 
 from __future__ import annotations
 
@@ -137,13 +137,15 @@ def main(args):
     system = platform.system().lower()
     if system not in ("windows", "linux") or platform.machine().lower() not in ("amd64", "x86_64"):
         raise ValueError("The pinned native payload supports Windows and Linux x64")
+    if args.cuda_ort and system != "linux":
+        raise ValueError("The pinned CUDA ONNX Runtime is available for Linux x64")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("Use an empty output directory")
     args.output.mkdir(parents=True, exist_ok=True)
     suffix = ".exe" if system == "windows" else ""
     native = json.loads(LOCK.read_text(encoding="utf-8"))
     target = f"{system}-x64"
-    ort = native["ort"][target]
+    ort = native["ort"][f"{target}-cuda13" if args.cuda_ort else target]
     mtx = native["mediamtx"][target]
     out = args.output
     for name in BINARIES:
@@ -159,6 +161,11 @@ def main(args):
     ort_file = ort_path.name
     ort_root = ort_path.parent.parent
     copy(ort_path, out / "runtime" / ort_file, ort["library_sha256"])
+    if args.cuda_ort:
+        copy(ort_path.parent / "libonnxruntime_providers_cuda.so",
+             out / "runtime/libonnxruntime_providers_cuda.so", ort["provider_sha256"])
+        copy(ort_path.parent / "libonnxruntime_providers_shared.so",
+             out / "runtime/libonnxruntime_providers_shared.so", ort["provider_shared_sha256"])
     for name in ("LICENSE", "ThirdPartyNotices.txt"):
         copy(ort_root / name, out / "licenses" / f"onnxruntime-{name}")
     media = args.mediamtx / ("mediamtx" + suffix)
@@ -184,8 +191,9 @@ def main(args):
     status = subprocess.check_output(["git", "-C", str(ROOT), "status", "--porcelain"], text=True)
     with (ROOT / "rust-toolchain.toml").open("rb") as toolchain:
         rust_version = tomllib.load(toolchain)["toolchain"]["channel"]
+    profile = "cuda-fp32" if args.cuda_ort else "cpu-fp32"
     metadata = {
-        "schema_version": 1, "version": args.version, "target": target, "profile": "cpu-fp32",
+        "schema_version": 1, "version": args.version, "target": target, "profile": profile,
         "source_revision": revision, "source_dirty": bool(status),
         "rust_toolchain": rust_version,
         "cargo_lock_sha256": digest(ROOT / "Cargo.lock"), "native_lock_sha256": digest(LOCK),
@@ -195,7 +203,7 @@ def main(args):
         "files": {path.relative_to(out).as_posix(): digest(path) for path in sorted(out.rglob("*")) if path.is_file()},
     }
     (out / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    print(f"Staged {target} CPU payload with {len(metadata['files'])} files")
+    print(f"Staged {target} {profile} payload with {len(metadata['files'])} files")
 
 
 if __name__ == "__main__":
@@ -208,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--capture-libav", type=Path, required=True)
     parser.add_argument("--capture-source", type=Path, required=True)
     parser.add_argument("--vc-runtime", type=Path)
+    parser.add_argument("--cuda-ort", action="store_true", help="Stage the locked Linux x64 CUDA ONNX Runtime and providers")
     parser.add_argument("--models", type=Path)
     parser.add_argument("--model-sha256")
     parser.add_argument("--model-notices", type=Path)
