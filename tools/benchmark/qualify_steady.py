@@ -376,7 +376,7 @@ def native_fixture(settings, root, *, start_enabled=True):
     main_paths = {name: f"detail/{name}" for name, source in sources.items() if "detail" in source}
     if set(main_paths) - distinct["detail"]:
         raise ValueError("Declared main streams must be viewed in detail mode")
-    feeds = sources | {route: sources[name]["detail"] | {"delay_s": sources[name]["delay_s"]}
+    feeds = sources | {route: sources[name]["detail"] | {"id": route, "delay_s": sources[name]["delay_s"]}
                        for name, route in main_paths.items()}
     router = root / "rtsp.json"
     write_json(router, {"rtspAddress": peer, "rtspTransports": ["tcp"], "logLevel": "warn", "rtmp": False,
