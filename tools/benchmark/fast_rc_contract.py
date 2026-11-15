@@ -62,6 +62,21 @@ def sha256(path):
         return "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def checked_execution_profile(path, profile, candidate):
+    if sha256(path) != profile.get("execution_profile_digest"):
+        raise ValueError("The execution-profile digest differs from the frozen profile")
+    expected = {
+        "schema_version": 1,
+        "id": profile["profile_id"],
+        "candidate_digest": profile["candidate_digest"],
+        "runtime_digest": "sha256:" + candidate["ort_sha256"],
+        "native_lock_digest": "sha256:" + candidate["native_lock_sha256"],
+        **{field: profile[field] for field in ("host", "models", "workload", "budgets")},
+    }
+    if checked_json(path) != expected:
+        raise ValueError("The execution profile describes a different native payload, host or workload")
+
+
 def checked_json(path):
     def unique(items):
         obj = dict(items)

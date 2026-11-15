@@ -13,7 +13,8 @@ import sys
 
 from fast_rc_contract import (
     CONTRACTS, DIGEST, LOGIC_CASES, PROTOCOL, ROOT, RUN_ID, STAGES,
-    checked_evidence, checked_json, contract_digests, member, number, sha256, validate_schema, write_json,
+    checked_evidence, checked_execution_profile, checked_json, contract_digests, member, number, sha256,
+    validate_schema, write_json,
 )
 from validate_steady import Steady
 
@@ -551,9 +552,11 @@ class Validation:
             self.problems.append("Orchestration was interrupted before final cleanup")
         execution_profile_digest = self.profile.get("execution_profile_digest")
         if execution_profile_digest:
-            pin = self.run["inputs"].get("execution_profile")
-            if pin is None or sha256(checked_evidence(self.root, pin)) != execution_profile_digest:
-                self.problems.append("Execution-profile sidecar digest is missing or differs")
+            try:
+                pin = self.run["inputs"]["execution_profile"]
+                checked_execution_profile(checked_evidence(self.root, pin), self.profile, self.candidate)
+            except (KeyError, OSError, TypeError, ValueError) as error:
+                self.problems.append(f"Execution-profile evidence is invalid: {error}")
         else:
             self.problems.append("The frozen profile has no execution-profile sidecar digest")
         if self.problems and all(row["result"] == "PASS" for row in self.results):

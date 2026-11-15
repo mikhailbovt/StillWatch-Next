@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from fast_rc_contract import (
     CONTRACTS, LOGIC_CASES, PROTOCOL, ROOT, STAGES,
-    checked_json, contract_digests, evidence, member, sha256, validate_schema, write_json,
+    checked_execution_profile, checked_json, contract_digests, evidence, member, sha256, validate_schema, write_json,
 )
 from validate_report import validate
 
@@ -28,6 +28,8 @@ class Run:
         self.candidate = checked_json(args.candidate)
         self.profile = checked_json(args.profile)
         validate_schema("profile", self.profile)
+        if args.execution_profile is not None:
+            checked_execution_profile(args.execution_profile, self.profile, self.candidate)
         contracts = contract_digests()
         if self.profile["contract_digests"] != contracts or self.profile["protocol"] != PROTOCOL:
             raise ValueError("Profile was frozen against different qualification contracts")
@@ -340,6 +342,7 @@ class Run:
                 raise ValueError("The frozen CUDA workload is missing its provider libraries")
             settings["cuda_args"] = ["--cuda-device", str(self.args.cuda_device), "--cuda-provider-sha256", self.files[cuda[0]],
                                      "--cuda-shared-sha256", self.files[cuda[1]]]
+            settings["cuda_device"] = self.args.cuda_device
         return source, settings
 
     def quiet_load(self):

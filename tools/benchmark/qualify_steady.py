@@ -105,7 +105,20 @@ def metrics(local, cameras):
     return collected
 
 
-def resources(pid, data):
+def gpu_used_bytes(device, declared):
+    try:
+        values = subprocess.check_output(["nvidia-smi", f"--id={device}", "--query-gpu=memory.used,memory.total,driver_version",
+                                          "--format=csv,noheader,nounits"], text=True, stderr=subprocess.DEVNULL, timeout=2)
+        used, capacity, driver = (value.strip() for value in values.strip().split(","))
+        used, capacity = int(used), int(capacity)
+        if driver == declared["driver"] and capacity * 1024 * 1024 == declared["vram_bytes"] and 0 <= used <= capacity:
+            return used * 1024 * 1024
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def resources(pid, data, device=None, accelerator=None):
     core = psutil.Process(pid)
     tree = [core, *core.children(recursive=True)]
     measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1,
@@ -130,6 +143,9 @@ def resources(pid, data):
                 measurements["disk_bytes"] += path.stat().st_size
             except FileNotFoundError:
                 continue
+    if device is not None:
+        # The exclusive-host limit includes the display and driver allocations on this device.
+        measurements["vram_bytes"] = gpu_used_bytes(device, accelerator)
     return measurements
 
 
@@ -238,7 +254,8 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                             if next(image.decode(video=0), None) is not None:
                                 snapshots_ok += 1
                     snapshots += 1
-                usage = await asyncio.to_thread(resources, process.pid, root / "data") if tick % 5 == 0 else None
+                usage = await asyncio.to_thread(resources, process.pid, root / "data", settings.get("cuda_device"),
+                                                profile["host"]["accelerator"]) if tick % 5 == 0 else None
                 file.write(json.dumps({"tick": tick, "elapsed_s": time.monotonic() - started,
                                        "cameras": per_camera, "viewer_frames": viewer_frames,
                                        "snapshots": snapshots, "snapshots_ok": snapshots_ok, "resources": usage}) + "\n")
