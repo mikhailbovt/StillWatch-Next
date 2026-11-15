@@ -429,7 +429,10 @@ async fn material_observations_are_durable_and_bounded_without_image_packets() {
             |r| Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)),
         ).map_err(Into::into)
     }).await.unwrap();
-    assert_eq!((count, opening, latest, after_opening), (64, 0, 34_500_000, 3_500_000));
+    assert_eq!(
+        (count, opening, latest, after_opening),
+        (64, 0, 34_500_000, 3_500_000)
+    );
 }
 
 #[tokio::test]

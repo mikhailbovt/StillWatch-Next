@@ -35,6 +35,19 @@ const FIRE_EXPLORATION_PERIOD: Duration = Duration::from_secs(10);
 const EXTRA_DISPATCH_RESERVE: Duration = Duration::from_millis(10);
 const MAX_COST_SHAPES: usize = 128;
 
+#[cfg(feature = "diagnostics")]
+fn trace_slow_lane_step(lane: usize, stage: &str, began: Option<Instant>) {
+    if let Some(elapsed) = began.map(|start| start.elapsed())
+        && elapsed >= Duration::from_millis(20)
+    {
+        eprintln!(
+            "SW_LANE_TIMING utc_ms={} lane={lane} stage={stage} duration_us={}",
+            sw_storage::utc_ms(),
+            elapsed.as_micros(),
+        );
+    }
+}
+
 pub struct VisionScheduler {
     config: InferenceConfig,
     worker: Option<WorkerBinary>,
@@ -366,6 +379,8 @@ impl VisionScheduler {
         let Some(worker) = &self.worker else {
             return Ok(());
         };
+        #[cfg(feature = "diagnostics")]
+        let trace_lane = std::env::var_os("STILLWATCH_LANE_TRACE").is_some();
         let mut attempt = 0u32;
         let mut last_camera = None;
         let mut policies = HashMap::<Uuid, HazardPolicies>::new();
@@ -386,7 +401,12 @@ impl VisionScheduler {
                         if *shutdown.borrow() {
                             break None;
                         }
-                        if let Some(commit) = pending.flush().await
+                        #[cfg(feature = "diagnostics")]
+                        let persist_began = trace_lane.then(Instant::now);
+                        let commit = pending.flush().await;
+                        #[cfg(feature = "diagnostics")]
+                        trace_slow_lane_step(lane, "persist_hazard", persist_began);
+                        if let Some(commit) = commit
                             && let Some(policy) = policies.get_mut(&commit.scope.camera_id)
                         {
                             if let Some(packet) = commit.packet {
@@ -411,7 +431,12 @@ impl VisionScheduler {
                             }
                         }
                         self.phase(lane, AnalysisState::Ready, None);
-                        let Some(job) = self.next(lane, last_camera) else {
+                        #[cfg(feature = "diagnostics")]
+                        let select_began = trace_lane.then(Instant::now);
+                        let next = self.next(lane, last_camera);
+                        #[cfg(feature = "diagnostics")]
+                        trace_slow_lane_step(lane, "select_frame", select_began);
+                        let Some(job) = next else {
                             tokio::select! {
                                 _ = self.cameras.wait_for_analysis_frame(lane) => continue,
                                 _ = tokio::time::sleep(Duration::from_millis(25)) => continue,
@@ -430,8 +455,16 @@ impl VisionScheduler {
                             }
                             outcome = process.infer(&job.frame.frame, job.tasks) => outcome,
                         };
+                        #[cfg(feature = "diagnostics")]
+                        trace_slow_lane_step(
+                            lane,
+                            "worker_round_trip",
+                            trace_lane.then_some(dispatched_at),
+                        );
                         match outcome {
                             Ok(result) => {
+                                #[cfg(feature = "diagnostics")]
+                                let policy_began = trace_lane.then(Instant::now);
                                 if !self.finish(&job, dispatched_at, Ok(&result)) {
                                     continue;
                                 }
@@ -477,6 +510,8 @@ impl VisionScheduler {
                                     );
                                 }
                                 pending.push(frame, hazards);
+                                #[cfg(feature = "diagnostics")]
+                                trace_slow_lane_step(lane, "apply_policy", policy_began);
                             }
                             Err(error) => {
                                 let outcome = if matches!(error, WorkerError::Deadline) {
