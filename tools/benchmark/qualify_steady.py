@@ -85,11 +85,31 @@ async def collect_snapshots(lan, session, cameras, started, seconds, rate, count
         if time.monotonic() > started + seconds:
             break
         headers = {key.lower(): value for key, value in headers.items()}
-        if code == 200 and headers.get("cache-control") == "no-store" and 0 <= int(headers["x-frame-age-ms"]) <= 3000:
-            with av.open(io.BytesIO(jpeg), format="mjpeg") as image:
-                if next(image.decode(video=0), None) is not None:
-                    counts["decoded"] += 1
         counts["requests"] += 1
+        problem = snapshot_problem(code, headers, jpeg)
+        if problem is None:
+            counts["decoded"] += 1
+        else:
+            counts["failures"].append({"request": counts["requests"], "camera": camera, "status": code,
+                                       "reason": problem, "elapsed_s": time.monotonic() - started})
+
+
+def snapshot_problem(code, headers, jpeg):
+    if code != 200:
+        return "http_status"
+    if headers.get("cache-control") != "no-store":
+        return "cache_policy"
+    try:
+        age = int(headers["x-frame-age-ms"])
+    except (KeyError, ValueError):
+        return "frame_age_header"
+    if not 0 <= age <= 3_000:
+        return "frame_age"
+    try:
+        with av.open(io.BytesIO(jpeg), format="mjpeg") as image:
+            return "jpeg_decode" if next(image.decode(video=0), None) is None else None
+    except av.error.FFmpegError:
+        return "jpeg_decode"
 
 
 def publisher(ffmpeg, peer, source):
@@ -309,7 +329,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
         write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms, "sampling_started_monotonic_s": started,
                                             "metrics": start_metrics,
                                             "viewer_frames": viewer_frames.copy(), "source_scope": sample})
-        snapshots = {"requests": 0, "decoded": 0}
+        snapshots = {"requests": 0, "decoded": 0, "failures": []}
         snapshot_task = asyncio.create_task(collect_snapshots(
             lan, session, list(cameras.values()), started, seconds, workload["snapshot_requests_per_minute"], snapshots))
         viewer_renewals = 0
@@ -352,6 +372,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                                           "started_utc_ms": start_utc_ms,
                                           "viewer_renewals": viewer_renewals, "snapshots": snapshots["requests"],
                                           "snapshots_ok": snapshots["decoded"],
+                                          "snapshot_failures": snapshots["failures"],
                                           "source_camera_count": len(sources), "source_seconds_by_camera": source_spans})
     finally:
         if snapshot_task is not None:

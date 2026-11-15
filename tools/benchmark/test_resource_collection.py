@@ -6,7 +6,7 @@ import unittest
 
 import psutil
 
-from qualify_steady import resources
+from qualify_steady import resources, snapshot_problem
 
 
 class ResourceCollection(unittest.TestCase):
@@ -34,6 +34,16 @@ class ResourceCollection(unittest.TestCase):
             finally:
                 worker.terminate()
                 leader.terminate()
+
+
+class SnapshotCollection(unittest.TestCase):
+    def test_distinguishes_http_failure_from_stale_or_invalid_jpeg(self):
+        cache = {"cache-control": "no-store"}
+        self.assertEqual(snapshot_problem(429, {}, b""), "http_status")
+        self.assertEqual(snapshot_problem(200, {}, b""), "cache_policy")
+        self.assertEqual(snapshot_problem(200, cache, b""), "frame_age_header")
+        self.assertEqual(snapshot_problem(200, cache | {"x-frame-age-ms": "3001"}, b""), "frame_age")
+        self.assertEqual(snapshot_problem(200, cache | {"x-frame-age-ms": "3000"}, b"invalid"), "jpeg_decode")
 
 
 if __name__ == "__main__":

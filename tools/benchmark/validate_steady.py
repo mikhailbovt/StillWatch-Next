@@ -224,6 +224,8 @@ class Steady:
         geometries = last.get("viewer_geometry", {})
         if geometries:
             observed["frame_geometry_by_viewer"] = geometries
+        if self.end and self.end.get("snapshot_failures"):
+            observed["snapshot_failures"] = self.end["snapshot_failures"]
         if any(key in geometries and geometries[key] != size for key, size in detail_geometry.items()):
             return required, observed, "FAIL"
         if stalled or snapshots != last["snapshots_ok"]:

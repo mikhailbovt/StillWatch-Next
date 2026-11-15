@@ -16,6 +16,7 @@ The [completion plan](../StillWatch_Next_Completion_Plan_RU.md) sets the sequenc
 - Each live canary records the immutable host observation time of the opening frame. A fault trial requires that observation after the fault began and before the incident was committed. The same requirement applies to the steady load interval and to the point when storage pressure is released. Reports missing that provenance keep the affected criteria incomplete.
 - A viewer fault can declare `quiet_source_ms` alongside `require_quiet_before_fault`. The collector records successive accepted Fire observations at native timestamps from the same epoch. A gap, a skipped observation or visible fire or smoke restarts the window. The viewer recovery deadline begins after this precondition.
 - The quiet-load media check follows each viewer's decoded frame counter through the full interval, including session renewal. A period with no frame progress beyond the profile's viewer recovery budget fails the check.
+- The steady collector records the HTTP status and failure reason for each failed JPEG check. A malformed age header or corrupt JPEG contributes a measured snapshot failure.
 - Preflight requires a clean source revision in the candidate manifest. It directly invokes the three diagnostic-only commands and verifies that the release Core and worker reject them. Earlier help-only traces lack this check.
 
 ## Evaluation inputs and interpretation
