@@ -8,6 +8,8 @@ from pathlib import Path
 import struct
 import uuid
 
+from event_scoring import episodes, normalized_region, overlap
+from fast_rc_contract import CONTRACTS, checked_json
 from fire_observations import digest, exact, process
 
 
@@ -48,12 +50,19 @@ def decisions(trace):
                   for r in trace["regions"])
 
 
+def reviewed_regions(trace, width, height, annotated, minimum_iou):
+    reviews = [normalized_region(item["region"], width, height)
+               for item in trace["regions"] if item["decision"] == "review"]
+    return sorted(event.id for event in annotated
+                  if any(region is not None and overlap(region, event.roi) >= minimum_iou for region in reviews))
+
+
 def sample_slot(source_us, start_us, fps, phase_us):
     elapsed_us = source_us - start_us - phase_us
     return None if elapsed_us < 0 else elapsed_us * fps // 1_000_000
 
 
-def compare_window(args, clip, window, phase_us, workers, policies):
+def compare_window(args, clip, window, phase_us, workers, policies, matching):
     path = (args.media / clip["file"]).resolve(strict=True)
     if not path.is_relative_to(args.media) or digest(path) != clip["sha256"]:
         raise ValueError("clip does not match development manifest")
@@ -65,6 +74,11 @@ def compare_window(args, clip, window, phase_us, workers, policies):
     reviews = dict.fromkeys(workers, 0)
     differences = []
     graph_differences = []
+    roi_differences = []
+    annotated = episodes(clip) if "events" in clip else []
+    first_roi_review = {event.id: dict.fromkeys(workers) for event in annotated}
+    onset_windows = {event.id: tuple(round(value * 1_000_000) for value in event.window(
+        matching["fire_before_onset_tolerance_s"], matching["max_delay_s"])) for event in annotated}
     selected_source_us = []
     last_slot = -1
     start_us, stop_us = (round(s * 1_000_000) for s in window)
@@ -99,8 +113,8 @@ def compare_window(args, clip, window, phase_us, workers, policies):
             outputs = {name: call_inference(worker, header, rgb) for name, worker in workers.items()}
             if "cuda_graph" in outputs and outputs["cuda_graph"] != outputs["cuda"]:
                 graph_differences.append(elapsed)
-            values = {name: decisions(call_policy(policies[name], header, rgb, output))
-                      for name, output in outputs.items()}
+            traces = {name: call_policy(policies[name], header, rgb, output) for name, output in outputs.items()}
+            values = {name: decisions(trace) for name, trace in traces.items()}
             for name, row in values.items():
                 if any(item[0] == "review" for item in row):
                     reviews[name] += 1
@@ -108,6 +122,16 @@ def compare_window(args, clip, window, phase_us, workers, policies):
                         first_review[name] = elapsed
             if any(value != values["cpu"] for value in values.values()):
                 differences.append({"source_us": elapsed, **values})
+            if annotated:
+                width, height = struct.unpack_from("<2I", header, 8)
+                matched = {name: reviewed_regions(trace, width, height, annotated, matching["minimum_roi_iou"])
+                           for name, trace in traces.items()}
+                for name, matches in matched.items():
+                    for event_id in matches:
+                        if elapsed >= onset_windows[event_id][0] and first_roi_review[event_id][name] is None:
+                            first_roi_review[event_id][name] = elapsed
+                if any(value != matched["cpu"] for value in matched.values()):
+                    roi_differences.append({"source_us": elapsed, **matched})
     if not selected_source_us:
         raise ValueError("empty comparison window")
     report = {"clip": clip["file"], "window_s": window, "phase_offset_us": phase_us,
@@ -116,6 +140,13 @@ def compare_window(args, clip, window, phase_us, workers, policies):
               "first_review_us": list(first_review.values()), "policy_differences": differences}
     if "cuda_graph" in workers:
         report["cuda_graph_observation_differences_us"] = graph_differences
+    if annotated:
+        report["annotated_region_differences"] = roi_differences
+        report["annotated_reviews"] = [
+            {"episode": key, "window_us": onset_windows[key], "first_review_us": times,
+             "in_window": {name: at is not None and at <= onset_windows[key][1] for name, at in times.items()}}
+            for key, times in first_roi_review.items()
+        ]
     return report
 
 
@@ -129,6 +160,9 @@ def run(args):
     clips = {clip["file"]: clip for clip in manifest["clips"]}
     if not 1 <= len(windows) <= 32 or windows.keys() - clips.keys():
         raise ValueError("unknown or excessive clip selection")
+    if any(clips[name].get("split") == "holdout" or clips[name].get("category", "fire") != "fire" for name in windows):
+        raise ValueError("Fire diagnostics require development Fire clips")
+    matching = checked_json(CONTRACTS["quality"])["matching"]
     provider, shared = args.cuda_provider, args.cuda_shared
     reports = []
     pack_digest = digest(args.models / "models.lock.json")
@@ -163,7 +197,7 @@ def run(args):
             phase_us = spec.get("phase_offset_us", 0)
             if type(phase_us) is not int or not 0 <= phase_us * args.fps < 1_000_000:
                 raise ValueError("phase offset must be an integer within one sampling period")
-            row = compare_window(args, clip, window, phase_us, workers, policies)
+            row = compare_window(args, clip, window, phase_us, workers, policies, matching)
             reports.append(row)
             print(f"{filename} {row['samples']} matched frames, {len(row['policy_differences'])} policy differences", flush=True)
     report = {"manifest_sha256": manifest_hash, "windows_sha256": digest(args.windows),
@@ -171,7 +205,9 @@ def run(args):
               "model_manifest_sha256": pack_digest, "cpu_runtime_sha256": digest(args.cpu_runtime),
               "cuda_runtime_sha256": digest(args.cuda_runtime), "cuda_provider_sha256": digest(provider),
               "cuda_shared_sha256": digest(shared), "fps": args.fps, "backends": list(configurations),
-              "development_fire_policy_equivalent": all(not row["policy_differences"] for row in reports),
+              "quality_contract_sha256": digest(CONTRACTS["quality"]),
+              "development_fire_policy_equivalent": all(not (row["policy_differences"] or row.get("annotated_region_differences"))
+                                                        for row in reports),
               "scope": "matched native frames and detector-to-policy output; storage and delivery excluded",
               "clips": reports}
     graph_equal = all(not row.get("cuda_graph_observation_differences_us") for row in reports)

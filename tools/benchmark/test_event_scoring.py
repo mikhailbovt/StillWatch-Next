@@ -7,9 +7,9 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
-from compare_fire_backends import sample_slot
+from compare_fire_backends import reviewed_regions, sample_slot
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
-from event_scoring import coverage_intervals, score_clip
+from event_scoring import coverage_intervals, episodes, score_clip
 from fast_rc_contract import verified_quiet_window
 from legacy_replay import measured_clip
 from validate_report import canary_matches
@@ -44,6 +44,15 @@ def annotation(id, start, roi):
 
 
 class EventScoring(unittest.TestCase):
+    def test_fire_policy_comparison_excludes_a_review_in_the_wrong_region(self):
+        annotated = episodes({"events": [annotation("fire", 3, [0.5, 0.5, 0.9, 0.9])]})
+        wrong = {"decision": "review", "region": {"x1": 0, "y1": 0, "x2": 70, "y2": 70}}
+        target = {"decision": "clear", "region": {"x1": 100, "y1": 100, "x2": 180, "y2": 180}}
+        trace = {"regions": [wrong, target]}
+        self.assertEqual(reviewed_regions(trace, 200, 200, annotated, 0.3), [])
+        target["decision"] = "review"
+        self.assertEqual(reviewed_regions(trace, 200, 200, annotated, 0.3), ["fire"])
+
     def test_stalled_viewer_fails_despite_decoding_at_the_start(self):
         steady = Steady.__new__(Steady)
         steady.workload = {"viewer_sessions": 2, "snapshot_requests_per_minute": 8, "evidence_fps": 1}

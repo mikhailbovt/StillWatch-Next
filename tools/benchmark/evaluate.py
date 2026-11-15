@@ -243,6 +243,8 @@ def legacy(args, media, quality_hash):
     ]))
     if report["provenance"]["quality_contract_sha256"] != quality_hash:
         raise ValueError("Reference replay used a different coverage contract")
+    report["provenance"].update(reference_revision=result, model_lock_sha256=expected["model_lock_sha256"],
+                                python_lock_sha256=expected["python_lock_sha256"])
     return report
 
 

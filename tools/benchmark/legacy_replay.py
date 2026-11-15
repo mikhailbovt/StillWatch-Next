@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import hashlib
+import importlib.metadata
 import importlib.util
 import json
 import sys
@@ -131,6 +132,9 @@ async def main(legacy, weights, media, manifest):
         "config_hash": settings.fingerprint,
         "implementation_hash": result["implementation_hash"], "replay_sha256": result["replay_sha256"],
         "quality_contract_sha256": hashlib.sha256(quality).hexdigest(),
+        "python_version": sys.version.split()[0],
+        "installed_versions": {name: importlib.metadata.version(name)
+                               for name in ("opencv-python", "ultralytics", "torch", "torchvision", "safetensors")},
     }}))
 
 
