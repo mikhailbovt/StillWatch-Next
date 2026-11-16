@@ -22,6 +22,12 @@ from fast_rc_contract import (
 from validate_report import validate
 
 
+def harness_digests():
+    return {path.relative_to(ROOT).as_posix(): sha256(path)
+            for directory in ("tools/benchmark", "tests/e2e")
+            for path in sorted((ROOT / directory).rglob("*.py"))}
+
+
 class Run:
     def __init__(self, args):
         self.args = args
@@ -57,6 +63,7 @@ class Run:
             "protocol": PROTOCOL, "run_id": uuid4().hex, "started_utc": datetime.now(timezone.utc).isoformat(),
             "contract_digests": contracts, "cases": {}, "inputs": {}, "elapsed_clock": clock_name,
             "canary_overview": True,
+            "harness": {"python_version": platform.python_version(), "source_digests": harness_digests()},
             "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
             "source_video_seconds": None, "virtual_clock_span_seconds": None, "interrupted": False, "stage_errors": [],
         }
@@ -538,6 +545,11 @@ class Run:
                 self.run["stage_errors"].append(f"{stage}: {error}")
 
     def seal(self):
+        before = self.run["harness"]["source_digests"]
+        after = harness_digests()
+        changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+        if changed:
+            self.run["stage_errors"].append("Qualification source changed during the run: " + ", ".join(changed))
         self.run["native_wall_seconds"] = self.elapsed()
         self.run["finished_utc"] = datetime.now(timezone.utc).isoformat()
         write_json(self.root / "run-manifest.json", self.run)
