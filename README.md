@@ -6,6 +6,7 @@ The Windows, Linux, Android and iOS Companions pair with a Core to show video, r
 
 - [Install Core, add cameras and pair a Companion](docs/operations.md)
 - [Configure the Firebase worker](docs/firebase-worker.md)
+- [Run the Hybrid Web reviewer walkthrough](docs/hybrid-review.md)
 - [Connect over VPN, HTTPS or an outbound relay](docs/remote.md)
 - [Build the Companion](apps/companion/README.md)
 - [Inspect verification results and outstanding release checks](IMPLEMENTATION_STATUS.md)
