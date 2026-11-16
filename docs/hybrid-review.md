@@ -6,10 +6,10 @@ StillWatch Next monitors the cameras attached to a Windows or Linux host. The Ru
 
 Use a dedicated review host or a disposable data directory, the Core payload and matching model pack from one build, and a supported Chrome profile with the local model installed. The reference walkthrough uses Windows x64, Chrome 157, Node 24 and Firebase JS SDK 13.3.0. Follow the [installation guide](operations.md) and the [Hybrid Web setup](firebase-worker.md#build-and-configure). Configure a dedicated Firebase test app with App Check and separate credentials for Core and Chrome. Use the credited replay from [baseline.json](../baseline.json).
 
-1. Open the loopback worker page in the dedicated Chrome profile. Connect and wait for local model readiness. The direct cold-start verification took about 156 seconds with the model already installed.
+1. Open the loopback worker page in the dedicated Chrome profile. Connect and wait for local model readiness. With the model installed, the recorded cold starts took about 156 seconds and 357 seconds. The longer run recovered after two warmup retries.
 2. Start a replay evaluation using `local_only` with cloud consent disabled. Use the [credited replay procedure](firebase-worker.md#verify) to send current Core evidence. Open the record in the worker page and check the incident ID, evidence version and actual `on_device` source. The replay runner also checks the saved result and the absence of live delivery for the replay.
 3. Run `prefer_local` with the browser model unavailable and cloud consent enabled on a test camera. Check the actual `in_cloud` result and repeat the consent check with the private camera. The fixture runner checks that Core sends zero cloud submissions for that camera.
-4. Return to the local route. Freeze and resume the worker tab in the dedicated profile. Check that the lease expires during the freeze and a new evaluation returns `on_device` after resume. The [acceptance matrix](acceptance.md) lists the observed coverage and the remaining browser and App Check checks.
+4. Return to the local route. Freeze and resume the worker tab in the dedicated profile. Then discard the tab and load it again from `chrome://discards`. In each case verify that the lease expires while the tab is unavailable and a new evaluation returns `on_device` after recovery. The recorded discard returned to ready in 4.22 seconds from reload. The [acceptance matrix](acceptance.md) lists the observed coverage and the remaining App Check checks.
 
 ## Demonstration footage
 
