@@ -3,13 +3,26 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import psutil
 
+from process_identity import process_identity
 from qualify_steady import resources, snapshot_problem
 
 
 class ResourceCollection(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux /proc start clock")
+    def test_process_start_identity_survives_a_wall_clock_offset_change(self):
+        pid = psutil.Process().pid
+        with patch.object(psutil.Process, "create_time", return_value=1_794_804_151.28):
+            before = process_identity(psutil.Process(pid))
+        with patch.object(psutil.Process, "create_time", return_value=1_794_804_148.28):
+            after = process_identity(psutil.Process(pid))
+        self.assertEqual(before, after)
+        self.assertEqual(before[0], pid)
+        self.assertIsInstance(before[1], int)
+
     def test_churn_counts_a_surviving_worker_outside_the_process_tree(self):
         command = [sys.executable, "-B", "-c", "import time; print('ready', flush=True); time.sleep(10)"]
         with (TemporaryDirectory() as directory, subprocess.Popen(command, stdout=subprocess.PIPE) as leader,
@@ -19,7 +32,7 @@ class ResourceCollection(unittest.TestCase):
                 self.assertEqual(worker.stdout.readline().strip(), b"ready")
                 data = Path(directory)
                 outside = psutil.Process(worker.pid)
-                identity = (outside.pid, outside.create_time())
+                identity = process_identity(outside)
                 detached = sorted([outside.pid, *(child.pid for child in outside.children(recursive=True))])
                 baseline = resources(leader.pid, data)
                 tree = resources(leader.pid, data, tracked={identity})

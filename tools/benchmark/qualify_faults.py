@@ -22,6 +22,7 @@ from fast_rc_contract import (
     inference_camera_interrupted, inference_cameras_recovered, inference_worker_replaced, native_clock, quiet_fire_sample,
     quiet_requirements, sha256, write_json,
 )
+from process_identity import PROCESS_START_CLOCK, process_identity
 from qualify_resources import ChurnResources
 from qualify_steady import decodes_jpeg, latest, native_fixture, openings, pair_owner
 from lan_core import refresh_request
@@ -37,7 +38,7 @@ def inference_children(process):
     for child in psutil.Process(process.pid).children(recursive=True):
         try:
             if "infer-v2-proposals" in child.cmdline():
-                result[(child.pid, child.create_time())] = child
+                result[process_identity(child)] = child
         except psutil.NoSuchProcess:
             continue
     return result
@@ -82,7 +83,8 @@ def inject(fixture, cases, receiver, resources=None):
         ident = min(previous)
         previous[ident].kill()
         previous[ident].wait(timeout=10)
-        return {"retired_worker": list(ident), "workers_before": [list(identity) for identity in sorted(previous)]}
+        return {"retired_worker": list(ident), "workers_before": [list(identity) for identity in sorted(previous)],
+                "process_start_clock": PROCESS_START_CLOCK}
     if kind == "core_restart":
         old = fixture["process"]
         old.kill()

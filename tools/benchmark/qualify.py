@@ -20,6 +20,8 @@ from uuid import uuid4
 
 import psutil
 
+from process_identity import process_identity
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests/e2e"))
 from replay_core import run_core, until
 
@@ -110,12 +112,12 @@ def stats(process):
             with item.oneshot():
                 resident = item.memory_info().rss
                 counter = item.cpu_times()
-                created = item.create_time()
+                identity = process_identity(item)
                 thread_count = item.num_threads()
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
         rss += resident
-        counters[(item.pid, created)] = counter.user + counter.system
+        counters[identity] = counter.user + counter.system
         threads += thread_count
     return rss, counters, threads, len(counters)
 

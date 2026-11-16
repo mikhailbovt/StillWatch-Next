@@ -10,6 +10,7 @@ from uuid import uuid4
 import psutil
 
 from fast_rc_contract import native_clock, write_json
+from process_identity import process_identity
 from qualify_steady import resources
 
 
@@ -45,7 +46,7 @@ class ChurnResources:
         for pid, started in usage["pids"]:
             try:
                 process = psutil.Process(pid)
-                if process.create_time() == started:
+                if process_identity(process) == (pid, started):
                     threads[str(pid)] = process.num_threads()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue

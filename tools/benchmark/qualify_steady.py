@@ -24,6 +24,7 @@ import av
 import psutil
 
 from fast_rc_contract import ROOT, checked_json, detail_output_dimensions, member, native_clock, sha256, write_json
+from process_identity import PROCESS_START_CLOCK, process_identity
 
 sys.path.insert(0, str(ROOT / "tests/e2e"))
 from lan_core import Client as PinnedClient, encode_uuid, refresh_request, sign
@@ -203,12 +204,13 @@ def resources(pid, data, device=None, accelerator=None, *, tracked=()):
     tree = [core, *core.children(recursive=True)]
     seen = {process.pid for process in tree}
     detached = []
-    for previous_pid, created in tracked:
+    for identity in tracked:
+        previous_pid, _ = identity
         if previous_pid in seen:
             continue
         try:
             previous = psutil.Process(previous_pid)
-            if previous.create_time() == created:
+            if process_identity(previous) == identity:
                 for process in (previous, *previous.children(recursive=True)):
                     if process.pid not in seen:
                         tree.append(process)
@@ -217,11 +219,12 @@ def resources(pid, data, device=None, accelerator=None, *, tracked=()):
         except psutil.NoSuchProcess:
             continue
     measurements = {"rss_bytes": 0, "disk_bytes": 0, "children": len(tree) - 1, "cpu_seconds": 0.0,
-                    "os_handles": 0, "open_sockets": 0, "pids": [], "rss_by_pid": {}, "detached": sorted(detached)}
+                    "os_handles": 0, "open_sockets": 0, "pids": [], "process_start_clock": PROCESS_START_CLOCK,
+                    "rss_by_pid": {}, "detached": sorted(detached)}
     rss_measured = True
     for child in tree:
         try:
-            measurements["pids"].append([child.pid, child.create_time()])
+            measurements["pids"].append(list(process_identity(child)))
             rss = child.memory_info().rss
             measurements["rss_bytes"] += rss
             measurements["rss_by_pid"][str(child.pid)] = rss
