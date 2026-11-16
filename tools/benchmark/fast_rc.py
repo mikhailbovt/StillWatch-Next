@@ -216,6 +216,8 @@ class Run:
             _, worker = self.capture(stage, "worker-usage", [self.worker, "--help"])
             _, core = self.capture(stage, "core-help", [self.core, "--help"])
             command = [self.core, "--data-dir", self.root / "host-probe", "--execution-host"]
+            if (threads := self.profile["host"].get("core_runtime_threads")) is not None:
+                command.extend(["--core-runtime-threads", threads])
             cuda = self.cuda_paths()
             if cuda:
                 command.extend(["--cuda-device", self.args.cuda_device, "--model-pack", self.models,

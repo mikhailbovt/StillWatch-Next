@@ -11,6 +11,7 @@ mod token;
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    num::NonZeroUsize,
     path::PathBuf,
     time::Duration,
 };
@@ -104,6 +105,8 @@ struct Config {
     execution_host: bool,
     #[arg(skip)]
     execution_profile: Option<execution_profile::Selection>,
+    #[arg(long)]
+    core_runtime_threads: Option<NonZeroUsize>,
     #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8).range(1..=64))]
     inference_threads: u8,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=8))]
@@ -243,7 +246,7 @@ fn main() -> Result<()> {
         let mut inference = inference_config(&config)?.context("no model pack configured")?;
         let worker = WorkerBinary::open(&worker_path(&config)?)?;
         let lanes = usize::from(config.inference_workers);
-        runtime()?.block_on(async {
+        runtime(config.core_runtime_threads)?.block_on(async {
             if let Some(selection) = &config.execution_profile {
                 let (_, models) =
                     execution_profile::verify(selection, &config, &worker, &inference).await?;
@@ -256,7 +259,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if config.execution_host {
-        let host = runtime()?.block_on(sw_engine::execution_host(config.cuda_device))?;
+        let host = runtime(config.core_runtime_threads)?
+            .block_on(sw_engine::execution_host(config.cuda_device))?;
         serde_json::to_writer_pretty(std::io::stdout().lock(), &host)?;
         println!();
         return Ok(());
@@ -265,7 +269,7 @@ fn main() -> Result<()> {
     if config.service {
         return scm::start(config);
     }
-    runtime()?.block_on(foreground(config))
+    runtime(config.core_runtime_threads)?.block_on(foreground(config))
 }
 
 #[derive(serde::Deserialize)]
@@ -276,6 +280,7 @@ struct Settings {
     https_proxy: Option<proxy::ProxySettings>,
     model_selection_file: Option<PathBuf>,
     execution_profile: Option<execution_profile::Selection>,
+    core_runtime_threads: Option<NonZeroUsize>,
     model_pack: Option<PathBuf>,
     model_manifest_sha256: Option<String>,
     ort_library: Option<PathBuf>,
@@ -315,6 +320,7 @@ impl Settings {
         config.lan_advertise |= self.lan_advertise.unwrap_or(false);
         config.https_proxy = self.https_proxy;
         config.execution_profile = self.execution_profile;
+        config.core_runtime_threads = config.core_runtime_threads.or(self.core_runtime_threads);
         config.model_selection_file = config
             .model_selection_file
             .take()
@@ -391,10 +397,12 @@ impl Settings {
     }
 }
 
-fn runtime() -> Result<tokio::runtime::Runtime> {
-    Ok(tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?)
+fn runtime(threads: Option<NonZeroUsize>) -> Result<tokio::runtime::Runtime> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    if let Some(threads) = threads {
+        builder.worker_threads(threads.get());
+    }
+    Ok(builder.enable_all().build()?)
 }
 
 async fn foreground(config: Config) -> Result<()> {

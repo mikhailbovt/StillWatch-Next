@@ -19,6 +19,7 @@ pub async fn execution_host(cuda_device: Option<u16>) -> io::Result<ExecutionHos
         ram_bytes,
         os_release,
         logical_cores: std::thread::available_parallelism()?.get() as u32,
+        core_runtime_threads: tokio::runtime::Handle::current().metrics().num_workers(),
         accelerator,
     })
 }

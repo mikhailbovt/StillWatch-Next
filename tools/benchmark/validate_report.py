@@ -178,6 +178,8 @@ class Validation:
         host_fields = ("architecture", "os_release", "cpu", "logical_cores", "ram_bytes")
         host_matches = (actual_host["platform"] == locked_host["os"]
                         and all(actual_host[key] == locked_host[key] for key in host_fields))
+        if "core_runtime_threads" in locked_host:
+            host_matches = host_matches and actual_host.get("core_runtime_threads") == locked_host["core_runtime_threads"]
         acceleration = actual_host["accelerator"]
         if locked_host["accelerator"] is None:
             host_matches = host_matches and acceleration is None

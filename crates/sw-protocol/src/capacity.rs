@@ -74,6 +74,7 @@ pub struct ExecutionHost {
     pub os_release: String,
     pub cpu: String,
     pub logical_cores: u32,
+    pub core_runtime_threads: usize,
     pub ram_bytes: u64,
     pub accelerator: Option<HostAccelerator>,
 }

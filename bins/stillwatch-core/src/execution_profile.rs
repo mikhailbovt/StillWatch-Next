@@ -147,7 +147,7 @@ pub(super) async fn verify(
     let host = execution_host(inference.cuda.as_ref().map(|cuda| cuda.device)).await?;
     ensure!(
         host == profile.host,
-        "hardware or driver differs from the qualification"
+        "hardware, driver or Core runtime thread count differs from the qualification"
     );
     ensure!(
         worker.decoder_identity().await? == Some(profile.artifacts.decoder_identity.as_str()),

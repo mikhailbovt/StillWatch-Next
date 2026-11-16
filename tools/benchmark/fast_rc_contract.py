@@ -151,6 +151,8 @@ def execution_profile(profile, candidate, manifest, host, decoder, raw_bytes, cu
         raise ValueError("The capture worker did not report a decoder identity")
     locked = profile["host"]
     host_fields = ("architecture", "os_release", "cpu", "logical_cores", "ram_bytes")
+    if "core_runtime_threads" in locked:
+        host_fields += ("core_runtime_threads",)
     if host != {"platform": locked["os"], **{key: locked[key] for key in host_fields},
                 "accelerator": host["accelerator"]}:
         raise ValueError("Core host fingerprint differs from the frozen profile")

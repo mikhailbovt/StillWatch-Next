@@ -48,7 +48,7 @@ fn run() -> Result<()> {
         _ => ServiceControlHandlerResult::NotImplemented,
     })?;
     status(handle, ServiceState::StartPending, 1, false)?;
-    let result = runtime().and_then(|runtime| runtime.block_on(async move {
+    let result = runtime(config.core_runtime_threads).and_then(|runtime| runtime.block_on(async move {
         let (ready, mut startup) = watch::channel(false);
         let reporter = tokio::spawn(async move {
             let mut checkpoint: u32 = 2;

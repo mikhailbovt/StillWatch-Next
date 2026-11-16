@@ -458,6 +458,8 @@ def native_fixture(settings, root, *, start_enabled=True, use_canary_media=False
                "--mediamtx-sha256", settings["mediamtx_digest"], "--media-encoder", settings["encoder"],
                "--media-encoder-sha256", settings["encoder_digest"], "--media-ice-udp", f"{lan_host}:{free_port(lan_host, socket.SOCK_DGRAM)}",
                *settings.get("cuda_args", [])]
+    if (threads := profile["host"].get("core_runtime_threads")) is not None:
+        options.extend(["--core-runtime-threads", str(threads)])
     if (execution := settings.get("execution_profile")) is not None:
         configuration = root / "workload-settings.json"
         write_json(configuration, {"media_workload_limits": execution["work"]["media"],

@@ -8,6 +8,9 @@ from fast_rc_contract import checked_json, contract_digests, execution_profile, 
 
 def run(args):
     profile = checked_json(args.profile)
+    host = checked_json(args.execution_host)
+    if "core_runtime_threads" in host:
+        profile["host"].setdefault("core_runtime_threads", host["core_runtime_threads"])
     validate_schema("profile", profile)
     if (profile["candidate_digest"] != sha256(args.candidate)
             or profile["contract_digests"] != contract_digests()
@@ -17,8 +20,7 @@ def run(args):
     if decoder.get("rtsp_peer_confined") is not True:
         raise ValueError("The staged capture worker lacks RTSP peer confinement")
     execution = execution_profile(profile, checked_json(args.candidate), checked_json(args.source_manifest),
-                                  checked_json(args.execution_host), decoder["decoder_identity"],
-                                  args.raw_frame_bytes, args.cuda_device)
+                                  host, decoder["decoder_identity"], args.raw_frame_bytes, args.cuda_device)
     args.output.mkdir(parents=True)
     path = args.output / "execution.json"
     write_json(path, execution)

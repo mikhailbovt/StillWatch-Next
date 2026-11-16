@@ -30,6 +30,7 @@
         "cpu": {"$ref": "#/$defs/label"},
         "physical_cores": {"type": "integer", "minimum": 1},
         "logical_cores": {"type": "integer", "minimum": 1},
+        "core_runtime_threads": {"type": "integer", "minimum": 1},
         "ram_bytes": {"type": "integer", "minimum": 1},
         "power_mode": {"$ref": "#/$defs/label"},
         "accelerator": {
