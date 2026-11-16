@@ -107,6 +107,15 @@ def match_opening_subject(event, subject_frames, minimum_iou):
 def replay_backend(args):
     metadata = {"backend": "cpu", "threads_per_worker": args.threads, "cuda": None}
     options = ["--inference-threads", str(args.threads)]
+    if args.core_runtime_threads is not None:
+        runtime = ["--core-runtime-threads", str(args.core_runtime_threads)]
+        with TemporaryDirectory(prefix="stillwatch-replay-host-") as path:
+            probe = subprocess.check_output([args.core, "--data-dir", path, "--execution-host", *runtime], timeout=10)
+        threads = json.loads(probe)["core_runtime_threads"]
+        if threads != args.core_runtime_threads:
+            raise ValueError("The replay Core selected a different runtime thread count")
+        options.extend(runtime)
+        metadata["core_runtime_threads"] = threads
     if args.cuda_device is not None:
         stems = ("onnxruntime_providers_cuda.dll", "onnxruntime_providers_shared.dll") if os.name == "nt" else (
             "libonnxruntime_providers_cuda.so", "libonnxruntime_providers_shared.so")
@@ -439,6 +448,7 @@ if __name__ == "__main__":
         parser.add_argument(f"--{name}", type=Path)
     parser.add_argument("--parallel", type=int, choices=range(1, 5), default=3)
     parser.add_argument("--threads", type=int, choices=range(1, 65), default=3)
+    parser.add_argument("--core-runtime-threads", type=int)
     parser.add_argument("--cuda-device", type=int)
     parser.add_argument("--cuda-graph-shape", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"))
     args = parser.parse_args()
@@ -450,6 +460,8 @@ if __name__ == "__main__":
         parser.error("native replay requires --core, --worker, --models, --runtime and --media")
     if args.rescore is not None and (any(native_args) or any(legacy_args)):
         parser.error("--rescore reads an existing report without launching a runtime")
+    if args.core_runtime_threads is not None and (args.rescore is not None or args.core_runtime_threads < 1):
+        parser.error("--core-runtime-threads requires native replay and a positive thread count")
     if args.cuda_device is not None and (args.rescore is not None or not 0 <= args.cuda_device <= 65535):
         parser.error("--cuda-device requires native replay and a device index in 0..65535")
     if args.cuda_graph_shape is not None and (args.cuda_device is None or any(
