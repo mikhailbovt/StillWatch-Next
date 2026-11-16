@@ -347,6 +347,7 @@ def run(settings, output, evidence_root):
                 outstanding = {case["camera"]: case for case in batch}
                 completed = []
                 window = {case["camera"]: None for case in batch}
+                viewer_trace = deque(maxlen=128) if kind == "viewer_grant_offer_close" else None
                 recovery = None
                 if kind == "inference_child_restart":
                     recovery = {"before": before, "interrupted": {}, "after": {}}
@@ -365,6 +366,8 @@ def run(settings, output, evidence_root):
                     for name, case in list(outstanding.items()):
                         current = (recovery["after"][name] if recovery is not None
                                    else latest(affected[name], fixture["local"]))
+                        if viewer_trace is not None:
+                            viewer_trace.append({"elapsed_ms": (offset() - started) * 1_000, "source": current})
                         if not camera_recovered(before[name], current, kind in {"rtsp_reconnect", "core_restart"}):
                             continue
                         window[name] = window[name] or offset()
@@ -394,6 +397,7 @@ def run(settings, output, evidence_root):
                                       "source_after": latest(affected[name], fixture["local"]),
                                       "inference_recovery": recovery,
                                       "quiet_observations": quiet_observations,
+                                      **({"viewer_recovery_samples": list(viewer_trace)} if viewer_trace is not None else {}),
                                       "pre_fault_openings": [event for event in observed
                                                              if event["camera"] == name and event["utc_ms"] < began_utc],
                                       "incidents": [event for event in observed if event["utc_ms"] >= began_utc]})
