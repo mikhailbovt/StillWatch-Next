@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path, PurePosixPath
 import re
+import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL = "fast-rc-v2"
@@ -17,6 +19,7 @@ CONTRACTS = {
     "release": ROOT / "qualification/release-requirements.json",
 }
 STAGES = ("preflight", "logical", "faults_and_capacity", "storage_and_crash", "quiet_load", "final")
+DURATION_CLOCKS = {"linux": "CLOCK_MONOTONIC_RAW", "windows": "QueryPerformanceCounter"}
 DIGEST = re.compile(r"sha256:[a-f0-9]{64}")
 RUN_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
 MAX_JSON = 32 * 1024 * 1024
@@ -65,6 +68,14 @@ LOGIC_CASES = {
         ("sw-storage", "tests::restore_checks_blob_integrity_and_rotates_stream_generation"),
     ),
 }
+
+
+def native_clock():
+    if sys.platform.startswith("linux"):
+        return DURATION_CLOCKS["linux"], lambda: time.clock_gettime(time.CLOCK_MONOTONIC_RAW)
+    if sys.platform == "win32":
+        return DURATION_CLOCKS["windows"], time.perf_counter
+    raise ValueError("Fast RC needs a native Linux or Windows elapsed clock")
 
 
 def sha256(path):
@@ -233,13 +244,37 @@ def evidence(root, path):
     return {"path": relative, "digest": sha256(member(root, relative))}
 
 
-def checked_evidence(root, record):
-    if not isinstance(record, dict) or set(record) != {"path", "digest"} or not DIGEST.fullmatch(record["digest"]):
+def evidence_location(record):
+    if (not isinstance(record, dict) or set(record) != {"path", "digest"}
+            or not isinstance(record["path"], str) or not isinstance(record["digest"], str)
+            or not DIGEST.fullmatch(record["digest"])):
         raise ValueError("Invalid evidence reference")
-    path = member(root, record["path"])
+    return record["path"]
+
+
+def checked_evidence(root, record):
+    path = member(root, evidence_location(record))
     if sha256(path) != record["digest"]:
         raise ValueError(f"Evidence digest differs: {record['path']}")
     return path
+
+
+def event_regression_cases(events):
+    required = set(checked_json(CONTRACTS["quality"])["required_regressions"])
+    if not isinstance(events, dict):
+        raise ValueError("Expected an event regression ledger")
+    cases = events.get("cases", [])
+    if not isinstance(cases, list) or len(cases) > len(required):
+        raise ValueError("Expected a bounded list of event regression cases")
+    by_name = {}
+    for row in cases:
+        name = row.get("id") if isinstance(row, dict) else None
+        if not isinstance(name, str) or name not in required or name in by_name:
+            raise ValueError("Unexpected or duplicate event regression case")
+        if not isinstance(row.get("evidence", []), list):
+            raise ValueError("Event regression evidence must be an array of path and digest pairs")
+        by_name[name] = row
+    return required, by_name
 
 
 def number(value):

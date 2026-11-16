@@ -5,7 +5,7 @@ import json
 import math
 import statistics
 
-from fast_rc_contract import checked_json, detail_output_dimensions, fresh_opening, number, sha256
+from fast_rc_contract import DURATION_CLOCKS, checked_json, detail_output_dimensions, fresh_opening, number, sha256
 
 
 def resource_caps(profile):
@@ -80,6 +80,18 @@ def viewer_gaps_ms(rows, start):
     return longest
 
 
+def measured_wall_counts(before, after, span):
+    start, end = before.get("elapsed_clock_s"), after.get("elapsed_clock_s")
+    if (not number(start) or not number(end) or end <= start
+            or before["epoch"] != after["epoch"] or not before.get("analysis")):
+        return None
+    first, last = before["analysis"], after["analysis"]
+    counts = [int(last[f"{task}_frames"]) - int(first[f"{task}_frames"]) for task in ("pose", "fire")]
+    if min(counts) < 0:
+        raise ValueError("Accepted model counters regressed during the quiet interval")
+    return tuple(count * span / (end - start) for count in counts)
+
+
 class Steady:
     def __init__(self, artifacts, profile, contract, proof):
         self.rows = read_samples(artifacts("samples"))
@@ -90,6 +102,7 @@ class Steady:
         self.workload = profile["workload"]
         self.budgets = profile["budgets"]
         self.model = profile["models"]
+        self.clock = DURATION_CLOCKS[profile["host"]["os"]]
         self.limits = contract["quiet_load"]
         self.observations = proof["observations"]
         self.cameras = [item["id"] for item in self.sources["sources"][:self.workload["camera_count"]]]
@@ -104,13 +117,16 @@ class Steady:
 
     def interval(self):
         minimum = self.limits["minimum_seconds"]
-        required = {"seconds": minimum, "camera_count": len(self.cameras), "planned_faults": 0, "isolated": True}
+        required = {"seconds": minimum, "elapsed_clock": self.clock, "camera_count": len(self.cameras),
+                    "planned_faults": 0, "isolated": True}
         last = self.rows[-1] if self.rows else {}
         observed = {"seconds": self.end["elapsed_s"] if self.end else None, "ticks": len(self.rows),
                     "camera_count": len(self.start["cameras"]) if self.start else 0,
-                    "isolated": self.observations["isolated"], "exit_code": self.observations["exit_code"]}
+                    "isolated": self.observations["isolated"], "exit_code": self.observations["exit_code"],
+                    "elapsed_clock": self.end.get("elapsed_clock") if self.end else None}
         entered = bool(self.start and self.rows)
-        complete = bool(entered and self.end and self.observations["exit_code"] == 0
+        complete = bool(entered and self.end and self.start.get("elapsed_clock") == observed["elapsed_clock"] == self.clock
+                        and self.observations["exit_code"] == 0
                         and self.end["elapsed_s"] >= minimum and len(self.rows) == minimum + 1
                         and last["elapsed_s"] >= minimum and observed["isolated"] is True)
         verdict = "PASS" if complete else "INCOMPLETE"
@@ -132,6 +148,7 @@ class Steady:
         latency_samples = defaultdict(list)
         missing = Counter()
         epochs = defaultdict(set)
+        clock_verified = self.start and self.start.get("elapsed_clock") == self.clock
         for row in self.rows:
             for camera in self.cameras:
                 sample = row["cameras"].get(camera)
@@ -161,6 +178,14 @@ class Steady:
                     wall = analysis.get("wall_cadence")
                     if wall and wall["window_seconds"] == span:
                         values.update(wall_pose_min=wall["pose_accepted"], wall_fire_min=wall["fire_accepted"])
+                        if clock_verified and row["tick"] >= span:
+                            before = self.rows[row["tick"] - span]["cameras"].get(camera, {})
+                            measured = measured_wall_counts(before, sample, span)
+                            if measured is None:
+                                missing[camera + ".elapsed_clock_cadence"] += 1
+                            else:
+                                values.update(wall_pose_min=min(values["wall_pose_min"], measured[0]),
+                                              wall_fire_min=min(values["wall_fire_min"], measured[1]))
                     else:
                         missing[camera + ".wall_cadence"] += 1
                 if row["elapsed_s"] >= self.limits["source_window_seconds"]:

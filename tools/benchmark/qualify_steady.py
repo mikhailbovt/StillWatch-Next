@@ -23,7 +23,7 @@ from uuid import uuid4
 import av
 import psutil
 
-from fast_rc_contract import ROOT, checked_json, detail_output_dimensions, member, sha256, write_json
+from fast_rc_contract import ROOT, checked_json, detail_output_dimensions, member, native_clock, sha256, write_json
 
 sys.path.insert(0, str(ROOT / "tests/e2e"))
 from lan_core import Client as PinnedClient, encode_uuid, refresh_request, sign
@@ -66,7 +66,12 @@ def read_sources(path, profile):
     return {source["id"]: source for source in selected}, manifest["viewers"]
 
 
-async def collect_snapshots(lan, session, cameras, started, seconds, rate, counts):
+async def wait_for_sample(deadline, now):
+    while (remaining := deadline - now()) > 0:
+        await asyncio.sleep(remaining)
+
+
+async def collect_snapshots(lan, session, cameras, started, seconds, rate, counts, now):
     expected = seconds * rate // 60
     spacing = 60 / rate
     starts = deque(maxlen=rate)
@@ -75,14 +80,14 @@ async def collect_snapshots(lan, session, cameras, started, seconds, rate, count
         if len(starts) == rate:
             # Bound each rolling minute despite jitter in local request processing.
             next_start = max(next_start, starts[0] + 60 + min(0.05, spacing / 100))
-        await asyncio.sleep(max(0, next_start - time.monotonic()))
-        if time.monotonic() >= started + seconds:
+        await wait_for_sample(next_start, now)
+        if now() >= started + seconds:
             break
-        starts.append(time.monotonic())
+        starts.append(now())
         camera = cameras[index % len(cameras)]
         code, headers, jpeg = await asyncio.to_thread(
             request, lan, session["access_token"], "GET", f"/api/v2/cameras/{camera}/snapshot.jpg")
-        if time.monotonic() > started + seconds:
+        if now() > started + seconds:
             break
         headers = {key.lower(): value for key, value in headers.items()}
         counts["requests"] += 1
@@ -91,7 +96,7 @@ async def collect_snapshots(lan, session, cameras, started, seconds, rate, count
             counts["decoded"] += 1
         else:
             counts["failures"].append({"request": counts["requests"], "camera": camera, "status": code,
-                                       "reason": problem, "elapsed_s": time.monotonic() - started})
+                                       "reason": problem, "elapsed_s": now() - started})
 
 
 def snapshot_problem(code, headers, jpeg):
@@ -279,6 +284,7 @@ def openings(database, cameras, start_ms):
 
 async def collect(settings, profile, sources, viewers, cameras, process, local, root, output, seconds):
     workload = profile["workload"]
+    clock_name, elapsed_clock = native_clock()
     lan, session, offer, key = await asyncio.to_thread(pair_owner, settings, local, root)
     viewer_frames = {}
     viewer_geometry = {}
@@ -299,7 +305,10 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def camera_sample():
-        rows = await asyncio.gather(*(asyncio.to_thread(latest, camera, local) for camera in cameras.values()))
+        def read(camera):
+            return latest(camera, local) | {"elapsed_clock_s": elapsed_clock()}
+
+        rows = await asyncio.gather(*(asyncio.to_thread(read, camera) for camera in cameras.values()))
         return dict(zip(cameras, rows, strict=True))
 
     def check_viewers():
@@ -324,18 +333,20 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                 raise RuntimeError("Steady readiness barrier expired")
             await asyncio.sleep(0.5)
         start_metrics = await asyncio.to_thread(metrics, local, cameras)
-        started = time.monotonic()
+        started_monotonic = time.monotonic()
+        started = elapsed_clock()
         start_utc_ms = time.time_ns() // 1_000_000
-        write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms, "sampling_started_monotonic_s": started,
+        write_json(output / "start.json", {"cameras": cameras, "source_utc_ms": start_utc_ms,
+                                            "elapsed_clock": clock_name, "sampling_started_monotonic_s": started_monotonic,
                                             "metrics": start_metrics,
                                             "viewer_frames": viewer_frames.copy(), "source_scope": sample})
         snapshots = {"requests": 0, "decoded": 0, "failures": []}
         snapshot_task = asyncio.create_task(collect_snapshots(
-            lan, session, list(cameras.values()), started, seconds, workload["snapshot_requests_per_minute"], snapshots))
+            lan, session, list(cameras.values()), started, seconds, workload["snapshot_requests_per_minute"], snapshots, elapsed_clock))
         viewer_renewals = 0
         with (output / "samples.jsonl").open("x", encoding="utf-8", newline="\n", buffering=1) as file:
             for tick in range(seconds + 1):
-                await asyncio.sleep(max(0, started + tick - time.monotonic()))
+                await wait_for_sample(started + tick, elapsed_clock)
                 check_viewers()
                 if snapshot_task.done():
                     snapshot_task.result()
@@ -353,12 +364,15 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                 per_camera = await camera_sample()
                 usage = await asyncio.to_thread(resources, process.pid, root / "data", settings.get("cuda_device"),
                                                 profile["host"]["accelerator"]) if tick % 5 == 0 else None
-                file.write(json.dumps({"tick": tick, "elapsed_s": time.monotonic() - started,
+                file.write(json.dumps({"tick": tick, "elapsed_s": elapsed_clock() - started,
+                                       "host_monotonic_elapsed_s": time.monotonic() - started_monotonic,
                                        "cameras": per_camera, "viewer_frames": viewer_frames,
                                        "viewer_geometry": viewer_geometry,
                                        "snapshots": snapshots["requests"], "snapshots_ok": snapshots["decoded"],
                                        "resources": usage}) + "\n")
-        interval = time.monotonic() - started
+        interval = elapsed_clock() - started
+        host_interval = time.monotonic() - started_monotonic
+        end_utc_ms = time.time_ns() // 1_000_000
         end_metrics = await asyncio.to_thread(metrics, local, cameras)
         observed = await asyncio.to_thread(openings, root / "data/stillwatch.sqlite3", cameras, start_utc_ms)
         source_spans = {}
@@ -368,8 +382,9 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
             after = (last["analysis"] or {}).get("last_pose_source_us")
             if first["epoch"] == last["epoch"] and before is not None and after is not None and int(after) >= int(before):
                 source_spans[camera] = (int(after) - int(before)) / 1_000_000
-        write_json(output / "end.json", {"elapsed_s": interval, "metrics": end_metrics, "openings": observed,
-                                          "started_utc_ms": start_utc_ms,
+        write_json(output / "end.json", {"elapsed_clock": clock_name, "elapsed_s": interval, "metrics": end_metrics,
+                                          "openings": observed, "started_utc_ms": start_utc_ms, "ended_utc_ms": end_utc_ms,
+                                          "host_monotonic_elapsed_s": host_interval,
                                           "viewer_renewals": viewer_renewals, "snapshots": snapshots["requests"],
                                           "snapshots_ok": snapshots["decoded"],
                                           "snapshot_failures": snapshots["failures"],

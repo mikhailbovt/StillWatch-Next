@@ -15,7 +15,7 @@ import sys
 from fast_rc_contract import (
     CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
     camera_quiet, camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
-    cuda_graph_shape, fresh_opening,
+    cuda_graph_shape, event_regression_cases, evidence_location, fresh_opening,
     inference_cameras_recovered, inference_worker_replaced, member, number, quiet_requirements, sha256,
     validate_schema, verified_quiet_window, write_json,
 )
@@ -239,8 +239,8 @@ class Validation:
         gates = ("active_profile_numeric", "active_profile_observations", "active_profile_events")
         expected.update(dict.fromkeys(gates, "pass"))
         if "event-output" in proof.get("artifacts", {}):
-            events = checked_json(self.artifact(proof, "event-output"))
-            self.models["active_profile_events"] = self.read_event_parity(events)
+            _, _, verdict = self.event_regression_check(proof)
+            self.models["active_profile_events"] = {"PASS": "pass", "FAIL": "fail", "INCOMPLETE": "not_run"}[verdict]
         observed.update({key: self.models[key] for key in gates})
         if "fail" in (observed[key] for key in gates):
             verdict = "FAIL"
@@ -250,22 +250,40 @@ class Validation:
             verdict = "INCOMPLETE"
         return expected, observed, verdict
 
-    def read_event_parity(self, events):
+    def event_regression_check(self, proof):
+        pin = self.run["inputs"].get("event_parity")
+        if (pin is None or proof["artifacts"]["event-output"] != pin
+                or self.run["event_parity_digest"] != pin["digest"]):
+            raise ValueError("The regression case does not use the frozen event parity evidence")
+        return self.read_event_parity(checked_json(self.artifact(proof, "event-output")), proof)
+
+    def read_event_parity(self, events, proof):
         binding = {"candidate_digest": self.run["candidate_digest"], "profile_digest": self.run["profile_digest"],
                    "policy_version": self.profile["models"]["policy_version"]}
-        if any(events.get(name) != value for name, value in binding.items()):
+        if not isinstance(events, dict) or any(events.get(name) != value for name, value in binding.items()):
             raise ValueError("The measured event parity belongs to a different configuration")
-        evaluated = events.get("cases")
-        if not isinstance(evaluated, list) or not evaluated:
-            return "not_run"
-        if not all(isinstance(item.get("reference"), dict) and item["reference"]
-                   and isinstance(item.get("observed"), dict) and item["observed"]
-                   for item in evaluated):
-            return "not_run"
-        if any(item["reference"] != item["observed"] for item in evaluated):
-            return "fail"
-        required = set(checked_json(CONTRACTS["quality"])["required_regressions"])
-        return "pass" if required == {item.get("id") for item in evaluated} else "not_run"
+        required, cases = event_regression_cases(events)
+        passed, failed = set(), set()
+        for name, item in cases.items():
+            reference, observed = item.get("reference"), item.get("observed")
+            if not (isinstance(reference, dict) and reference and isinstance(observed, dict) and observed):
+                continue
+            sources = item.get("evidence", [])
+            if not sources:
+                continue
+            for record in sources:
+                role = "event-source/" + evidence_location(record)
+                attachment = {"path": "inputs/" + role, "digest": record["digest"]}
+                if proof["artifacts"].get(role) != attachment:
+                    raise ValueError("A model regression source differs from the frozen ledger")
+                self.artifact(proof, role)
+            target = json.dumps(reference, sort_keys=True, allow_nan=False)
+            measured = json.dumps(observed, sort_keys=True, allow_nan=False)
+            (passed if target == measured else failed).add(name)
+        missing = required - passed - failed
+        expected = {"regressions": sorted(required)}
+        observed = {"passed": sorted(passed), "failed": sorted(failed), "not_run": sorted(missing)}
+        return expected, observed, "FAIL" if failed else "INCOMPLETE" if missing else "PASS"
 
     def warmup_check(self, proof):
         model = self.profile["models"]
@@ -673,6 +691,8 @@ class Validation:
                         expected, observed, result = self.model_check(case, proof)
                     elif case == "models.native-warmup-all-shapes":
                         expected, observed, result = self.warmup_check(proof)
+                    elif case == "quality.required-regressions":
+                        expected, observed, result = self.event_regression_check(proof)
                     elif case in CHECKS:
                         expected, observed, result = self.smoke_check(case, proof)
                     elif case in LOGIC_CASES:

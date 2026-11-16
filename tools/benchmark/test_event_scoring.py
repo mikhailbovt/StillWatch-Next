@@ -10,7 +10,7 @@ import unittest
 from compare_fire_backends import reviewed_regions, sample_slot
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
 from event_scoring import coverage_intervals, episodes, score_clip
-from fast_rc_contract import verified_quiet_window
+from fast_rc_contract import DURATION_CLOCKS, verified_quiet_window
 from legacy_replay import measured_clip
 from validate_report import canary_matches
 from validate_steady import Steady
@@ -59,9 +59,10 @@ class EventScoring(unittest.TestCase):
         steady.budgets = {"viewer_recovery_ms": 15_000}
         steady.sources = {"sources": [], "viewers": []}
         steady.cameras = ["camera"]
+        steady.clock = DURATION_CLOCKS["linux"]
         steady.limits = {"minimum_seconds": 30}
-        steady.start = {"cameras": {"camera": "id"}, "viewer_frames": {"0": 100, "1": 100}}
-        steady.end = {"elapsed_s": 30}
+        steady.start = {"cameras": {"camera": "id"}, "viewer_frames": {"0": 100, "1": 100}, "elapsed_clock": steady.clock}
+        steady.end = {"elapsed_s": 30, "elapsed_clock": steady.clock}
         steady.observations = {"isolated": True, "exit_code": 0}
         steady.rows = [{"tick": tick, "elapsed_s": tick, "viewer_frames": {"0": 100 + tick, "1": 100 + tick},
                         "snapshots": tick * 8 // 60, "snapshots_ok": tick * 8 // 60} for tick in range(31)]

@@ -12,12 +12,12 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from uuid import uuid4
 
 from fast_rc_contract import (
     CONTRACTS, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, STAGES,
-    checked_execution_profile, checked_json, contract_digests, cuda_graph_shape, evidence, member, sha256, validate_schema, write_json,
+    checked_evidence, checked_execution_profile, checked_json, contract_digests, cuda_graph_shape,
+    event_regression_cases, evidence, member, native_clock, sha256, validate_schema, write_json,
 )
 from validate_report import validate
 
@@ -48,13 +48,14 @@ class Run:
         self.root.mkdir(parents=True, exist_ok=False)
         (self.root / "raw").mkdir()
         (self.root / "inputs").mkdir()
-        self.started = time.monotonic()
+        clock_name, self.now = native_clock()
+        self.started = self.now()
         self.files = self.candidate["files"]
         if not isinstance(self.files, dict) or not self.files or len(self.files) > 2048:
             raise ValueError("Candidate inventory must contain between one and 2048 files")
         self.run = {
             "protocol": PROTOCOL, "run_id": uuid4().hex, "started_utc": datetime.now(timezone.utc).isoformat(),
-            "contract_digests": contracts, "cases": {}, "inputs": {},
+            "contract_digests": contracts, "cases": {}, "inputs": {}, "elapsed_clock": clock_name,
             "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
             "source_video_seconds": None, "virtual_clock_span_seconds": None, "interrupted": False, "stage_errors": [],
         }
@@ -68,6 +69,11 @@ class Run:
                 self.run[f"{name}_digest"] = pin["digest"]
         if self.run["candidate_digest"] != self.profile["candidate_digest"]:
             raise ValueError("Profile pins a different candidate manifest")
+        self.event_artifacts = {}
+        try:
+            self.event_artifacts = self.freeze_event_artifacts()
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            self.run["stage_errors"].append(f"preflight event evidence: {error}")
         self.os = platform.system().casefold()
         self.ext = ".exe" if self.os == "windows" else ""
         if self.os != self.profile["host"]["os"] or platform.machine().lower() not in {"x86_64", "amd64"}:
@@ -90,7 +96,30 @@ class Run:
         }
 
     def elapsed(self):
-        return round(time.monotonic() - self.started, 6)
+        return round(self.now() - self.started, 6)
+
+    def freeze_event_artifacts(self):
+        if self.args.event_parity is None:
+            return {}
+        ledger = self.root / "inputs/event_parity.json"
+        shutil.copyfile(self.args.event_parity, ledger)
+        pin = evidence(self.root, ledger)
+        self.run["inputs"]["event_parity"] = pin
+        self.run["event_parity_digest"] = pin["digest"]
+        _, cases = event_regression_cases(checked_json(ledger))
+        original = self.args.event_parity.parent.resolve(strict=True)
+        artifacts = {"event-output": ledger}
+        for record in (item for row in cases.values() for item in row.get("evidence", [])):
+            source = checked_evidence(original, record)
+            role = "event-source/" + record["path"]
+            target = self.root / "inputs" / role
+            if role not in artifacts:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                artifacts[role] = target
+            if sha256(target) != record["digest"]:
+                raise ValueError("An event observation changed while freezing the ledger")
+        return artifacts
 
     def capture(self, stage, label, argv):
         directory = self.root / "raw" / stage
@@ -101,7 +130,7 @@ class Run:
         options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                    else {"start_new_session": True})
         with out.open("xb") as stream:
-            if time.monotonic() >= deadline:
+            if self.now() >= deadline:
                 stream.write(b"Stage deadline was reached before this command started.\n")
                 return {"exit_code": None, "started_s": started, "finished_s": self.elapsed(),
                         "deadline_exceeded": True}, out
@@ -115,7 +144,7 @@ class Run:
                         "collector_unavailable": True}, out
             exceeded = False
             try:
-                code = self.process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                code = self.wait_for_collector(deadline)
             except subprocess.TimeoutExpired:
                 exceeded = True
                 self.stop()
@@ -141,6 +170,14 @@ class Run:
             except ProcessLookupError:
                 pass
         process.wait(timeout=10)
+
+    def wait_for_collector(self, deadline):
+        while True:
+            try:
+                return self.process.wait(timeout=max(0.01, min(1.0, deadline - self.now())))
+            except subprocess.TimeoutExpired:
+                if self.now() >= deadline:
+                    raise
 
     def proof(self, stage, case, started, observations, artifacts, *, deadline=False):
         path = self.root / "raw" / stage / f"{case}.json"
@@ -243,10 +280,8 @@ class Run:
             return
         for case in ("models.active-numeric-observation-event-gates", "models.all-role-numeric-report"):
             sources = {"worker-log": raw, "parity-output": report}
-            if case == "models.active-numeric-observation-event-gates" and self.args.event_parity is not None:
-                restored = self.root / "inputs" / "event-parity.json"
-                shutil.copyfile(self.args.event_parity, restored)
-                sources["event-output"] = restored
+            if case == "models.active-numeric-observation-event-gates":
+                sources.update(self.event_artifacts)
             self.proof(stage, case, observed["started_s"], observed, sources,
                        deadline=observed.get("deadline_exceeded", False))
 
@@ -266,6 +301,9 @@ class Run:
         stage = "logical"
         self.script(stage, "evaluator.censoring-coverage-and-grounding", "event-scoring",
                     ROOT / "tools/benchmark/test_event_scoring.py")
+        if self.verified and self.event_artifacts:
+            self.proof(stage, "quality.required-regressions", self.elapsed(), {"source": "frozen_event_parity"},
+                       self.event_artifacts)
         fixture_ffmpeg = self.args.fixture_ffmpeg or self.ffmpeg
         if self.verified and all(item.is_file() for item in (self.runtime, fixture_ffmpeg, self.media)) and self.args.demo:
             self.script(stage, "storage.pre-aged-retention-at-volume", "retention", ROOT / "tests/e2e/analysis_core.py",
