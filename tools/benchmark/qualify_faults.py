@@ -224,6 +224,7 @@ def run(settings, output, evidence_root):
             resources = ChurnResources(fixture, settings, root, receiver)
             for batch in batches(schedule):
                 refresh_receiver(settings, receiver)
+                preparation_utc = time.time_ns() // 1_000_000
                 prepared = {case["id"]: prepare_canary(database, fixture, case) for case in batch}
                 kind = batch[0]["kind"]
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
@@ -234,9 +235,13 @@ def run(settings, output, evidence_root):
                 if quiet:
                     case, = batch
                     name = case["camera"]
+                    last_sample = None
+                    longest_quiet_us = 0
 
                     def quiet_sample():
+                        nonlocal last_sample, longest_quiet_us
                         sample = latest(affected[name], fixture["local"])
+                        last_sample = sample
                         if quiet_duration_us == 0:
                             return sample if camera_quiet(sample) else None
                         cursor = quiet_fire_sample(sample)
@@ -253,14 +258,20 @@ def run(settings, output, evidence_root):
                         if len(quiet_observations) > 32:
                             quiet_observations.pop(0)
                         elapsed_us = cursor[2] - quiet_fire_sample(quiet_observations[0])[2]
+                        longest_quiet_us = max(longest_quiet_us, elapsed_us)
                         return sample if elapsed_us >= quiet_duration_us else None
 
                     began = offset()
                     try:
                         before = {name: until(quiet_sample, 20)}
                     except AssertionError:
+                        path = output / (case["id"] + ".json")
+                        write_json(path, {"planned": case["canary"], "required_quiet_source_us": quiet_duration_us,
+                                          "longest_quiet_source_us": longest_quiet_us, "last_sample": last_sample,
+                                          "quiet_observations": quiet_observations})
                         log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": began,
-                                              "ended_s": offset(), "finished_s": None, "error": "Quiet scene precondition expired"}) + "\n")
+                                              "ended_s": offset(), "finished_s": None, "error": "Quiet scene precondition expired",
+                                              "precondition": evidence(evidence_root, path)}) + "\n")
                         continue
                 started = offset()
                 began_utc = time.time_ns() // 1_000_000
@@ -318,11 +329,15 @@ def run(settings, output, evidence_root):
                         time.sleep(0.2)
                 for name, case in outstanding.items():
                     path = output / (case["id"] + ".json")
-                    write_json(path, {"planned": case["canary"], "source_before": before[name],
+                    observed = openings(database, fixture["cameras"], preparation_utc)
+                    write_json(path, {"planned": case["canary"], "started_utc_ms": began_utc,
+                                      "preparation_utc_ms": preparation_utc, "source_before": before[name],
                                       "source_after": latest(affected[name], fixture["local"]),
                                       "inference_recovery": recovery,
                                       "quiet_observations": quiet_observations,
-                                      "incidents": openings(database, fixture["cameras"], began_utc)})
+                                      "pre_fault_openings": [event for event in observed
+                                                             if event["camera"] == name and event["utc_ms"] < began_utc],
+                                      "incidents": [event for event in observed if event["utc_ms"] >= began_utc]})
                     log.write(json.dumps({"id": case["id"], "kind": kind, "camera": name, "started_s": started,
                                           "ended_s": offset(), "finished_s": None, "capture_progress_s": window[name],
                                           "deadline_s": deadline, "fault": fault,
