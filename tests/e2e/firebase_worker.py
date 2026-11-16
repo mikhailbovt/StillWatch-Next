@@ -311,13 +311,32 @@ def live(args):
                 evaluate_live(origin, token_file, args.route, args.expect_source)
 
 
-def core_round_trip(args, root, port, token_file):
-    baseline = json.loads((ROOT / "baseline.json").read_text())
+def prepare_replay(args, path):
+    baseline = json.loads((ROOT / "baseline.json").read_text(encoding="utf-8"))
     with args.demo.open("rb") as demo:
-        assert hashlib.file_digest(demo, "sha256").hexdigest() == baseline["demonstration"]["sha256"]
+        digest = hashlib.file_digest(demo, "sha256").hexdigest()
+    if digest == baseline["demonstration"]["sha256"]:
+        name, start, duration = "stillwatch-demo-0.5.0", "40", "8"
+        geometry = "scale=640:360"
+    else:
+        manifest = ROOT / "models/evaluations/firesense-v1.manifest.json"
+        original = next(clip for clip in json.loads(manifest.read_text(encoding="utf-8"))["clips"]
+                        if clip.get("archive_member") == "pos/posVideo1.868.avi")
+        if digest != original["source_sha256"]:
+            raise ValueError("Expected the credited demonstration or the pinned FIRESENSE original")
+        if args.route != "local_only":
+            raise ValueError("The pinned FIRESENSE original is reserved for local evaluation")
+        name, start, duration = "FIRESENSE posVideo1.868.avi", "0", "12"
+        geometry = ("scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+                    "pad=640:360:(ow-iw)/2:(oh-ih)/2")
+    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", start, "-i", str(args.demo),
+                    "-t", duration, "-vf", geometry, "-an", "-c:v", "libx264", "-threads", "1", str(path)], check=True)
+    return name, digest
+
+
+def core_round_trip(args, root, port, token_file):
     path = root / "fire.mp4"
-    subprocess.run([str(args.ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", "40", "-i", str(args.demo),
-                    "-t", "8", "-vf", "scale=640:360", "-an", "-c:v", "libx264", "-threads", "1", str(path)], check=True)
+    source, source_digest = prepare_replay(args, path)
     data = root / "core"
     local_only = args.route == "local_only"
     fallback = args.route == "prefer_local"
@@ -339,7 +358,6 @@ def core_round_trip(args, root, port, token_file):
             status, camera = client.call("POST", "/api/v2/cameras", {
                 "name": f"Firebase QA {consent}", "enabled": True, "cloud_consent": consent,
                 "source": {"type": "replay", "file": path.name, "pace": True},
-                # The publicly credited demo includes a UI panel above the fire video.
                 "privacy_masks": [{"left": 0, "top": 0, "right": 10000, "bottom": 1000}],
             }, key=f"consent-{consent}")
             assert status == 201 and not camera["live"], (status, camera)
@@ -353,11 +371,15 @@ def core_round_trip(args, root, port, token_file):
             try:
                 evaluation = until(result, 25)
             except AssertionError as error:
-                attempts = [tuple(row) for row in db.execute(
-                    "SELECT outcome, count(*) FROM semantic_attempts GROUP BY outcome")]
+                attempts = [dict(row) for row in db.execute(
+                    """SELECT a.outcome, j.state AS job_state, a.finished_at - a.started_at AS elapsed_ms,
+                              p.expires_at - a.finished_at AS remaining_evidence_ms,
+                              json_extract(a.report, '$.inference_source') AS inference_source
+                       FROM semantic_attempts a LEFT JOIN semantic_jobs j ON j.packet_id = a.packet_id
+                       LEFT JOIN evidence_packets p ON p.id = a.packet_id ORDER BY a.started_at""")]
                 _, semantic = client.call("GET", "/api/v2/semantic-status")
                 runtime_states = [client.camera(camera)["runtime"]["state"] for camera in cameras.values()]
-                raise AssertionError({"attempts_by_outcome": attempts, "semantic": semantic,
+                raise AssertionError({"attempts": attempts, "semantic": semantic,
                                       "capture_states": runtime_states}) from error
             report = json.loads(evaluation["report"])
             assert report["inference_source"] == expected_source and report["sdk_version"] == "13.3.0"
@@ -373,6 +395,7 @@ def core_round_trip(args, root, port, token_file):
         assert code == 200 and status["last_inference_source"] == expected_source
         consent_evidence = {"local_only_without_cloud_consent": True} if local_only else {"camera_without_consent_not_submitted": True}
         print(json.dumps({"core_real_evidence_applied": True, "inference_source": expected_source, "sdk": "13.3.0",
+                          "fixture_source": source, "fixture_sha256": source_digest,
                           **consent_evidence, "no_live_alerts": True}))
 
 
@@ -385,7 +408,9 @@ if __name__ == "__main__":
     parser.add_argument("--running-port", type=int)
     parser.add_argument("--route", choices=("local_only", "cloud_only", "prefer_local"), default="cloud_only")
     parser.add_argument("--expect-source", choices=("on_device", "in_cloud"))
-    for name in ("demo", "ffmpeg", "models", "runtime"):
+    parser.add_argument("--demo", type=lambda path: Path(path).resolve(strict=True),
+                        help="Credited StillWatch demo video or original FIRESENSE posVideo1.868.avi for local-only evaluation")
+    for name in ("ffmpeg", "models", "runtime"):
         parser.add_argument(f"--{name}", type=lambda path: Path(path).resolve(strict=True))
     parser.add_argument("--manifest-sha256")
     parser.add_argument("--runtime-sha256")
