@@ -186,10 +186,10 @@ prepare.addEventListener("click", async () => {
     warmSession = await warmDevice();
     state = "ready";
     status.textContent = "Chrome model ready. Waiting for evidence.";
-  } catch {
+  } catch (error) {
     state = "unavailable";
     nextWarmup = performance.now() + 30_000;
-    status.textContent = "The Chrome model is unavailable. Review the browser requirements and retry.";
+    status.textContent = `Chrome model initialization failed (${evaluationFailure(error)}). Review the browser requirements and retry.`;
     prepare.disabled = false;
   }
 });
@@ -307,6 +307,8 @@ async function serveJob(response) {
 
 function evaluationFailure(error) {
   if (error?.message === "route_unavailable") return "local model unavailable";
+  if (error?.message === "device_session_deadline") return "session creation deadline";
+  if (error?.message === "device_image_deadline") return "first image deadline";
   if (error instanceof SyntaxError || error?.message === "invalid_response") return "invalid response";
   if (error?.message === "blocked_response") return "blocked response";
   if (error?.message === "unverified_route") return "route unverified";

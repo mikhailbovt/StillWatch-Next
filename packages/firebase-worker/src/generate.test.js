@@ -74,3 +74,39 @@ test("creation and image warmup have independent deadlines", async t => {
   assert.equal(creationSignal.aborted, false);
   assert.equal(session.destroy.mock.callCount(), 0);
 });
+
+test("warmup reports which deadline expired and releases a failed session", async t => {
+  let creationDeadline = new AbortController();
+  let creationPending = true;
+  const imageDeadline = new AbortController();
+  const timeout = new DOMException("Warmup timed out", "TimeoutError");
+  t.mock.method(AbortSignal, "timeout", ms => ms === 120_000 ? creationDeadline.signal : imageDeadline.signal);
+  const closeImage = t.mock.fn();
+  const session = {
+    async prompt(_, { signal }) {
+      imageDeadline.abort(timeout);
+      signal.throwIfAborted();
+    },
+    destroy: t.mock.fn(),
+  };
+  globalThis.LanguageModel = { async create({ signal }) {
+    if (creationPending) {
+      await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    }
+    return session;
+  } };
+  globalThis.OffscreenCanvas = class {
+    getContext() { return { fillRect() {} }; }
+    transferToImageBitmap() { return { close: closeImage }; }
+  };
+  t.after(() => { delete globalThis.LanguageModel; delete globalThis.OffscreenCanvas; });
+
+  const first = warmDevice();
+  creationDeadline.abort(timeout);
+  await assert.rejects(first, { message: "device_session_deadline" });
+  creationPending = false;
+  creationDeadline = new AbortController();
+  await assert.rejects(warmDevice(), { message: "device_image_deadline" });
+  assert.equal(closeImage.mock.callCount(), 1);
+  assert.equal(session.destroy.mock.callCount(), 1);
+});
