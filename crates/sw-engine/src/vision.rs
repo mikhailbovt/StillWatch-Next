@@ -501,7 +501,7 @@ impl VisionScheduler {
                         apply_hazard_commit(&mut policies, pending.advance().await);
                         #[cfg(feature = "diagnostics")]
                         timing.record(lane_timings::Stage::HazardQueue, queue_began);
-                        if pending.blocked() {
+                        if pending.at_capacity() {
                             self.phase(
                                 lane,
                                 AnalysisState::Degraded,
@@ -526,7 +526,7 @@ impl VisionScheduler {
                         self.phase(lane, AnalysisState::Ready, None);
                         #[cfg(feature = "diagnostics")]
                         let select_began = trace_lane.then(Instant::now);
-                        let next = self.next(lane, last_camera);
+                        let next = self.next(lane, last_camera, &pending);
                         #[cfg(feature = "diagnostics")]
                         timing.record(lane_timings::Stage::Select, select_began);
                         let Some(job) = next else {
@@ -673,7 +673,12 @@ impl VisionScheduler {
             })
     }
 
-    fn next(&self, lane: usize, last_camera: Option<Uuid>) -> Option<Dispatch> {
+    fn next(
+        &self,
+        lane: usize,
+        last_camera: Option<Uuid>,
+        pending: &PendingHazards,
+    ) -> Option<Dispatch> {
         let mut frames = self.cameras.frames();
         frames.sort_unstable_by_key(|frame| frame.scope.camera_id);
         let mut progress = self.progress.write().ok()?;
@@ -692,6 +697,7 @@ impl VisionScheduler {
             if frame.inference_lane != lane
                 || !self.accepts_frame(frame)
                 || now.duration_since(frame.captured_at) > FRAME_MAX_AGE
+                || !pending.accepts_camera(frame.scope.camera_id)
             {
                 continue;
             }

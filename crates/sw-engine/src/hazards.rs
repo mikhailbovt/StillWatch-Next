@@ -23,6 +23,7 @@ use uuid::Uuid;
 use crate::{CameraFrame, evidence::EvidenceSampler, scene};
 
 const MAX_PENDING: usize = 192;
+const MAX_PENDING_BATCHES_PER_CAMERA: usize = 2;
 const POLICY_VERSION: &str = "local-policy-5";
 const PACKET_PERIOD: Duration = Duration::from_secs(4);
 const PACKET_REFRESH: Duration = Duration::from_secs(10);
@@ -852,17 +853,25 @@ impl PendingHazards {
         !self.queue.is_empty()
     }
 
-    pub fn blocked(&self) -> bool {
-        self.queue.len() >= 2
-            || self
-                .queue
-                .iter()
-                .map(|batch| batch.pending.len())
-                .sum::<usize>()
-                >= MAX_PENDING
+    pub fn at_capacity(&self) -> bool {
+        self.queue
+            .iter()
+            .map(|batch| batch.pending.len())
+            .sum::<usize>()
+            >= MAX_PENDING
+    }
+
+    pub fn accepts_camera(&self, camera: Uuid) -> bool {
+        self.queue
+            .iter()
+            .filter(|batch| batch.frame.scope.camera_id == camera)
+            .take(MAX_PENDING_BATCHES_PER_CAMERA)
+            .count()
+            < MAX_PENDING_BATCHES_PER_CAMERA
     }
 
     pub fn push(&mut self, frame: Arc<CameraFrame>, updates: HazardUpdates) {
+        debug_assert!(self.accepts_camera(frame.scope.camera_id));
         self.queue.retain_mut(|batch| {
             if batch.frame.scope.camera_id != frame.scope.camera_id {
                 return true;
@@ -1272,7 +1281,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn active_write_allows_one_more_batch_and_retries_before_it() {
+    async fn pending_write_limits_its_camera_and_retries_before_other_batches() {
         use sw_protocol::worker::{FrameHeader, PtsQuality};
         use sw_storage::{CameraLimits, ObservationTime};
 
@@ -1309,7 +1318,11 @@ mod tests {
             epoch: 1,
             scene_revision: 1,
         };
-        let frame = |ordinal, source_us| {
+        let other = SourceScope {
+            camera_id: Uuid::new_v4(),
+            ..scope
+        };
+        let frame = |scope, ordinal, source_us| {
             let now = Instant::now();
             Arc::new(CameraFrame {
                 scope,
@@ -1351,7 +1364,7 @@ mod tests {
         let mut hazard = fire(1, EvidenceVisibility::Good);
         hazard.id = Uuid::new_v4();
         pending.push(
-            frame(1, 0),
+            frame(scope, 1, 0),
             updates(hazard.clone(), 0, HazardWrite::Open { packet: true }),
         );
         let (release, held) = oneshot::channel();
@@ -1361,12 +1374,20 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert!(!pending.blocked());
+        assert!(pending.accepts_camera(scope.camera_id));
         pending.push(
-            frame(2, 200_000),
+            frame(scope, 2, 200_000),
             updates(hazard, 200_000, HazardWrite::Packet),
         );
-        assert!(pending.blocked());
+        assert!(!pending.accepts_camera(scope.camera_id));
+        assert!(pending.accepts_camera(other.camera_id));
+        assert!(!pending.at_capacity());
+        let mut other_hazard = fire(1, EvidenceVisibility::Good);
+        other_hazard.id = Uuid::new_v4();
+        pending.push(
+            frame(other, 1, 0),
+            updates(other_hazard, 0, HazardWrite::Open { packet: true }),
+        );
         assert!(
             tokio::time::timeout(Duration::from_millis(1), pending.wait())
                 .await
@@ -1374,7 +1395,7 @@ mod tests {
         );
         release.send(Err(StoreError::Busy)).ok().unwrap();
         assert!(pending.wait().await.is_none());
-        assert!(pending.blocked());
+        assert!(!pending.accepts_camera(scope.camera_id));
         assert_eq!(
             pending.queue[0].pending[0].write,
             HazardWrite::Open { packet: false }
@@ -1394,8 +1415,10 @@ mod tests {
         assert!(pending.advance().await.is_none());
         assert_eq!(pending.writes.len(), 1);
         assert!(pending.settle().await.is_none());
-        assert_eq!(pending.queue.len(), 1);
+        assert_eq!(pending.queue.len(), 2);
+        assert!(pending.accepts_camera(scope.camera_id));
         assert_eq!(pending.queue[0].pending[0].source_us, 200_000);
+        assert_eq!(pending.queue[1].frame.scope, other);
     }
 
     #[test]
