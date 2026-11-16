@@ -60,6 +60,15 @@ Restart Core during the maintenance window and confirm fresh results on active c
 
 The Windows Core build uses WiX 5.0.2 and its `WixToolset.Util.wixext/5.0.2` extension. Use `wix extension add -g WixToolset.Util.wixext/5.0.2` on the packaging machine. The minimal Windows libav build uses the Win32-thread variant of the x64 MinGW compiler.
 
+For a signed release, run the packager with the Windows SDK SignTool, the release certificate thumbprint and the RFC 3161 timestamp URL used by the release signer. The packager uses the current user's Personal certificate store. Add `-MachineSigningStore` when the release identity belongs to the machine store.
+
+~~~powershell
+$sign = @{SignTool = $signTool; SigningThumbprint = $thumbprint; TimestampUrl = $timestampUrl}
+./deploy/packaging/windows.ps1 -Payload $payload -Wix $wix -Output $installer @sign
+~~~
+
+Use `-Companion` and a `.exe` output to build the Burn installer. The signing step verifies the embedded MSI, the detached Burn engine and the complete bundle before publishing the bundle to the requested path. To publish a standalone Companion MSI, use a separate `.msi` output. Record and use the final signed artifact's SHA-256 for the installation tests. [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/desktop/seccrypto/signtool), [WiX bundle signing](https://docs.firegiant.com/wix/tools/signing/)
+
 Windows installers take the three-component product version from the staged manifest. For major upgrades, install a strictly higher version with the same product family after taking an offline backup. Keep the prior installer and compatible data together for rollback. If rolling back, stop and remove the newer product, restore the compatible backup with its original access permissions, and install the earlier version. Verify that `LocalService` can access `ProgramData\StillWatch` and that permissions still exclude other interactive users. A file copy that drops the service ACL can cause Windows Installer error 1920 during startup.
 
 ## Enroll a device

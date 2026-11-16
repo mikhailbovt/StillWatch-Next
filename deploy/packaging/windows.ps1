@@ -2,10 +2,38 @@ param(
     [Parameter(Mandatory)][string]$Payload,
     [Parameter(Mandatory)][string]$Output,
     [Parameter(Mandatory)][string]$Wix,
-    [switch]$Companion
+    [switch]$Companion,
+    [string]$SignTool,
+    [ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$SigningThumbprint,
+    [uri]$TimestampUrl,
+    [switch]$MachineSigningStore
 )
 
 $ErrorActionPreference = 'Stop'
+$swSign = @()
+if ($SignTool -or $SigningThumbprint -or $TimestampUrl -or $MachineSigningStore) {
+    if (!$SignTool -or !$SigningThumbprint -or !$TimestampUrl -or !$TimestampUrl.IsAbsoluteUri -or
+        $TimestampUrl.Scheme -notin @('http', 'https') -or $TimestampUrl.UserInfo) {
+        throw 'Signing requires SignTool, a certificate thumbprint and an RFC 3161 timestamp URL.'
+    }
+    $swSignTool = (Resolve-Path -LiteralPath $SignTool).Path
+    $swStore = if ($MachineSigningStore) { 'LocalMachine' } else { 'CurrentUser' }
+    $swSigner = Get-Item -LiteralPath "Cert:\$swStore\My\$SigningThumbprint" -ErrorAction SilentlyContinue
+    $swNow = [DateTime]::Now
+    if (!$swSigner -or !$swSigner.HasPrivateKey -or $swNow -lt $swSigner.NotBefore -or $swNow -ge $swSigner.NotAfter) {
+        throw "No valid signing identity with a private key in $swStore\My for the requested thumbprint."
+    }
+    $swSign = @('sign', '/s', 'My', '/sha1', $SigningThumbprint, '/fd', 'SHA256', '/tr', $TimestampUrl.AbsoluteUri, '/td', 'SHA256')
+    if ($MachineSigningStore) { $swSign += '/sm' }
+}
+
+function Sign-Installer([string]$Path) {
+    & $swSignTool @swSign $Path
+    if ($LASTEXITCODE -ne 0) { throw 'Installer signing or timestamping failed.' }
+    & $swSignTool verify /pa /all /tw $Path
+    if ($LASTEXITCODE -ne 0) { throw 'Installer signature or timestamp verification failed.' }
+}
+
 $swPayload = (Resolve-Path -LiteralPath $Payload).Path
 $swOutput = [IO.Path]::GetFullPath($Output)
 $swExtension = [IO.Path]::GetExtension($swOutput)
@@ -71,15 +99,50 @@ foreach ($swPath in $swPaths) {
     $swFile.SetAttribute('KeyPath', 'yes')
 }
 $swGenerated = [IO.Path]::ChangeExtension($swOutput, '.payload.wxs')
-$swXml.Save($swGenerated)
 $swBuild = @('build', '-arch', 'x64', '-b', $PSScriptRoot, '-d', "Payload=$swPayload", '-d', "ProductVersion=$swVersion")
 if (-not $Companion) { $swBuild += @('-ext', 'WixToolset.Util.wixext/5.0.2') }
-& $swWix @swBuild (Join-Path $PSScriptRoot $swTemplate) $swGenerated -out $swMsi
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if ($swBundle) {
-    & $swWix build -arch x64 -ext WixToolset.BootstrapperApplications.wixext/5.0.2 `
-        -d "CompanionMsi=$swMsi" -d "ProductVersion=$swVersion" `
-        (Join-Path $PSScriptRoot 'windows-companion-bundle.wxs') -out $swOutput
+$swStaging = $null
+$swBuildMsi = $swMsi
+$swBuildBundle = $swOutput
+try {
+    if ($swSign) {
+        $swBuildParent = (Resolve-Path -LiteralPath $swParent).Path
+        $swStaging = Join-Path $swBuildParent ('.stillwatch-signing-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $swStaging | Out-Null
+        $swBuildMsi = Join-Path $swStaging 'installer.msi'
+        $swBuildBundle = Join-Path $swStaging 'unsigned-bundle.exe'
+        $swGenerated = Join-Path $swStaging 'payload.wxs'
+    }
+    $swXml.Save($swGenerated)
+    & $swWix @swBuild (Join-Path $PSScriptRoot $swTemplate) $swGenerated -out $swBuildMsi
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($swSign) { Sign-Installer $swBuildMsi }
+    if ($swBundle) {
+        & $swWix build -arch x64 -ext WixToolset.BootstrapperApplications.wixext/5.0.2 `
+            -d "CompanionMsi=$swBuildMsi" -d "ProductVersion=$swVersion" `
+            (Join-Path $PSScriptRoot 'windows-companion-bundle.wxs') -out $swBuildBundle
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        if ($swSign) {
+            $swEngine = Join-Path $swStaging 'burn-engine.exe'
+            $swSignedBundle = Join-Path $swStaging 'signed-bundle.exe'
+            & $swWix burn detach $swBuildBundle -engine $swEngine
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Sign-Installer $swEngine
+            & $swWix burn reattach $swBuildBundle -engine $swEngine -out $swSignedBundle
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Sign-Installer $swSignedBundle
+            [IO.File]::Move($swSignedBundle, $swOutput, $true)
+        }
+    }
+    if ($swSign -and !$swBundle) { [IO.File]::Move($swBuildMsi, $swMsi, $true) }
+} finally {
+    if ($swStaging -and (Test-Path -LiteralPath $swStaging)) {
+        $swResolved = (Resolve-Path -LiteralPath $swStaging).Path
+        $swDirectory = Get-Item -LiteralPath $swResolved -Force
+        if ($swResolved -eq $swStaging -and $swDirectory.Parent.FullName -eq $swBuildParent -and
+            -not ($swDirectory.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Remove-Item -LiteralPath $swResolved -Recurse -Force
+        }
+    }
 }
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Get-FileHash -LiteralPath $swOutput -Algorithm SHA256

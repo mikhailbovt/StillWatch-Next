@@ -63,3 +63,13 @@ The KMU replay added one low-light smoke onset, one daytime clip with smoke pres
 ## Release artifacts
 
 The latest qualified packages and SHA-256 hashes are recorded alongside the dated results in `IMPLEMENTATION_STATUS.md`. Binary packages, private test configuration, runtime data, and original video datasets are kept outside version control. QA signing proves artifact integrity for the test signer. Production signing requires the appropriate deployment identity.
+
+## External release gates
+
+| Gate | Owner | Evidence and remaining action |
+| --- | --- | --- |
+| G1 | Release owner and contest organizer | The [Hybrid Web review instructions](hybrid-review.md) reproduce the real browser route and the consented fallback. The release owner still needs the public submission artifact and the documented contest interpretation for this architecture. |
+| G2 | Firebase project operator | The Firebase SDK returned both actual inference sources in the test project. The production project still needs an authorized App Check issuer and an observed refresh and expiry run. [Firebase operations](firebase-worker.md) |
+| G3 | Release owner and notification service operators | The [physical device run sheet](../qualification/device-run.md) defines the presentation, receipt and interruption checks. Production APNs credentials, supported physical Android and iOS cases, audible output and the authorized service configuration are pending. |
+| G4 | Release owner and component rights holders | `NOTICE`, the native and model locks, and the [development corpus index](../models/evaluations/development-corpora.json) record source and license inputs. The release owner still needs a distribution decision covering the exact model, native and application payloads. |
+| G5 | Maintainer and qualification runner operator | Active model roles passed numeric and observation checks on the tested profiles. The exact signed native artifacts, full Fast RC v2 reports and independent event-quality evidence are still pending for release. |
