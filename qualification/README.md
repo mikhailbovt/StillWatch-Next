@@ -51,7 +51,7 @@ Run the scoring regressions with `python -B -m unittest discover -s tools/benchm
 
 ## Run Fast RC v2
 
-Stage the native payload and freeze its `manifest.json`, allowed model profiles, workload, media sources and fault schedule before running. Freeze hashes with the `sha256:` prefix. Prepare the qualification Python environment in advance. It uses `jsonschema` for schema checks and `psutil`, `aiortc` and `av` for native load and media measurements. The Core payload runs independently of this environment. Run `python tools/benchmark/prepare_logic.py --output LOGICAL_TEST_BINARIES.json` from the staged candidate’s source revision before the qualification clock starts.
+Stage the native payload and freeze its `manifest.json`, allowed model profiles, workload, media sources and fault schedule before running. Freeze hashes with the `sha256:` prefix. Prepare the qualification Python environment in advance. It uses `jsonschema` for schema checks and `psutil`, `aiortc` and `av` for native load and media measurements. The Core payload runs independently of this environment. Run `python tools/benchmark/prepare_logic.py --output LOGICAL_TEST_BINARIES.json` from the staged candidate’s source revision before the qualification clock starts. Keep its adjacent `.programs` directory so a later Cargo build can run without changing those executables.
 
 Capture the staged Core's `--execution-host` output and the staged worker's `capture-doctor` output as JSON. Freeze a Core-readable profile for the declared RTSP/TCP codec, image size and nominal frame rate. Use the same CUDA device and raw-frame budget in both commands when applicable.
 

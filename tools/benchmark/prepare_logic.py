@@ -3,7 +3,9 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 
 from fast_rc_contract import ROOT, sha256, write_json
 
@@ -16,6 +18,27 @@ def code_identity():
     if status:
         raise ValueError("Freeze the source checkout before building the logical test executables")
     return {"source_revision": revision, "cargo_lock_sha256": sha256(ROOT / "Cargo.lock")[7:]}
+
+
+def archive_programs(output, programs):
+    directory = output.resolve().with_name(output.name + ".programs")
+    directory.mkdir(exist_ok=True)
+    archived = {}
+    for name, entry in programs.items():
+        source = Path(entry["path"])
+        digest = entry["digest"]
+        target = directory / f"{name}-{digest[7:]}{source.suffix}"
+        if not target.is_file():
+            with TemporaryDirectory(dir=directory) as temporary:
+                staging = Path(temporary) / target.name
+                shutil.copy2(source, staging)
+                if sha256(staging) != digest:
+                    raise ValueError(f"Logical test executable changed while archiving {name}")
+                staging.replace(target)
+        if sha256(target) != digest:
+            raise ValueError(f"Archived logical test executable differs for {name}")
+        archived[name] = {"path": str(target), "digest": digest}
+    return archived
 
 
 def run(output):
@@ -39,7 +62,7 @@ def run(output):
             raise ValueError("Logical test executable build did not cover all packages")
     if code_identity() != source:
         raise ValueError("The source checkout changed during the logical test build")
-    write_json(output, {**source, "programs": programs})
+    write_json(output, {**source, "programs": archive_programs(output, programs)})
 
 
 if __name__ == "__main__":
