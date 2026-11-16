@@ -225,7 +225,6 @@ def run(settings, output, evidence_root):
             for batch in batches(schedule):
                 refresh_receiver(settings, receiver)
                 preparation_utc = time.time_ns() // 1_000_000
-                prepared = {case["id"]: prepare_canary(database, fixture, case) for case in batch}
                 kind = batch[0]["kind"]
                 affected = {case["camera"]: fixture["cameras"][case["camera"]] for case in batch}
                 tracked = fixture["cameras"] if kind == "inference_child_restart" else affected
@@ -235,6 +234,7 @@ def run(settings, output, evidence_root):
                 if quiet:
                     case, = batch
                     name = case["camera"]
+                    prepared = {case["id"]: 0}
                     last_sample = None
                     longest_quiet_us = 0
 
@@ -243,7 +243,10 @@ def run(settings, output, evidence_root):
                         sample = latest(affected[name], fixture["local"])
                         last_sample = sample
                         if quiet_duration_us == 0:
-                            return sample if camera_quiet(sample) else None
+                            if not camera_quiet(sample):
+                                return None
+                            prepared[case["id"]] = prepare_canary(database, fixture, case)
+                            return sample
                         cursor = quiet_fire_sample(sample)
                         if cursor is None:
                             quiet_observations.clear()
@@ -254,6 +257,11 @@ def run(settings, output, evidence_root):
                                 return None
                             if not consecutive_quiet_samples(previous, cursor):
                                 quiet_observations.clear()
+                        if not quiet_observations:
+                            # Keep the next opening available for the fault canary.
+                            # Resolving during the preceding active scene can open
+                            # another episode before this quiet interval begins.
+                            prepared[case["id"]] += prepare_canary(database, fixture, case)
                         quiet_observations.append(sample)
                         if len(quiet_observations) > 32:
                             quiet_observations.pop(0)
@@ -273,6 +281,8 @@ def run(settings, output, evidence_root):
                                               "ended_s": offset(), "finished_s": None, "error": "Quiet scene precondition expired",
                                               "precondition": evidence(evidence_root, path)}) + "\n")
                         continue
+                else:
+                    prepared = {case["id"]: prepare_canary(database, fixture, case) for case in batch}
                 started = offset()
                 began_utc = time.time_ns() // 1_000_000
                 deadline = started + profile["budgets"][LIMITS[kind]] / 1_000
