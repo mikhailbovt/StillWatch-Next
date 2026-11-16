@@ -470,7 +470,8 @@ class Run:
         if self.args.fault_schedule is None or self.args.node is None:
             return
         schedule = self.pinned_fault_schedule()
-        settings.update(fault_schedule=str(schedule), monotonic_origin=self.started)
+        settings.update(fault_schedule=str(schedule), monotonic_origin=self.started,
+                        elapsed_clock=self.run["elapsed_clock"])
         options = output.parent / "settings.json"
         write_json(options, settings)
         observations, log = self.capture(stage, "faults", [sys.executable, "-B", ROOT / "tools/benchmark/qualify.py",

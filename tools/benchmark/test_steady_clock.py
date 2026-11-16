@@ -1,12 +1,24 @@
 """Check that a quiet interval carries independent elapsed-time evidence."""
 
+import time
 import unittest
 
 from fast_rc_contract import native_clock
+from qualify_faults import fault_clock
 from validate_steady import Steady, measured_wall_counts
 
 
 class SteadyClockTests(unittest.TestCase):
+    def test_fault_collector_resumes_the_same_clock_as_the_runner(self):
+        name, now = native_clock()
+        origin = now()
+        continued = fault_clock({"elapsed_clock": name})()
+        self.assertGreaterEqual(continued, origin)
+        self.assertLess(continued - origin, 1)
+        with self.assertRaisesRegex(ValueError, "different clock"):
+            fault_clock({"elapsed_clock": "UTC"})
+        self.assertIs(fault_clock({}), time.monotonic)
+
     def test_validator_requires_the_host_clock_at_both_ends(self):
         steady = Steady.__new__(Steady)
         steady.clock = native_clock()[0]

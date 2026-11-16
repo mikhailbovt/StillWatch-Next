@@ -18,9 +18,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-def until(check, seconds=10):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+def until(check, seconds=10, *, clock=time.monotonic):
+    deadline = clock() + seconds
+    while clock() < deadline:
         result = check()
         if result:
             return result

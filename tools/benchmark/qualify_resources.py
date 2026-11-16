@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import psutil
 
-from fast_rc_contract import write_json
+from fast_rc_contract import native_clock, write_json
 from qualify_steady import resources
 
 
@@ -18,7 +18,9 @@ class ChurnResources:
         self.fixture = fixture
         self.settings = settings
         self.data = root / "data"
-        self.begin = time.monotonic()
+        self.clock_name, self.now = native_clock()
+        self.begin = self.now()
+        self.monotonic_begin = time.monotonic()
         self.records = []
         self.processes = set()
         self.record("baseline")
@@ -70,7 +72,8 @@ class ChurnResources:
             return
         process = self.fixture["process"]
         usage = self.measured_usage(process.pid)
-        self.records.append({"elapsed_s": time.monotonic() - self.begin, "kind": kind, "completed": list(completed),
+        self.records.append({"elapsed_s": self.now() - self.begin, "host_monotonic_elapsed_s": time.monotonic() - self.monotonic_begin,
+                             "kind": kind, "completed": list(completed),
                              "core": process.pid, "usage": usage, "leases": status["resources"]})
 
     def drain(self, output):
@@ -85,7 +88,7 @@ class ChurnResources:
                 raise RuntimeError(f"Camera disable returned {code}")
         leader = self.fixture["process"].pid
         profile = self.fixture["profile"]
-        began = time.monotonic()
+        began = self.now()
         deadline = began + profile["budgets"]["rtsp_recovery_ms"] / 1_000
         while True:
             status = self.status()
@@ -105,11 +108,11 @@ class ChurnResources:
                     and leases["capture_frame_bytes_in_use"] == leases["evidence_write_bytes_in_use"] == 0
                     and writer["queued"] == 0 and writer["running_ms"] is None and not any(cameras) and jobs == 0):
                 break
-            if time.monotonic() >= deadline:
+            if self.now() >= deadline:
                 break
             time.sleep(0.2)
-        write_json(output, {"sampling_started_monotonic_s": self.begin, "samples": self.records,
-                            "drain": {"elapsed_ms": (time.monotonic() - began) * 1_000,
+        write_json(output, {"elapsed_clock": self.clock_name, "sampling_started_monotonic_s": self.monotonic_begin,
+                            "samples": self.records, "drain": {"elapsed_ms": (self.now() - began) * 1_000,
                                       "usage": usage, "leases": leases, "writer": writer, "detached": detached,
                                       "enabled_cameras": cameras[0], "reserved_frame_bytes": cameras[1],
                                       "semantic_jobs": jobs, "retained": retained}})

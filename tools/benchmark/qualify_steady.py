@@ -155,10 +155,10 @@ def pair_owner(settings, client, root):
     return pinned, session, offer, key
 
 
-def latest(camera, local):
-    began = time.monotonic()
+def latest(camera, local, *, clock=time.monotonic):
+    began = clock()
     result = local.camera(camera)
-    elapsed = (time.monotonic() - began) * 1_000
+    elapsed = (clock() - began) * 1_000
     state = result["runtime"]
     return {"epoch": result["source_epoch"], "capture_state": state["state"], "frame": state["frame"],
             "relative_source_lag_ms": state.get("relative_source_lag_ms"), "source_lagging": state.get("source_lagging"),
@@ -306,7 +306,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
 
     async def camera_sample():
         def read(camera):
-            return latest(camera, local) | {"elapsed_clock_s": elapsed_clock()}
+            return latest(camera, local, clock=elapsed_clock) | {"elapsed_clock_s": elapsed_clock()}
 
         rows = await asyncio.gather(*(asyncio.to_thread(read, camera) for camera in cameras.values()))
         return dict(zip(cameras, rows, strict=True))
@@ -320,7 +320,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
     tasks = start_viewers()
     snapshot_task = None
     try:
-        warmup_end = time.monotonic() + 95
+        warmup_end = elapsed_clock() + 95
         while True:
             check_viewers()
             sample = await camera_sample()
@@ -328,7 +328,7 @@ async def collect(settings, profile, sources, viewers, cameras, process, local, 
                     and row["analysis"].get("wall_cadence") and row["analysis"].get("cadence") for row in sample.values())
                     and len(viewer_frames) == len(viewers) and all(value >= 2 for value in viewer_frames.values())):
                 break
-            if time.monotonic() >= warmup_end:
+            if elapsed_clock() >= warmup_end:
                 write_json(output / "readiness-timeout.json", {"cameras": sample, "viewer_frames": viewer_frames})
                 raise RuntimeError("Steady readiness barrier expired")
             await asyncio.sleep(0.5)

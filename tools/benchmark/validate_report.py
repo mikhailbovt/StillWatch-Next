@@ -13,7 +13,8 @@ import statistics
 import sys
 
 from fast_rc_contract import (
-    CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, LOGIC_CASES, PROTOCOL, RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
+    CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, DURATION_CLOCKS, LOGIC_CASES, PROTOCOL,
+    RELEASE_DIAGNOSTICS, ROOT, RUN_ID, STAGES,
     camera_quiet, camera_recovered, capture_progressed, checked_evidence, checked_execution_profile, checked_json, contract_digests,
     cuda_graph_shape, event_regression_cases, evidence_location, fresh_opening,
     inference_cameras_recovered, inference_worker_replaced, member, number, quiet_requirements, sha256,
@@ -66,6 +67,8 @@ class Validation:
         self.run = checked_json(self.manifest_path)
         self.profile = self.input("profile")
         validate_schema("profile", self.profile)
+        if "elapsed_clock" in self.run and self.run["elapsed_clock"] != DURATION_CLOCKS[self.profile["host"]["os"]]:
+            raise ValueError("Run elapsed clock differs from the frozen host platform")
         self.candidate = self.input("candidate")
         self.problems = list(self.run["stage_errors"])
         if self.candidate.get("source_dirty") is True:
@@ -97,6 +100,10 @@ class Validation:
         if sha256(path) != self.run[name + "_digest"]:
             raise ValueError(f"The frozen {name} digest differs")
         return checked_json(path)
+
+    def require_elapsed_clock(self, measured):
+        if "elapsed_clock" in self.run and measured.get("elapsed_clock") != self.run["elapsed_clock"]:
+            raise ValueError("The collector used a different elapsed clock from the run")
 
     def read_case(self, case, stage):
         item = self.run["cases"].get(case)
@@ -399,6 +406,8 @@ class Validation:
                                  "recovery_ms_maximum": self.profile["budgets"]["rtsp_recovery_ms"],
                                  "control_ready_http": 200})
                 load = next((row for row in lines if row.get("excess_requests") == expected["excess_requests"]), {})
+                if load:
+                    self.require_elapsed_clock(load)
                 durations = load.get("excess_latency_ms", [])
                 p95 = self.contract["quiet_load"]["api_read_control_p95_ms"]
                 expected["api_p95_ms_maximum"] = p95
@@ -432,6 +441,8 @@ class Validation:
                 and len(before) == len(after) == 2 and all(right > left for left, right in zip(before, after)))
 
     def fault_check(self, case, proof):
+        if "elapsed_clock" in self.run:
+            self.require_elapsed_clock(checked_json(self.artifact(proof, "settings")))
         kind = FAULTS.get(case)
         with self.artifact(proof, "fault-ledger").open("rb") as handle:
             data = handle.read(2 * 1024 * 1024 + 1)
@@ -555,6 +566,7 @@ class Validation:
         if "native-canary" not in proof["artifacts"]:
             return expected, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
         raw = checked_json(self.artifact(proof, "native-canary"))
+        self.require_elapsed_clock(raw)
         elapsed = raw["elapsed_ms"]
         if (raw["planned"] != planned or not number(raw["started_utc_ms"]) or not number(elapsed)
                 or elapsed > (proof["finished_s"] - proof["started_s"]) * 1_000):
@@ -580,6 +592,7 @@ class Validation:
         if "storage" not in proof["artifacts"]:
             return required, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
         raw = checked_json(self.artifact(proof, "storage"))
+        self.require_elapsed_clock(raw)
         if raw["planned"] != planned or not number(raw["released_utc_ms"]) or not number(raw["recovery_ms"]):
             raise ValueError("Invalid storage fixture identity or timing")
         pressure, known = raw["pressure_event"], planned["pressure_canary"]
@@ -620,6 +633,7 @@ class Validation:
             if trial is None:
                 verdicts[kind] = "INCOMPLETE"
                 continue
+            self.require_elapsed_clock(trial)
             if trial["planned"] != planned[kind] or not number(trial["released_utc_ms"]) or not number(trial["recovery_ms"]):
                 raise ValueError(f"Invalid storage recovery identity or timing for {kind}")
             pressure = trial["during_pressure"]
@@ -739,6 +753,7 @@ class Validation:
 
     def churn_check(self, proof):
         trace = checked_json(self.artifact(proof, "churn"))
+        self.require_elapsed_clock(trace)
         samples, drain = trace["samples"], trace["drain"]
         caps = resource_caps(self.profile)
         budgets = self.profile["budgets"]

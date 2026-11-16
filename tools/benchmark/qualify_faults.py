@@ -18,7 +18,7 @@ import psutil
 
 from fast_rc_contract import (
     CONTRACTS, camera_quiet, camera_recovered, checked_json, consecutive_quiet_samples, evidence, fresh_opening,
-    inference_camera_interrupted, inference_cameras_recovered, inference_worker_replaced, quiet_fire_sample,
+    inference_camera_interrupted, inference_cameras_recovered, inference_worker_replaced, native_clock, quiet_fire_sample,
     quiet_requirements, sha256, write_json,
 )
 from qualify_resources import ChurnResources
@@ -187,6 +187,16 @@ def batches(schedule):
         yield batch
 
 
+def fault_clock(settings):
+    supplied = settings.get("elapsed_clock")
+    if supplied is None:
+        return time.monotonic
+    clock_name, now = native_clock()
+    if supplied != clock_name:
+        raise ValueError("The fault origin was recorded on a different clock")
+    return now
+
+
 def run(settings, output, evidence_root):
     output.mkdir(parents=True, exist_ok=False)
     ledger = output / "ledger.jsonl"
@@ -208,8 +218,10 @@ def run(settings, output, evidence_root):
     if len({case["id"] for case in schedule}) != len(schedule):
         raise ValueError("Fault schedule contains a duplicate ID")
 
+    now = fault_clock(settings)
+
     def offset():
-        return time.monotonic() - settings["monotonic_origin"]
+        return now() - settings["monotonic_origin"]
 
     with TemporaryDirectory(prefix="stillwatch-faults-") as scratch, ledger.open("x", encoding="utf-8", buffering=1) as log:
         root = Path(scratch)
@@ -219,7 +231,7 @@ def run(settings, output, evidence_root):
                 states = [latest(camera, fixture["local"]) for camera in fixture["cameras"].values()]
                 return all(row["capture_state"] == "streaming" and row["analysis"] and row["analysis"]["state"] == "ready" for row in states)
 
-            until(ready, 60)
+            until(ready, 60, clock=now)
             receiver = pair_owner(settings, fixture["local"], root)
             resources = ChurnResources(fixture, settings, root, receiver)
             for batch in batches(schedule):
@@ -271,7 +283,7 @@ def run(settings, output, evidence_root):
 
                     began = offset()
                     try:
-                        before = {name: until(quiet_sample, 20)}
+                        before = {name: until(quiet_sample, 20, clock=now)}
                     except AssertionError:
                         path = output / (case["id"] + ".json")
                         write_json(path, {"planned": case["canary"], "required_quiet_source_us": quiet_duration_us,
@@ -359,6 +371,7 @@ def run(settings, output, evidence_root):
 
 
 def final_canary(settings, output):
+    clock_name, now = native_clock()
     profile = checked_json(Path(settings["profile"]))
     schedule = Path(settings["fault_schedule"])
     if sha256(schedule) != profile["workload"]["fault_schedule_digest"]:
@@ -368,14 +381,14 @@ def final_canary(settings, output):
     with TemporaryDirectory(prefix="stillwatch-final-") as scratch:
         root = Path(scratch)
         database = root / "data/stillwatch.sqlite3"
-        started = time.monotonic()
+        started = now()
         earliest = time.time_ns() // 1_000_000
         deadline = started + limit_ms / 1_000
         with native_fixture(settings, root) as fixture:
             receiver = pair_owner(settings, fixture["local"], root)
             ready = []
             verified = None
-            while time.monotonic() <= deadline:
+            while now() <= deadline:
                 states = {name: latest(camera, fixture["local"]) for name, camera in fixture["cameras"].items()}
                 ready = [name for name, row in states.items()
                          if row["capture_state"] == "streaming" and row["analysis"] and row["analysis"]["state"] == "ready"
@@ -385,13 +398,14 @@ def final_canary(settings, output):
                     if verified is not None:
                         break
                 time.sleep(0.2)
-            elapsed = (time.monotonic() - started) * 1_000
+            elapsed = (now() - started) * 1_000
             if verified is not None:
                 close_canary(fixture["local"], verified["incidents"][0]["id"])
             with closing(sqlite3.connect(database)) as db:
                 integrity = [status for status, in db.execute("PRAGMA integrity_check")]
                 invalid_references = len(db.execute("PRAGMA foreign_key_check").fetchall())
             write_json(output, {"planned": planned, "started_utc_ms": earliest, "elapsed_ms": elapsed,
+                                "elapsed_clock": clock_name,
                                 "ready_cameras": ready, "integrity": integrity, "invalid_references": invalid_references,
                                 "incidents": verified["incidents"] if verified is not None else []})
 
@@ -405,6 +419,7 @@ def main(argv):
 
 
 def capacity(settings):
+    clock_name, now = native_clock()
     with TemporaryDirectory(prefix="stillwatch-ramp-") as scratch:
         with native_fixture(settings, Path(scratch), start_enabled=False) as fixture:
             local = fixture["local"]
@@ -432,7 +447,7 @@ def capacity(settings):
                     assert status == 200
                     active += 1
                 if active == target:
-                    states = until(lambda: live(cameras[:active]), 45)
+                    states = until(lambda: live(cameras[:active]), 45, clock=now)
                     samples.append({"count": target, "streams_with_pose_and_fire": len(states)})
             template = local.camera(cameras[-1])["config"]
             code, spare = local.call("POST", "/api/v2/cameras", template | {"name": "last-slot-challenger", "enabled": False},
@@ -448,12 +463,12 @@ def capacity(settings):
             assert rejected["code"] == "capacity_exceeded"
             winner, waiting = competing_ids[statuses.index(200)], competing_ids[statuses.index(503)]
             active_ids = [*cameras[:-1], winner]
-            live_at_max = until(lambda: live(active_ids), 45)
+            live_at_max = until(lambda: live(active_ids), 45, clock=now)
             samples.append({"count": len(cameras), "streams_with_pose_and_fire": len(live_at_max)})
             def excess_request(_):
-                started = time.monotonic()
+                started = now()
                 response = enable(waiting, True)
-                return response, (time.monotonic() - started) * 1_000
+                return response, (now() - started) * 1_000
 
             with ThreadPoolExecutor(max_workers=4) as pool:
                 excess = list(pool.map(excess_request, range(16)))
@@ -467,8 +482,8 @@ def capacity(settings):
                 return current if all(camera_recovered(before, after, False)
                                       for before, after in zip(live_at_max, current, strict=True)) else None
 
-            progress = until(progressing, limit)
-            released = time.monotonic()
+            progress = until(progressing, limit, clock=now)
+            released = now()
             assert enable(winner, False)[0] == 200
             cell = uuid4().hex
             old_revision = local.camera(waiting)["revision"]
@@ -478,10 +493,10 @@ def capacity(settings):
             assert first[0] == duplicate[0] == 200, (first[0], duplicate[0])
             assert all(first[1][key] == duplicate[1][key] for key in ("id", "revision", "config"))
             assert enable(winner, True)[0] == 503
-            restored = until(lambda: live([*cameras[:-1], waiting]), limit)
+            restored = until(lambda: live([*cameras[:-1], waiting]), limit, clock=now)
             print(json.dumps({"ramps": samples, "last_slot_statuses": statuses, "repeated_result": True,
                               "camera_slot_reuse_with_live_analysis": len(restored),
-                              "admission_recovery_ms": (time.monotonic() - released) * 1_000,
+                              "admission_recovery_ms": (now() - released) * 1_000, "elapsed_clock": clock_name,
                               "excess_requests": len(excess), "excess_rejected": rejected_count,
                               "excess_statuses": [status for (status, _), _ in excess],
                               "excess_latency_ms": [duration for _, duration in excess],

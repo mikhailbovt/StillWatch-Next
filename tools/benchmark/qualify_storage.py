@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 import time
 from uuid import UUID
 
-from fast_rc_contract import DATABASE_PRESSURE_STATUS, camera_recovered, capture_progressed, checked_json, sha256, write_json
+from fast_rc_contract import DATABASE_PRESSURE_STATUS, camera_recovered, capture_progressed, checked_json, native_clock, sha256, write_json
 from qualify_faults import canary, close_canary, inject
 from qualify_steady import latest, native_fixture, openings, pair_owner
 from replay_core import until
@@ -91,6 +91,7 @@ def external_writer(database):
 def database_trial(fixture, receiver, database, planned, kind, limit_ms):
     local = fixture["local"]
     cameras = fixture["cameras"]
+    clock_name, now = native_clock()
 
     def snapshot():
         return {name: latest(camera_id, local) for name, camera_id in cameras.items()}
@@ -100,32 +101,32 @@ def database_trial(fixture, receiver, database, planned, kind, limit_ms):
         return states if all(state["capture_state"] == "streaming"
                              and (state["analysis"] or {}).get("state") == "ready" for state in states.values()) else None
 
-    before = until(ready, 60)
+    before = until(ready, 60, clock=now)
     attempt = "recovered-" + kind
     pressure = pinned_wal(database) if kind == "pinned_wal" else external_writer(database)
     with pressure as wal:
         if wal is not None:
             camera(local, "committed-before-live-checkpoint")
-        began = time.monotonic()
+        began = now()
         status, body = camera(local, attempt)
-        refusal_ms = (time.monotonic() - began) * 1_000
+        refusal_ms = (now() - began) * 1_000
         live_status, _ = local.call("GET", "/health/live")
         wal_bytes = wal.stat().st_size if wal is not None else None
         during = snapshot()
-        deadline = time.monotonic() + 5
-        while not all(capture_progressed(before[name], state) for name, state in during.items()) and time.monotonic() < deadline:
+        deadline = now() + 5
+        while not all(capture_progressed(before[name], state) for name, state in during.items()) and now() < deadline:
             time.sleep(0.05)
             during = snapshot()
-    released = time.monotonic()
+    released = now()
     utc_ms = time.time_ns() // 1_000_000
     source = planned["camera"]
     proof = {"planned": planned, "during_pressure": {"before": before, "during": during, "status": status,
              "code": (body or {}).get("code"), "live_status": live_status, "wal_bytes": wal_bytes,
-             "refusal_ms": refusal_ms}, "released_utc_ms": utc_ms, "idempotent_write": False}
+             "refusal_ms": refusal_ms}, "released_utc_ms": utc_ms, "elapsed_clock": clock_name, "idempotent_write": False}
     end = released + limit_ms / 1_000
     verified = None
     try:
-        until(lambda: readiness(local, 200, "ready"), max(0, end - time.monotonic()))
+        until(lambda: readiness(local, 200, "ready"), max(0, end - now()), clock=now)
         created, saved = camera(local, attempt)
         proof["idempotent_write"] = created == 201 and camera(local, attempt) == (201, saved)
         inject(fixture, [{"kind": "rtsp_reconnect", "camera": source}], receiver)
@@ -135,15 +136,15 @@ def database_trial(fixture, receiver, database, planned, kind, limit_ms):
                 return canary(database, fixture, receiver, planned, utc_ms)
             return None
 
-        verified = until(fresh_event, max(0, end - time.monotonic()))
+        verified = until(fresh_event, max(0, end - now()), clock=now)
     except (AssertionError, TimeoutError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         proof["recovery_error"] = str(error)
-    proof["recovery_ms"] = (time.monotonic() - released) * 1_000
+    proof["recovery_ms"] = (now() - released) * 1_000
     proof["source_after_release"] = latest(cameras[source], local)
     proof["incidents"] = verified["incidents"] if verified else []
     proof["checks"] = persisted_blobs(database, database.parent / "blobs", proof["incidents"][0]["id"]) if verified else {}
     if verified is not None:
-        close_canary(local, verified)
+        close_canary(local, verified["incidents"][0]["id"])
     return proof
 
 
@@ -171,6 +172,7 @@ def run_database(settings, output):
 
 
 def run(settings, output):
+    clock_name, now = native_clock()
     profile = checked_json(Path(settings["profile"]))
     schedule = Path(settings["fault_schedule"])
     if sha256(schedule) != profile["workload"]["fault_schedule_digest"]:
@@ -189,12 +191,12 @@ def run(settings, output):
                 local = fixture["local"]
                 source = fixture["cameras"][camera]
                 receiver = pair_owner(settings, local, root)
-                failed_event = until(lambda: unavailable_evidence(database, fixture, planned["pressure_canary"], began), 30)
+                failed_event = until(lambda: unavailable_evidence(database, fixture, planned["pressure_canary"], began), 30, clock=now)
                 before = latest(source, local)
                 assert before["capture_state"] == "streaming" and before["analysis"]["state"] == "ready"
-                close_canary(local, {"incidents": [failed_event]})
+                close_canary(local, failed_event["id"])
                 released_utc = time.time_ns() // 1_000_000
-                released = time.monotonic()
+                released = now()
                 filler.unlink()
                 released_bytes = os.statvfs(blobs).f_bavail * os.statvfs(blobs).f_frsize
                 # Start the pinned positive scene again on a new source epoch.
@@ -207,15 +209,16 @@ def run(settings, output):
 
                 limit = profile["budgets"]["storage_recovery_ms"]
                 try:
-                    verified = until(fresh_event, max(0, released + limit / 1_000 - time.monotonic()))
+                    verified = until(fresh_event, max(0, released + limit / 1_000 - now()), clock=now)
                 except AssertionError:
                     verified = None
-                elapsed = (time.monotonic() - released) * 1_000
+                elapsed = (now() - released) * 1_000
                 incidents = verified["incidents"] if verified else []
                 checks = persisted_blobs(database, blobs, incidents[0]["id"]) if incidents else {}
                 write_json(output, {"planned": planned, "volume_bytes": size, "probe_errno": code,
                                     "free_bytes_after_release": released_bytes, "pressure_event": failed_event,
-                                    "released_utc_ms": released_utc, "recovery_ms": elapsed, "incidents": incidents,
+                                    "released_utc_ms": released_utc, "elapsed_clock": clock_name,
+                                    "recovery_ms": elapsed, "incidents": incidents,
                                     "source_after_release": latest(source, local),
                                     "openings_after_release": openings(database, fixture["cameras"], released_utc),
                                     "checks": checks})
