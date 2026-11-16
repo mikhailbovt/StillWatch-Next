@@ -2,8 +2,8 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 
 use serde::Serialize;
 use sw_domain::{
-    Box2d, FireDecision, FireFacts, FirePolicy, FireSample, FireSettings, Observation,
-    ObservationLabel, PoseTracker, SourceScope,
+    Box2d, FireAssociation, FireDecision, FireFacts, FirePolicy, FireSample, FireSettings,
+    Observation, ObservationLabel, PoseTracker, SourceScope,
 };
 use sw_protocol::worker::{
     FireProposalResult, FrameHeader, HEADER_LEN, InferenceResult, PtsQuality, RESULT_MAX_BYTES,
@@ -14,6 +14,8 @@ use crate::scene;
 
 #[derive(Serialize)]
 struct RegionDecision {
+    episode_id: Uuid,
+    association: FireAssociation,
     region: Box2d,
     decision: &'static str,
     facts: FireFacts,
@@ -40,12 +42,23 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
             return Ok(());
         }
         input.read_exact(&mut length[1..])?;
-        let length = u32::from_le_bytes(length) as usize;
+        let length = u32::from_le_bytes(length);
         if length == 0 {
             scope.epoch = scope.epoch.checked_add(1).ok_or_else(invalid_frame)?;
             last = None;
             continue;
         }
+        if length == u32::MAX {
+            let mut episode = [0; 16];
+            input.read_exact(&mut episode)?;
+            let episode = Uuid::from_bytes(episode);
+            if last.is_none() || !policy.contains_episode(episode) {
+                return Err(invalid_frame());
+            }
+            policy.record_resolution(episode);
+            continue;
+        }
+        let length = length as usize;
         if length > RESULT_MAX_BYTES || scope.epoch == 0 {
             return Err(invalid_frame());
         }
@@ -113,6 +126,8 @@ pub fn trace_fire_policy(input: impl Read, mut output: impl Write) -> io::Result
             })
             .into_iter()
             .map(|episode| RegionDecision {
+                episode_id: episode.id,
+                association: episode.association,
                 region: episode.region,
                 decision: match episode.decision {
                     FireDecision::Review => "review",
