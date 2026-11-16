@@ -16,7 +16,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from event_scoring import coverage_intervals, episodes, normalized_region, overlap, score_clip, summarize, valid_rectangle
+from event_scoring import coverage_intervals, episodes, lineage_keys, normalized_region, overlap, score_clip, summarize, valid_rectangle
 from fast_rc_contract import validate_schema
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -312,12 +312,7 @@ def load_manifest(path, manifest_digest, contract, development):
             lineage, split = clip["lineage"], clip["split"]
             if lineage["source_id"] not in manifest["sources"]:
                 raise ValueError(f"Missing source lineage in {clip['file']}")
-            identities = [(field, lineage[field]) for field in ("scene_id", "camera_id", "session_id")]
-            identities.append(("group", clip["group"]))
-            identities.extend(("subject", subject) for subject in lineage.get("subject_ids", []))
-            identities.extend(("original_media", segment["sha256"]) for segment in lineage["original_segments"])
-            identities.append(("clip_media", clip["sha256"]))
-            for identity in identities:
+            for identity in [*lineage_keys(clip), ("group", clip["group"])]:
                 if lineage_splits.setdefault(identity, split) != split:
                     raise ValueError(f"Source lineage crosses evaluation splits: {identity}")
             truth = episodes(clip)
@@ -353,6 +348,7 @@ def load_manifest(path, manifest_digest, contract, development):
     }
     if manifest.get("schema_version") == 2:
         thresholds.update(max_delay_s=contract["matching"]["max_delay_s"], before_onset_tolerance_s=0,
+                          cluster_uncertainty=contract["uncertainty"],
                           category_before_onset_tolerance_s={
                               task: contract["matching"][f"{task}_before_onset_tolerance_s"]
                               for task in ("fire", "medical")})
@@ -370,7 +366,8 @@ def score_run(clips, outputs, thresholds, *, reference=False):
                     event["subject_id"] = subject
         output["scoring"] = score_clip(clip, output, thresholds)
     levels = ("legacy_candidate",) if reference else ("review", "urgent")
-    return summarize(clips, outputs, thresholds.get("confidence_level", 0.95), levels)
+    return summarize(clips, outputs, thresholds.get("confidence_level", 0.95), levels,
+                     uncertainty=thresholds.get("cluster_uncertainty"))
 
 
 def run(args):

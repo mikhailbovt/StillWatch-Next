@@ -9,7 +9,7 @@ import unittest
 
 from compare_fire_backends import reviewed_regions, sample_slot
 from evaluate import QUALITY_CONTRACT, load_manifest, opening_event, opening_rows, score_run
-from event_scoring import coverage_intervals, episodes, score_clip
+from event_scoring import cluster_uncertainty, coverage_intervals, episodes, score_clip
 from fast_rc_contract import DURATION_CLOCKS, verified_quiet_window
 from legacy_replay import measured_clip
 from validate_report import canary_matches
@@ -129,6 +129,26 @@ class EventScoring(unittest.TestCase):
         expected_count = rates["review"]["poisson_one_sided_upper_per_hour_iid"] * exposure
         self.assertAlmostEqual(math.exp(-expected_count) * (1 + expected_count), 0.05)
         self.assertAlmostEqual(rates["urgent"]["poisson_one_sided_upper_per_hour_iid"], -math.log(0.05) / exposure)
+
+    def test_bootstrap_resamples_linked_recordings_as_one_cluster(self):
+        def row(name, scene, session, status, reviews):
+            source = {"file": name, "sha256": name,
+                      "lineage": {"scene_id": scene, "session_id": session, "camera_id": name,
+                                  "original_segments": [{"sha256": name}]}}
+            return source, {"episodes": [{"status": status, "left_censored": False}] if status else [],
+                            "verified_negative_seconds": 0 if status else 3600, "verified_negative_events": {"review": reviews}}
+
+        rows = [row("a", "one", "first", "timely", 0), row("b", "one", "second", "timely", 0),
+                row("c", "two", "second", "timely", 0), row("d", "three", "third", "miss", 0),
+                row("n1", "one", "fourth", None, 2), row("n2", "three", "fifth", None, 0)]
+        options = {"confidence_level": 0.95, "cluster_bootstrap_seed": 2147483647, "cluster_bootstrap_replicates": 1000}
+        clustered = cluster_uncertainty(rows, ("review", "urgent"), options)
+        self.assertEqual(clustered, cluster_uncertainty(reversed(rows), ("review", "urgent"), options))
+        self.assertEqual(clustered["source_clusters"], 2)
+        self.assertEqual(clustered["recall_clusters"], 2)
+        self.assertEqual(clustered["timely_recall_percentile_descriptive"], [0.0, 1.0])
+        self.assertEqual(clustered["verified_negative_rates_percentile_descriptive"], {"review": [0.0, 2.0], "urgent": [0.0, 0.0]})
+        self.assertIsNone(cluster_uncertainty(rows[:3], ("review",), options)["timely_recall_percentile_descriptive"])
 
     def test_manifest_requires_schema_category_and_group_disjointness(self):
         video = {"file": "first.mp4", "sha256": "1" * 64, "group": "shared", "category": "fire",

@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 import math
+from random import Random
 from statistics import median
 
 
@@ -260,7 +261,82 @@ def poisson_upper_rate(count, exposure_hours, confidence):
     return upper / exposure_hours
 
 
-def summarize(clips, runs, confidence, opening_levels):
+def lineage_keys(clip):
+    lineage = clip["lineage"]
+    keys = [(field, lineage[field]) for field in ("scene_id", "camera_id", "session_id")]
+    keys.extend(("subject", subject) for subject in lineage.get("subject_ids", []))
+    keys.extend(("original_media", segment["sha256"]) for segment in lineage["original_segments"])
+    keys.append(("clip_media", clip["sha256"]))
+    return keys
+
+
+def source_clusters(rows):
+    rows = sorted(rows, key=lambda row: row[0]["file"])
+    parents = list(range(len(rows)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    owners = {}
+    for index, (clip, _) in enumerate(rows):
+        for key in lineage_keys(clip):
+            parents[root(index)] = root(owners.setdefault(key, index))
+    groups = defaultdict(list)
+    for index, (_, score) in enumerate(rows):
+        groups[root(index)].append(score)
+    return list(groups.values())
+
+
+def bootstrap_ratio_interval(clusters, options):
+    if len(clusters) < 2:
+        return None
+    rng = Random(options["cluster_bootstrap_seed"])
+    replicates = options["cluster_bootstrap_replicates"]
+    ratios = []
+    for _ in range(replicates):
+        numerator, denominator = zip(*rng.choices(clusters, k=len(clusters)), strict=True)
+        ratios.append(sum(numerator) / sum(denominator))
+    ratios.sort()
+    tail = (1 - options["confidence_level"]) / 2
+    return [ratios[math.ceil(replicates * quantile) - 1] for quantile in (tail, 1 - tail)]
+
+
+def cluster_uncertainty(rows, opening_levels, options):
+    clusters = source_clusters(rows)
+    recalls = []
+    negative_clusters = 0
+    rates = {level: [] for level in opening_levels}
+    for cluster in clusters:
+        outcomes = Counter(episode["status"] for score in cluster for episode in score["episodes"]
+                           if not episode["left_censored"])
+        trials = outcomes["timely"] + outcomes["miss"]
+        if trials:
+            recalls.append((outcomes["timely"], trials))
+        hours = sum(score["verified_negative_seconds"] for score in cluster) / 3600
+        if hours:
+            negative_clusters += 1
+            for level in opening_levels:
+                count = sum(score["verified_negative_events"].get(level, 0) for score in cluster)
+                rates[level].append((count, hours))
+    return {
+        "resampling_unit": "linked_scene_camera_session_subject_or_recording",
+        "source_clusters": len(clusters),
+        "recall_clusters": len(recalls),
+        "verified_negative_clusters": negative_clusters,
+        "confidence_level": options["confidence_level"],
+        "replicates": options["cluster_bootstrap_replicates"],
+        "seed": options["cluster_bootstrap_seed"],
+        "timely_recall_percentile_descriptive": bootstrap_ratio_interval(recalls, options),
+        "verified_negative_rates_percentile_descriptive": {
+            level: bootstrap_ratio_interval(values, options) for level, values in rates.items()
+        },
+    }
+
+
+def summarize(clips, runs, confidence, opening_levels, *, uncertainty=None):
     groups = defaultdict(list)
     for clip in clips:
         groups[clip["group"]].append((clip, runs[clip["file"]]["scoring"]))
@@ -310,4 +386,6 @@ def summarize(clips, runs, confidence, opening_levels):
             "independent_source_sessions": (len({clip["lineage"]["session_id"] for clip, _ in rows})
                                             if all("lineage" in clip for clip, _ in rows) else None),
         }
+        if uncertainty is not None:
+            summary[group]["cluster_bootstrap"] = cluster_uncertainty(rows, opening_levels, uncertainty)
     return summary
