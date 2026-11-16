@@ -6,6 +6,7 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -22,7 +23,7 @@ from fast_rc_contract import (
     quiet_requirements, sha256, write_json,
 )
 from qualify_resources import ChurnResources
-from qualify_steady import latest, native_fixture, openings, pair_owner
+from qualify_steady import decodes_jpeg, latest, native_fixture, openings, pair_owner
 from lan_core import refresh_request
 from replay_core import until
 from whep_core import connect, request
@@ -117,7 +118,30 @@ def delivery_for(lan, token, incident):
     return None
 
 
-def canary(database, fixture, receiver, expected, earliest_utc):
+def read_canary_overview(lan, token, incident):
+    packet_id = incident["evidence_packet_id"]
+    if packet_id is None:
+        return None
+    path = f"/api/v2/incidents/{incident['id']}/evidence/{packet_id}"
+    status, packet = lan.request("GET", path, token=token)
+    if (status != 200 or packet["packet_id"] != packet_id or packet["incident_id"] != incident["id"]
+            or any(packet[key] != incident[key] for key in ("camera_id", "source_epoch", "evidence_version"))):
+        return None
+    image = max((image for image in packet["images"]
+                 if image["kind"] == "overview" and image["availability"] == "available"),
+                key=lambda image: image["source_s"], default=None)
+    if image is None:
+        return None
+    code, headers, jpeg = request(lan, token, "GET", f"{path}/{image['ordinal']}")
+    media_type = next((value for name, value in headers.items() if name.lower() == "content-type"), None)
+    if (code != 200 or media_type != "image/jpeg" or hashlib.sha256(jpeg).hexdigest() != image["sha256"]
+            or not decodes_jpeg(jpeg)):
+        return None
+    return {"incident_id": incident["id"], "packet_id": packet_id, "ordinal": image["ordinal"],
+            "source_epoch": incident["source_epoch"], "sha256": image["sha256"], "bytes": len(jpeg)}, jpeg
+
+
+def canary(database, fixture, receiver, expected, earliest_utc, *, image_path=None):
     events = openings(database, fixture["cameras"], earliest_utc)
     lan, session, _, _ = receiver
     token = session["access_token"]
@@ -129,10 +153,14 @@ def canary(database, fixture, receiver, expected, earliest_utc):
                 or not expected["earliest_source_us"] <= int(event["source_us"]) <= expected["latest_source_us"]):
             continue
         status, incident = lan.request("GET", f"/api/v2/incidents/{event['id']}", token=token)
-        if status != 200 or incident["acknowledgement"] is not None or incident["evidence_state"] != "persisted":
+        if (status != 200 or incident["acknowledgement"] is not None or incident["evidence_state"] != "persisted"
+                or int(incident["source_epoch"]) != int(event["epoch"])):
             continue
         alert = delivery_for(lan, token, event["id"])
         if alert is None:
+            continue
+        overview = read_canary_overview(lan, token, incident) if image_path is not None else None
+        if image_path is not None and overview is None:
             continue
         code, _ = lan.request("POST", f"/api/v2/alerts/{alert['id']}/seen", {"attention_cycle": alert["attention_cycle"]}, token=token)
         if code != 204:
@@ -142,9 +170,15 @@ def canary(database, fixture, receiver, expected, earliest_utc):
             receipt = db.execute("SELECT client_seen_at FROM notification_receipts WHERE alert_id=? AND device_id=?",
                                  (int(alert["id"]), device)).fetchone()
         if receipt is not None:
-            return {"planned": expected, "incidents": [event | {"source_epoch": str(event["epoch"]),
-                                                                  "evidence_state": incident["evidence_state"],
-                                                                  "receipt_utc_ms": receipt[0], "acknowledged": False}]}
+            proof = {"planned": expected, "incidents": [event | {"source_epoch": str(event["epoch"]),
+                                                                "evidence_state": incident["evidence_state"],
+                                                                "receipt_utc_ms": receipt[0], "acknowledged": False}]}
+            if overview is not None:
+                metadata, jpeg = overview
+                with image_path.open("xb") as handle:
+                    handle.write(jpeg)
+                proof["overview"] = metadata | {"artifact": evidence(image_path.parent, image_path)}
+            return proof
     return None
 
 
@@ -226,7 +260,7 @@ def run(settings, output, evidence_root):
     with TemporaryDirectory(prefix="stillwatch-faults-") as scratch, ledger.open("x", encoding="utf-8", buffering=1) as log:
         root = Path(scratch)
         database = root / "data/stillwatch.sqlite3"
-        with native_fixture(settings, root) as fixture:
+        with native_fixture(settings, root, use_canary_media=True) as fixture:
             def ready():
                 states = [latest(camera, fixture["local"]) for camera in fixture["cameras"].values()]
                 return all(row["capture_state"] == "streaming" and row["analysis"] and row["analysis"]["state"] == "ready" for row in states)
@@ -332,10 +366,11 @@ def run(settings, output, evidence_root):
                         if not camera_recovered(before[name], current, kind in {"rtsp_reconnect", "core_restart"}):
                             continue
                         window[name] = window[name] or offset()
-                        verified = canary(database, fixture, receiver, case["canary"], began_utc)
+                        path = output / (case["id"] + ".json")
+                        verified = canary(database, fixture, receiver, case["canary"], began_utc,
+                                          image_path=path.with_suffix(".jpg"))
                         if verified is None:
                             continue
-                        path = output / (case["id"] + ".json")
                         write_json(path, verified | {"started_utc_ms": began_utc, "source_before": before[name],
                                                       "source_after": current, "inference_recovery": recovery,
                                                       "quiet_observations": quiet_observations})
@@ -384,7 +419,7 @@ def final_canary(settings, output):
         started = now()
         earliest = time.time_ns() // 1_000_000
         deadline = started + limit_ms / 1_000
-        with native_fixture(settings, root) as fixture:
+        with native_fixture(settings, root, use_canary_media=True) as fixture:
             receiver = pair_owner(settings, fixture["local"], root)
             ready = []
             verified = None
@@ -394,7 +429,8 @@ def final_canary(settings, output):
                          if row["capture_state"] == "streaming" and row["analysis"] and row["analysis"]["state"] == "ready"
                          and all(int(row["analysis"][key]) > 0 for key in ("pose_frames", "fire_frames"))]
                 if len(ready) == len(states):
-                    verified = canary(database, fixture, receiver, planned, earliest)
+                    verified = canary(database, fixture, receiver, planned, earliest,
+                                      image_path=output.with_suffix(".jpg"))
                     if verified is not None:
                         break
                 time.sleep(0.2)
@@ -404,10 +440,9 @@ def final_canary(settings, output):
             with closing(sqlite3.connect(database)) as db:
                 integrity = [status for status, in db.execute("PRAGMA integrity_check")]
                 invalid_references = len(db.execute("PRAGMA foreign_key_check").fetchall())
-            write_json(output, {"planned": planned, "started_utc_ms": earliest, "elapsed_ms": elapsed,
-                                "elapsed_clock": clock_name,
-                                "ready_cameras": ready, "integrity": integrity, "invalid_references": invalid_references,
-                                "incidents": verified["incidents"] if verified is not None else []})
+            write_json(output, (verified or {"planned": planned, "incidents": []}) | {
+                "started_utc_ms": earliest, "elapsed_ms": elapsed, "elapsed_clock": clock_name,
+                "ready_cameras": ready, "integrity": integrity, "invalid_references": invalid_references})
 
 
 def main(argv):

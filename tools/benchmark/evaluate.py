@@ -271,6 +271,31 @@ def development_media(development):
     return seen
 
 
+def validate_holdout_media(clips, seen):
+    evaluated = set()
+    intervals = defaultdict(list)
+    for clip in clips:
+        name, category = clip["file"], clip["category"]
+        if media_hashes(clip) & seen:
+            raise ValueError(f"Previously evaluated media is reused by holdout clip {name}")
+        identity = (category, clip["sha256"])
+        if identity in evaluated:
+            raise ValueError(f"Duplicate holdout clip media for {category}: {name}")
+        evaluated.add(identity)
+        for segment in clip["lineage"]["original_segments"]:
+            start_us = round(segment["start_s"] * 1_000_000)
+            end_us = round((segment["start_s"] + segment["duration_s"]) * 1_000_000)
+            if end_us <= start_us:
+                raise ValueError(f"Empty original holdout interval in {name}")
+            intervals[category, segment["sha256"]].append((start_us, end_us, name))
+
+    for windows in intervals.values():
+        windows.sort()
+        for (_, end, name), (next_start, _, next_name) in zip(windows, windows[1:]):
+            if end > next_start:
+                raise ValueError(f"Overlapping original holdout footage in {name} and {next_name}")
+
+
 def load_manifest(path, manifest_digest, contract, development):
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") == 2:
@@ -281,10 +306,7 @@ def load_manifest(path, manifest_digest, contract, development):
     if manifest.get("schema_version") == 2:
         rated_holdout = [clip for clip in clips if clip["split"] == "holdout"]
         if rated_holdout:
-            seen = development_media(development)
-            for clip in rated_holdout:
-                if media_hashes(clip) & seen:
-                    raise ValueError(f"Previously evaluated media is reused by holdout clip {clip['file']}")
+            validate_holdout_media(rated_holdout, development_media(development))
         lineage_splits = {}
         for clip in clips:
             lineage, split = clip["lineage"], clip["split"]

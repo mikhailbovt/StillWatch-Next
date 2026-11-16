@@ -44,7 +44,7 @@ def verified_media(root, source, name):
     return media
 
 
-def read_sources(path, profile):
+def read_sources(path, profile, *, use_canary_media=False):
     manifest = checked_json(path)
     sources = manifest["sources"]
     if len(sources) < profile["workload"]["camera_count"] or len(sources) > 64:
@@ -55,6 +55,12 @@ def read_sources(path, profile):
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,47}", name) or name in seen:
             raise ValueError("Invalid or repeated camera fixture ID")
         seen.add(name)
+        alternate = source.get("canary_media")
+        if alternate is not None:
+            if not isinstance(alternate, dict) or alternate.keys() != {"file", "digest"}:
+                raise ValueError(f"Canary media must keep the declared stream parameters for {name}")
+            if use_canary_media:
+                source.update(alternate)
         source["media"] = verified_media(path.parent, source, name)
         if "detail" in source:
             source["detail"]["media"] = verified_media(path.parent, source["detail"], f"{name} detail")
@@ -110,11 +116,15 @@ def snapshot_problem(code, headers, jpeg):
         return "frame_age_header"
     if not 0 <= age <= 3_000:
         return "frame_age"
+    return None if decodes_jpeg(jpeg) else "jpeg_decode"
+
+
+def decodes_jpeg(jpeg):
     try:
         with av.open(io.BytesIO(jpeg), format="mjpeg") as image:
-            return "jpeg_decode" if next(image.decode(video=0), None) is None else None
+            return next(image.decode(video=0), None) is not None
     except av.error.FFmpegError:
-        return "jpeg_decode"
+        return False
 
 
 def publisher(ffmpeg, peer, source):
@@ -409,7 +419,7 @@ def run_native(settings, output, root, seconds):
 
 
 @contextmanager
-def native_fixture(settings, root, *, start_enabled=True):
+def native_fixture(settings, root, *, start_enabled=True, use_canary_media=False):
     profile_path = Path(settings["profile"])
     source_path = Path(settings["source_manifest"])
     profile = checked_json(profile_path)
@@ -418,7 +428,7 @@ def native_fixture(settings, root, *, start_enabled=True):
         raise ValueError("Source manifest differs from the frozen workload")
     if workload["semantic_route"] != "disabled":
         raise ValueError("The steady collector requires an independent native profile for the semantic route")
-    sources, viewers = read_sources(source_path, profile)
+    sources, viewers = read_sources(source_path, profile, use_canary_media=use_canary_media)
     distinct = {kind: set() for kind in ("preview", "detail")}
     for viewer in viewers:
         if viewer["camera"] not in sources or viewer["profile"] not in distinct:

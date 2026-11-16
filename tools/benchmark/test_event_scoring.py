@@ -178,6 +178,34 @@ class EventScoring(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Previously evaluated media is reused"):
                 load(development)
 
+    def test_holdout_rejects_duplicate_media_and_overlapping_original_slices(self):
+        def holdout_clip(name, digest, start):
+            return {"file": name, "sha256": digest, "group": "room", "split": "holdout",
+                    "category": "fire", "annotation": "negative", "duration_s": 20.2, "cloud_consent": False,
+                    "negative_strata": ["controlled_flame"], "events": [],
+                    "lineage": {"source_id": "source", "scene_id": "room", "camera_id": "camera",
+                                "session_id": "session", "transform": "cut",
+                                "original_segments": [{"sha256": "1" * 64, "start_s": start, "duration_s": 20.2}]}}
+
+        first = holdout_clip("first.mp4", "2" * 64, 0.1)
+        adjacent = holdout_clip("adjacent.mp4", "3" * 64, 20.3)
+        manifest = {"schema_version": 2, "dataset_id": "test",
+                    "sources": {"source": {"origin": "local", "rights": "local_evaluation",
+                                           "license_or_permission": "test"}}}
+        contract = json.loads(QUALITY_CONTRACT.read_text(encoding="utf-8"))
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dataset.json"
+
+            def load(second):
+                path.write_text(json.dumps(manifest | {"clips": [first, second]}), encoding="utf-8")
+                return load_manifest(path, "unused-for-v2", contract, {})[0]
+
+            self.assertEqual(load(adjacent), [first, adjacent])
+            with self.assertRaisesRegex(ValueError, "Duplicate holdout clip media"):
+                load(dict(adjacent, sha256=first["sha256"]))
+            with self.assertRaisesRegex(ValueError, "Overlapping original holdout footage"):
+                load(holdout_clip("overlap.mp4", "4" * 64, 20.299999))
+
     def test_short_follow_up_and_visible_at_start_are_separate(self):
         night = {**clip(34, 39.333333), "last_negative_s": 32}
         course = score_clip(night, {"events": []}, LIMITS)["episodes"][0]
@@ -238,6 +266,7 @@ class EventScoring(unittest.TestCase):
         no_trace = summary["fire_test"]
         self.assertGreater(no_trace["nominal_negative_camera_hours"], 0)
         self.assertEqual(no_trace["verified_negative_camera_hours"], 0)
+        self.assertEqual(no_trace["negative_clips_below_coverage_floor"], ["building.mp4"])
 
     def test_opening_timestamp_and_roi_are_immutable_after_evidence_update(self):
         first = {"id": "same", "scope": {"camera_id": "cam", "epoch": 1, "scene_revision": 2},

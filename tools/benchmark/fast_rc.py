@@ -56,6 +56,7 @@ class Run:
         self.run = {
             "protocol": PROTOCOL, "run_id": uuid4().hex, "started_utc": datetime.now(timezone.utc).isoformat(),
             "contract_digests": contracts, "cases": {}, "inputs": {}, "elapsed_clock": clock_name,
+            "canary_overview": True,
             "host": {"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
             "source_video_seconds": None, "virtual_clock_span_seconds": None, "interrupted": False, "stage_errors": [],
         }
@@ -518,6 +519,9 @@ class Run:
         artifacts = {"sources": source, "settings": options, "fault-schedule": schedule, "stdout": log}
         if native.is_file():
             artifacts["native-canary"] = native
+        overview = native.with_suffix(".jpg")
+        if overview.is_file():
+            artifacts["canary-overview"] = overview
         self.proof(stage, "pipeline.final-live-canary", observations["started_s"], observations, artifacts,
                    deadline=observations.get("deadline_exceeded", False))
 

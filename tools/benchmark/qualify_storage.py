@@ -160,7 +160,7 @@ def run_database(settings, output):
     with TemporaryDirectory(prefix="stillwatch-live-sqlite-") as temporary:
         root = Path(temporary)
         database = root / "data/stillwatch.sqlite3"
-        with native_fixture(settings, root) as fixture:
+        with native_fixture(settings, root, use_canary_media=True) as fixture:
             receiver = pair_owner(settings, fixture["local"], root)
             trials, errors = {}, {}
             for kind in DATABASE_PRESSURE_STATUS:
@@ -187,7 +187,7 @@ def run(settings, output):
         database = blobs.parent / "stillwatch.sqlite3"
         with exhausted_volume(blobs) as (filler, size, code):
             began = time.time_ns() // 1_000_000
-            with native_fixture(settings, root) as fixture:
+            with native_fixture(settings, root, use_canary_media=True) as fixture:
                 local = fixture["local"]
                 source = fixture["cameras"][camera]
                 receiver = pair_owner(settings, local, root)

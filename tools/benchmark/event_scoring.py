@@ -214,8 +214,8 @@ def score_clip(clip, run, thresholds):
         "nominal_negative_seconds": total_negative,
         "verified_negative_seconds": eligible_negative, "unknown_negative_seconds": total_negative - eligible_negative,
         "uncertain_annotation_seconds": duration if annotation == "uncertain" else 0.0,
-        "below_negative_coverage_floor": negative and measured is not None
-        and eligible_negative / duration < thresholds["min_verified_negative_fraction"],
+        "below_negative_coverage_floor": negative and (
+            measured is None or eligible_negative / duration < thresholds["min_verified_negative_fraction"]),
         "coverage_measured": measured is not None,
     }
 

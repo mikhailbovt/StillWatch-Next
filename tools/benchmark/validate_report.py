@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 import errno
+import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import statistics
 import sys
+from uuid import UUID
 
 from fast_rc_contract import (
     CONTRACTS, DATABASE_PRESSURE_STATUS, DIGEST, DURATION_CLOCKS, LOGIC_CASES, PROTOCOL,
@@ -51,6 +53,27 @@ def canary_matches(incidents, planned, start_ms):
             and fresh_opening(incident, start_ms) and incident["live"] is True
             and incident["evidence_state"] == "persisted" and incident["acknowledged"] is False
             and incident["utc_ms"] <= incident["receipt_utc_ms"]]
+
+
+def canary_overview_matches(raw_path, raw, incident):
+    try:
+        image = raw["overview"]
+        artifact = image["artifact"]
+        location = evidence_location(artifact)
+        if (image["incident_id"] != incident["id"] or int(image["source_epoch"]) != int(incident["source_epoch"])
+                or str(UUID(image["packet_id"])) != image["packet_id"]
+                or type(image["ordinal"]) is not int or not 0 <= image["ordinal"] < 16
+                or artifact["digest"] != f"sha256:{image['sha256']}"
+                or location != raw_path.with_suffix(".jpg").name):
+            return False
+        path = member(raw_path.parent, location)
+        with path.open("rb") as handle:
+            jpeg = handle.read(512 * 1024 + 1)
+        return (4 <= len(jpeg) <= 512 * 1024 and len(jpeg) == image["bytes"]
+                and hashlib.sha256(jpeg).hexdigest() == image["sha256"]
+                and jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9"))
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return False
 
 
 def persisted_blobs_clean(checks):
@@ -441,6 +464,7 @@ class Validation:
                 and len(before) == len(after) == 2 and all(right > left for left, right in zip(before, after)))
 
     def fault_check(self, case, proof):
+        require_overview = self.run.get("canary_overview") is True
         if "elapsed_clock" in self.run:
             self.require_elapsed_clock(checked_json(self.artifact(proof, "settings")))
         kind = FAULTS.get(case)
@@ -450,8 +474,10 @@ class Validation:
             raise ValueError("Fault ledger exceeds its bound")
         ledger = [json.loads(line) for line in data.splitlines()]
         schedule = self.artifact(proof, "fault-schedule")
-        if sha256(schedule) != self.profile["workload"]["fault_schedule_digest"]:
-            raise ValueError("Fault schedule differs from the frozen workload")
+        source = self.artifact(proof, "sources")
+        workload = self.profile["workload"]
+        if sha256(schedule) != workload["fault_schedule_digest"] or sha256(source) != workload["source_manifest_digest"]:
+            raise ValueError("Fault inputs differ from the frozen workload")
         scheduled = checked_json(schedule)["faults"]
         expected_faults = {fault["id"]: fault for fault in scheduled}
         if len(expected_faults) != len(scheduled):
@@ -460,6 +486,7 @@ class Validation:
         completed = Counter()
         limits = self.profile["budgets"]
         failed = []
+        missing_overviews = []
         seen = set()
         seen_incidents = set()
         tracked = None
@@ -488,7 +515,8 @@ class Validation:
             canary = row.get("canary")
             if canary is None:
                 continue
-            raw = checked_json(checked_evidence(self.root, canary))
+            raw_path = checked_evidence(self.root, canary)
+            raw = checked_json(raw_path)
             if raw.get("planned") != planned["canary"] or not isinstance(raw.get("incidents"), list):
                 raise ValueError("Canary is missing the frozen event specification or native incident rows")
             if quiet and not camera_quiet(raw["source_before"]):
@@ -508,10 +536,6 @@ class Validation:
                 if not observed_recovery:
                     continue
                 if tracked is None:
-                    source = self.artifact(proof, "sources")
-                    workload = self.profile["workload"]
-                    if sha256(source) != workload["source_manifest_digest"]:
-                        raise ValueError("Inference recovery source input differs from the frozen workload")
                     tracked = {item["id"] for item in checked_json(source)["sources"][:workload["camera_count"]]}
                     if len(tracked) != workload["camera_count"]:
                         raise ValueError("Inference recovery source input repeats or omits cameras")
@@ -538,12 +562,18 @@ class Validation:
             if len(matches) != 1 or planned["canary"]["camera"] != planned["camera"]:
                 failed.append({"id": name, "fresh_unique_matching_canaries": len(matches)})
                 continue
+            if require_overview and not canary_overview_matches(raw_path, raw, matches[0]):
+                missing_overviews.append(name)
+                continue
             seen_incidents.add(matches[0]["id"])
             completed[planned["camera"]] += 1
         minimums = self.contract["minimum_completed_fault_cycles"]
         required_count = minimums[kind] if kind else max(len(scheduled), sum(minimums.values()))
         expected = {"completed_cycles": required_count, "canary_after_each": True}
         observed = {"completed_cycles": completed.total(), "by_camera": dict(completed), "failures": failed}
+        if require_overview:
+            expected["verified_overview_after_each"] = True
+            observed["unverified_overviews"] = missing_overviews
         complete = bool(required_count) and completed.total() >= required_count
         if kind == "rtsp_reconnect":
             each = self.contract["rtsp_reconnect_min_each"]
@@ -565,7 +595,8 @@ class Validation:
                     "sqlite_integrity_and_references": True, "persisted_evidence_and_device_receipt": True}
         if "native-canary" not in proof["artifacts"]:
             return expected, {"exit_code": proof["observations"]["exit_code"]}, "INCOMPLETE"
-        raw = checked_json(self.artifact(proof, "native-canary"))
+        raw_path = self.artifact(proof, "native-canary")
+        raw = checked_json(raw_path)
         self.require_elapsed_clock(raw)
         elapsed = raw["elapsed_ms"]
         if (raw["planned"] != planned or not number(raw["started_utc_ms"]) or not number(elapsed)
@@ -577,6 +608,11 @@ class Validation:
         passed = (len(cameras) == workload["camera_count"] and sorted(raw["ready_cameras"]) == sorted(cameras)
                   and raw["integrity"] == ["ok"] and raw["invalid_references"] == 0
                   and elapsed <= maximum and len(matching) == 1 and proof["observations"]["exit_code"] == 0)
+        if self.run.get("canary_overview") is True:
+            expected["verified_overview"] = True
+            observed["verified_overview"] = len(matching) == 1 and canary_overview_matches(raw_path, raw, matching[0])
+            if passed and not observed["verified_overview"]:
+                return expected, observed, "INCOMPLETE"
         return expected, observed, "PASS" if passed else "FAIL"
 
     def blob_volume_check(self, proof):
