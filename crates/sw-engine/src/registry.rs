@@ -733,10 +733,8 @@ impl CameraRegistry {
             .ok_or(RegistryError::WorkerUnavailable)?;
         let mut process = worker.capture(&request).await?;
         let result = process
-            .next_with(FRAME_TIMEOUT, |length| {
-                measure_scene
-                    .then(|| self.budget.try_reserve(length))
-                    .flatten()
+            .next_with(FRAME_TIMEOUT, |_| {
+                measure_scene.then(|| self.budget.clone())
             })
             .await;
         let (header, sample) = match result {

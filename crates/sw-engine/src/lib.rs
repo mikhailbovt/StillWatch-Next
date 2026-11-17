@@ -26,7 +26,7 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 mod windows_credentials;
 
 pub use capture_process::{
-    CaptureProcess, CaptureRead, Frame, FrameBudget, WorkerBinary, WorkerError,
+    CaptureProcess, CaptureRead, Frame, FrameBudget, FrameBuffer, WorkerBinary, WorkerError,
 };
 pub use execution_host::execution_host;
 pub use inference_process::verify_inference_startup;

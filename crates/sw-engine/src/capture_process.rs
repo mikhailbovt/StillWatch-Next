@@ -1,8 +1,9 @@
 use std::{
-    io,
+    io, mem,
+    ops::Deref,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
@@ -14,7 +15,7 @@ use sw_protocol::worker::{
 };
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::ChildStdout,
     sync::{OnceCell, OwnedSemaphorePermit, Semaphore},
 };
@@ -24,6 +25,7 @@ use crate::child_process::command;
 
 const CONFIG_DEADLINE: Duration = Duration::from_secs(2);
 const EXIT_DEADLINE: Duration = Duration::from_secs(3);
+const MAX_IDLE_FRAME_BUFFERS: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum WorkerError {
@@ -108,6 +110,7 @@ impl WorkerBinary {
             stdout,
             generation: Uuid::new_v4(),
             last_frame: 0,
+            last_frame_length: 0,
             schannel: config.source.uses_schannel(),
             with_codec,
             with_rate,
@@ -222,30 +225,118 @@ impl WorkerBinary {
 }
 
 #[derive(Clone)]
-pub struct FrameBudget(Arc<Semaphore>);
+pub struct FrameBudget(Arc<FrameBudgetInner>);
+
+struct FrameBudgetInner {
+    bytes: Arc<Semaphore>,
+    pool: Mutex<FramePool>,
+}
+
+#[derive(Default)]
+struct FramePool {
+    in_use: usize,
+    idle: Vec<FrameAllocation>,
+}
+
+struct FrameAllocation {
+    rgb: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
 
 impl FrameBudget {
     pub fn new(bytes: u32) -> Result<Self, WorkerError> {
         if bytes == 0 || u64::from(bytes) > 2 * 1024 * 1024 * 1024 {
             return Err(WorkerError::Config);
         }
-        Ok(Self(Arc::new(Semaphore::new(bytes as usize))))
+        Ok(Self(Arc::new(FrameBudgetInner {
+            bytes: Arc::new(Semaphore::new(bytes as usize)),
+            pool: Mutex::new(FramePool::default()),
+        })))
     }
 
     pub(crate) fn try_reserve(&self, bytes: u32) -> Option<OwnedSemaphorePermit> {
-        self.0.clone().try_acquire_many_owned(bytes).ok()
+        self.0.bytes.clone().try_acquire_many_owned(bytes).ok()
     }
 
     pub(crate) fn available_bytes(&self) -> u32 {
-        self.0.available_permits() as u32
+        self.0.bytes.available_permits() as u32
+    }
+
+    fn buffer(self, bytes: u32, resized: bool) -> Option<FrameBuffer> {
+        let length = bytes as usize;
+        let mut pool = self.0.pool.lock().unwrap_or_else(PoisonError::into_inner);
+        if resized {
+            pool.idle.retain(|buffer| buffer.rgb.len() == length);
+        }
+        let mut allocation =
+            if let Some(index) = pool.idle.iter().rposition(|item| item.rgb.len() == length) {
+                pool.idle.swap_remove(index)
+            } else {
+                let permit = self.try_reserve(bytes).or_else(|| {
+                    pool.idle.clear();
+                    self.try_reserve(bytes)
+                })?;
+                FrameAllocation {
+                    rgb: Vec::new(),
+                    _permit: permit,
+                }
+            };
+        pool.in_use += 1;
+        drop(pool);
+        if allocation.rgb.len() != length {
+            allocation.rgb = vec![0; length];
+        }
+        Some(FrameBuffer {
+            budget: self,
+            allocation: Some(allocation),
+        })
+    }
+}
+
+pub struct FrameBuffer {
+    budget: FrameBudget,
+    allocation: Option<FrameAllocation>,
+}
+
+impl FrameBuffer {
+    async fn read(mut self, input: &mut (impl AsyncRead + Unpin)) -> io::Result<Self> {
+        let buffer = self.allocation.as_mut().expect("live frame allocation");
+        input.read_exact(&mut buffer.rgb).await?;
+        Ok(self)
+    }
+}
+
+impl Deref for FrameBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.allocation.as_ref().expect("live frame allocation").rgb
+    }
+}
+
+impl Drop for FrameBuffer {
+    fn drop(&mut self) {
+        let allocation = self.allocation.take().expect("live frame allocation");
+        let mut pool = self
+            .budget
+            .0
+            .pool
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        pool.in_use -= 1;
+        if pool.in_use == 0 {
+            // Camera drain releases idle allocations and their byte permits.
+            pool.idle.clear();
+        } else if pool.idle.len() < MAX_IDLE_FRAME_BUFFERS {
+            pool.idle.push(allocation);
+        }
     }
 }
 
 pub struct Frame {
     pub generation: Uuid,
     pub header: FrameHeader,
-    pub rgb: Vec<u8>,
-    _budget: OwnedSemaphorePermit,
+    pub rgb: FrameBuffer,
 }
 
 #[cfg(test)]
@@ -256,8 +347,7 @@ impl Frame {
         Self {
             generation: Uuid::nil(),
             header,
-            rgb: vec![0; bytes as usize],
-            _budget: budget.try_reserve(bytes).unwrap(),
+            rgb: budget.buffer(bytes, false).unwrap(),
         }
     }
 }
@@ -273,6 +363,7 @@ pub struct CaptureProcess {
     stdout: ChildStdout,
     generation: Uuid,
     last_frame: u64,
+    last_frame_length: u32,
     schannel: bool,
     with_codec: bool,
     with_rate: bool,
@@ -298,28 +389,27 @@ impl CaptureProcess {
         budget: &FrameBudget,
         deadline: Duration,
     ) -> Result<CaptureRead, WorkerError> {
-        self.next_with(deadline, |length| budget.try_reserve(length))
-            .await
+        self.next_with(deadline, |_| Some(budget.clone())).await
     }
 
     pub(crate) async fn next_with(
         &mut self,
         deadline: Duration,
-        reserve: impl FnOnce(u32) -> Option<OwnedSemaphorePermit>,
+        select_budget: impl FnOnce(u32) -> Option<FrameBudget>,
     ) -> Result<CaptureRead, WorkerError> {
         let deadline = if self.schannel && self.last_frame == 0 {
             deadline.max(WINDOWS_RTSPS_OPEN_TIMEOUT + Duration::from_secs(1))
         } else {
             deadline
         };
-        tokio::time::timeout(deadline, self.receive(reserve))
+        tokio::time::timeout(deadline, self.receive(select_budget))
             .await
             .map_err(|_| WorkerError::Deadline)?
     }
 
     async fn receive(
         &mut self,
-        reserve: impl FnOnce(u32) -> Option<OwnedSemaphorePermit>,
+        select_budget: impl FnOnce(u32) -> Option<FrameBudget>,
     ) -> Result<CaptureRead, WorkerError> {
         let mut bytes = [0u8; HEADER_LEN];
         if self.stdout.read(&mut bytes[..1]).await? == 0 {
@@ -356,14 +446,15 @@ impl CaptureProcess {
         }
         self.last_frame = header.frame;
         let length = header.byte_length()?;
-        if let Some(permit) = reserve(length) {
-            let mut rgb = vec![0; length as usize];
-            self.stdout.read_exact(&mut rgb).await?;
+        let previous = mem::replace(&mut self.last_frame_length, length);
+        let resized = previous != 0 && previous != length;
+        if let Some(buffer) =
+            select_budget(length).and_then(|budget| budget.buffer(length, resized))
+        {
             Ok(CaptureRead::Frame(Frame {
                 generation: self.generation,
                 header,
-                rgb,
-                _budget: permit,
+                rgb: buffer.read(&mut self.stdout).await?,
             }))
         } else {
             let mut left = length as usize;
@@ -401,5 +492,96 @@ impl Drop for CaptureProcess {
         if let Some(child) = &mut self.child {
             let _ = child.start_kill();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_buffer_is_reused_after_the_last_reader_and_stays_charged() {
+        let budget = FrameBudget::new(48).unwrap();
+        let buffer = Arc::new(budget.clone().buffer(24, false).unwrap());
+        let address = buffer.as_ptr();
+        let reader = buffer.clone();
+        let current = budget.clone().buffer(24, false).unwrap();
+        drop(buffer);
+        assert!(budget.clone().buffer(24, false).is_none());
+
+        drop(reader);
+        assert_eq!(budget.available_bytes(), 0);
+        let next = budget.clone().buffer(24, false).unwrap();
+        assert_eq!(next.as_ptr(), address);
+        drop(next);
+        drop(current);
+        assert_eq!(budget.available_bytes(), 48);
+    }
+
+    #[test]
+    fn resize_and_budget_pressure_evict_idle_frames() {
+        let budget = FrameBudget::new(24).unwrap();
+        let held = budget.clone().buffer(6, false).unwrap();
+        drop(budget.clone().buffer(6, false).unwrap());
+        assert_eq!(budget.available_bytes(), 12);
+
+        let resized = budget.clone().buffer(12, true).unwrap();
+        assert_eq!(budget.available_bytes(), 6);
+        drop(resized);
+        assert_eq!(budget.available_bytes(), 6);
+
+        let other_camera = budget.clone().buffer(18, false).unwrap();
+        assert_eq!(budget.available_bytes(), 0);
+        drop(held);
+        drop(other_camera);
+        assert_eq!(budget.available_bytes(), 24);
+    }
+
+    #[tokio::test]
+    async fn incomplete_rgb_reads_recycle_the_buffer_without_publishing_pixels() {
+        let budget = FrameBudget::new(12).unwrap();
+        let held = budget.clone().buffer(6, false).unwrap();
+        let previous = budget
+            .clone()
+            .buffer(6, false)
+            .unwrap()
+            .read(&mut &b"abcdef"[..])
+            .await
+            .unwrap();
+        let address = previous.as_ptr();
+        drop(previous);
+
+        let failed = budget
+            .clone()
+            .buffer(6, false)
+            .unwrap()
+            .read(&mut &b"gh"[..])
+            .await;
+        assert_eq!(failed.err().unwrap().kind(), io::ErrorKind::UnexpectedEof);
+
+        let (mut writer, mut reader) = tokio::io::duplex(2);
+        tokio::io::AsyncWriteExt::write_all(&mut writer, b"op")
+            .await
+            .unwrap();
+        tokio::select! {
+            biased;
+            _ = budget.clone().buffer(6, false).unwrap().read(&mut reader) => {
+                panic!("partial pipe read completed");
+            }
+            _ = std::future::ready(()) => {}
+        }
+
+        let next = budget
+            .clone()
+            .buffer(6, false)
+            .unwrap()
+            .read(&mut &b"ijklmn"[..])
+            .await
+            .unwrap();
+        assert_eq!(next.as_ptr(), address);
+        assert_eq!(&*next, b"ijklmn");
+        drop(held);
+        drop(next);
+        assert_eq!(budget.available_bytes(), 12);
     }
 }

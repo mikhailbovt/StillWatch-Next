@@ -451,13 +451,17 @@ impl Decoder {
     }
 
     pub fn next_frame(&mut self) -> Result<Option<RgbFrame>, CaptureError> {
+        self.next_frame_reusing(Vec::new())
+    }
+
+    pub fn next_frame_reusing(&mut self, rgb: Vec<u8>) -> Result<Option<RgbFrame>, CaptureError> {
         self.input.interrupt.arm(self.limits.frame_timeout);
         loop {
             self.input.interrupt.check()?;
             match self.decoder.receive_frame(&mut self.decoded) {
                 Ok(()) => {
                     self.input.interrupt.check()?;
-                    return self.copy_frame().map(Some);
+                    return self.copy_frame(rgb).map(Some);
                 }
                 Err(ffmpeg::Error::Eof) => return Ok(None),
                 Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {}
@@ -484,7 +488,7 @@ impl Decoder {
         }
     }
 
-    fn copy_frame(&mut self) -> Result<RgbFrame, CaptureError> {
+    fn copy_frame(&mut self, mut rgb: Vec<u8>) -> Result<RgbFrame, CaptureError> {
         let frame = &self.decoded;
         let width = frame.width();
         let height = frame.height();
@@ -497,7 +501,7 @@ impl Decoder {
             self.converter = Some(Converter::new(frame)?);
         }
         let converter = self.converter.as_mut().ok_or(CaptureError::BadFrame)?;
-        let rgb = converter.convert(frame)?;
+        converter.convert(frame, &mut rgb)?;
         self.input.interrupt.check()?;
         Ok(RgbFrame {
             width,
@@ -669,7 +673,7 @@ impl Converter {
         (input.format, input.width, input.height) == (frame.format(), frame.width(), frame.height())
     }
 
-    fn convert(&mut self, source: &Video) -> Result<Vec<u8>, CaptureError> {
+    fn convert(&mut self, source: &Video, pixels: &mut Vec<u8>) -> Result<(), CaptureError> {
         // SAFETY: source is a successfully decoded software frame and matches
         // the scaler definition. output owns an allocated, writable RGB24 buffer.
         let rows = unsafe {
@@ -694,14 +698,15 @@ impl Converter {
             return Err(CaptureError::BadFrame);
         }
         let height = self.output.height() as usize;
-        let mut pixels = Vec::with_capacity(row_bytes * height);
+        pixels.clear();
+        pixels.reserve(row_bytes * height);
         for row in self.output.data(0).chunks_exact(stride).take(height) {
             pixels.extend_from_slice(&row[..row_bytes]);
         }
         if pixels.len() != row_bytes * height {
             return Err(CaptureError::BadFrame);
         }
-        Ok(pixels)
+        Ok(())
     }
 }
 
@@ -710,6 +715,35 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener};
 
     use super::*;
+
+    #[test]
+    fn rgb_conversion_reuses_buffer_and_replaces_every_pixel() {
+        ffmpeg::init().unwrap();
+        let mut frame = Video::new(format::Pixel::RGB24, 17, 3);
+        let mut converter = Converter::new(&frame).unwrap();
+        let stride = frame.stride(0);
+        let row_bytes = 17 * 3;
+        let mut pixels = vec![0xcd; row_bytes * 3];
+        let allocation = pixels.as_ptr();
+
+        for shade in [11, 73] {
+            frame.data_mut(0).fill(0xff);
+            for (row, data) in frame
+                .data_mut(0)
+                .chunks_exact_mut(stride)
+                .take(3)
+                .enumerate()
+            {
+                data[..row_bytes].fill(shade + row as u8);
+            }
+            converter.convert(&frame, &mut pixels).unwrap();
+            assert_eq!(pixels.as_ptr(), allocation);
+            assert_eq!(pixels.len(), row_bytes * 3);
+            for (row, data) in pixels.chunks_exact(row_bytes).enumerate() {
+                assert!(data.iter().all(|&value| value == shade + row as u8));
+            }
+        }
+    }
 
     #[test]
     fn libav_interrupts_a_stalled_loopback_stream() {

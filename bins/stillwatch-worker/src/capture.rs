@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use sw_capture::{Decoder, PtsQuality as SourceQuality, ReadLimits, RgbFrame, SourceAdapter};
+use sw_capture::{Decoder, PtsQuality as SourceQuality, ReadLimits, RgbFrame};
 use sw_protocol::RtspTransport;
 use sw_protocol::worker::{
     CONFIG_MAX_BYTES, CaptureRequest, CaptureSource, FrameHeader, MASK_UNITS, MaskRect, PtsQuality,
@@ -33,7 +33,8 @@ pub fn run(with_codec: bool, with_rate: bool) -> Result<()> {
     let mut output = BufWriter::new(io::stdout().lock());
     let mut first = None;
     let mut frame_id = 0u64;
-    while let Some(mut frame) = source.read_rgb()? {
+    let mut rgb = Vec::new();
+    while let Some(mut frame) = source.next_frame_reusing(rgb)? {
         frame_id = frame_id
             .checked_add(1)
             .context("capture sequence exhausted")?;
@@ -83,6 +84,7 @@ pub fn run(with_codec: bool, with_rate: bool) -> Result<()> {
         output.write_all(&header.encode()?)?;
         output.write_all(&frame.rgb)?;
         output.flush()?;
+        rgb = frame.rgb;
     }
     Ok(())
 }

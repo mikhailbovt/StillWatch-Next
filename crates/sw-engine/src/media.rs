@@ -1085,7 +1085,7 @@ impl MediaService {
                         };
                         *allocation = Some((reserve, FrameBudget::new(bytes).ok()?));
                     }
-                    allocation.as_ref()?.1.try_reserve(length)
+                    Some(allocation.as_ref()?.1.clone())
                 }) => read,
             };
             let Ok(CaptureRead::Frame(frame)) = read else {
