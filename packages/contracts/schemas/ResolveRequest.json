@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResolveRequest",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "$ref": "#/$defs/Reason"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "reason"
+  ],
+  "$defs": {
+    "Reason": {
+      "type": "string",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  }
+}

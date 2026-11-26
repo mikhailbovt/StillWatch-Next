@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh StillWatch App Check before its one-hour expiry
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=10min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

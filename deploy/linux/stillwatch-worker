@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+export LD_LIBRARY_PATH="$directory/../capture-runtime"
+if [ -n "${STILLWATCH_CUDA_LIB_DIR:-}" ]; then
+    case "$STILLWATCH_CUDA_LIB_DIR" in
+        /*) LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$STILLWATCH_CUDA_LIB_DIR" ;;
+        *) echo 'STILLWATCH_CUDA_LIB_DIR must be absolute' >&2; exit 1 ;;
+    esac
+fi
+exec "$directory/stillwatch-worker-native" "$@"

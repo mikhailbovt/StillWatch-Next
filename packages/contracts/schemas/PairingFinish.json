@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PairingFinish",
+  "type": "object",
+  "properties": {
+    "challenge": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "label": {
+      "type": "string"
+    },
+    "public_key": {
+      "type": "string"
+    },
+    "secret": {
+      "type": "string"
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "challenge",
+    "secret",
+    "label",
+    "public_key",
+    "signature"
+  ]
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=StillWatch Firebase AI Logic worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=stillwatch-firebase
+Group=stillwatch-firebase
+WorkingDirectory=/opt/stillwatch/firebase-worker
+EnvironmentFile=/etc/stillwatch/firebase-worker.conf
+Environment=STILLWATCH_FIREBASE_PRODUCTION=1
+ExecStart=/usr/bin/node src/server.js ${CONFIG_FILE} ${PORT} ${CORE_CREDENTIAL_FILE} ${APP_CHECK_FILE} ${BROWSER_CREDENTIAL_FILE}
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

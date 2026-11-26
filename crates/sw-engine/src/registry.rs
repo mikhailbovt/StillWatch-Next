@@ -1,0 +1,1837 @@
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    hash::{BuildHasher, RandomState},
+    net::SocketAddr,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
+};
+
+use sw_domain::{SourceScope, UnixMillis, Visibility};
+use sw_protocol::{
+    AnalysisCapacity, Camera, CameraConfig, CameraPriority, CameraRuntime, CameraSampling,
+    CameraSource, CapacityState, CaptureState, ControlledFireRegion, Counter, Dimensions,
+    MainStreamProbe, MaskRect, OnvifDevice, OnvifProfile, OnvifProfilesRequest, OnvifStream,
+    OnvifStreamRequest, SceneReview, SourceProbe, SourceRate, SourceRateQuality,
+    worker::{
+        CameraCredentials, CaptureRequest, CaptureSource, FrameHeader, PtsQuality,
+        rectangular_tensor_shape,
+    },
+};
+use sw_storage::{
+    AnalysisAdmission, CameraAction, CameraAdmission, CameraCommand, CameraLimits, CameraRecord,
+    CameraResult, CameraSourceMeasurements, ObservationTime, Store, StoreError,
+};
+use thiserror::Error;
+use tokio::{
+    sync::{Notify, Semaphore, watch},
+    task::JoinHandle,
+};
+use uuid::Uuid;
+
+use crate::{
+    CaptureProcess, CaptureRead, Frame, FrameBudget, WorkerBinary, WorkerError,
+    onvif::{Onvif, OnvifConfig, OnvifError},
+    replay_upload::ReplayUploads,
+    scene,
+};
+
+pub(crate) const FRAME_TIMEOUT: Duration = Duration::from_secs(6);
+const STABLE_CAPTURE: Duration = Duration::from_secs(3);
+const CONTENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(650);
+const CONTENT_CONFIRM_AFTER: Duration = Duration::from_secs(1);
+const CONTENT_HOLD_AFTER: Duration = Duration::from_secs(6);
+
+#[derive(Debug, Error)]
+pub enum RegistryError {
+    #[error("camera or source configuration is invalid")]
+    Invalid,
+    #[error("source is unavailable or outside the configured capture scope")]
+    Source,
+    #[error("capture worker is unavailable")]
+    WorkerUnavailable,
+    #[error("capture task could not be supervised")]
+    CaptureTask,
+    #[error("capture resources are temporarily exhausted")]
+    Busy,
+    #[error("RTSP streams must share the same aspect ratio when using privacy masks")]
+    StreamGeometry,
+    #[error("replay upload exceeds the configured storage budget")]
+    UploadQuota,
+    #[error("replay upload storage is unavailable")]
+    UploadStorage(#[source] std::io::Error),
+    #[error(transparent)]
+    Onvif(#[from] OnvifError),
+    #[error(transparent)]
+    Worker(#[from] WorkerError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+pub struct CameraFrame {
+    pub scope: SourceScope,
+    pub captured_at: Instant,
+    pub(crate) observation_time: ObservationTime,
+    pub usable_for_analysis: bool,
+    pub(crate) transport_valid: bool,
+    pub(crate) source_lagging: bool,
+    pub live: bool,
+    pub(crate) sampling: CameraSampling,
+    pub(crate) priority: CameraPriority,
+    pub(crate) inference_lane: usize,
+    pub(crate) visibility: Visibility,
+    pub(crate) scene_signature: sw_domain::SceneSignature,
+    pub(crate) masks: Arc<[scene::PixelMask]>,
+    pub(crate) controlled: Arc<[ControlledFireRegion]>,
+    pub frame: Frame,
+}
+
+#[derive(Clone)]
+struct State {
+    phase: CaptureState,
+    dropped: u64,
+    last: Option<(u64, Instant)>,
+    usable_since: Option<Instant>,
+    first_source: Option<(u64, i64)>,
+    relative_lag: Option<(u64, i32)>,
+    lagging: Option<bool>,
+    codec: Option<Arc<str>>,
+    repeated_frame: bool,
+    controlled_scene_suspended: bool,
+    retrying: bool,
+    clock_held: bool,
+}
+
+struct Slot {
+    revision: u64,
+    inference_lane: Option<usize>,
+    current: watch::Receiver<State>,
+    latest: watch::Receiver<Option<Arc<CameraFrame>>>,
+}
+
+pub struct CameraRegistry {
+    store: Store,
+    worker: Option<WorkerBinary>,
+    replay_root: PathBuf,
+    rtsp_peers: HashSet<SocketAddr>,
+    credentials_root: Option<PathBuf>,
+    limits: CameraLimits,
+    analysis_admission: Option<Arc<AnalysisAdmission>>,
+    model_shapes: Option<Vec<[u16; 2]>>,
+    pub(crate) inference_lanes: usize,
+    analysis_frames: Box<[Notify]>,
+    budget: FrameBudget,
+    probes: Semaphore,
+    pub(crate) uploads: ReplayUploads,
+    onvif: Onvif,
+    slots: RwLock<HashMap<Uuid, Slot>>,
+}
+
+pub struct SourceConfig {
+    pub replay_root: PathBuf,
+    pub rtsp_peers: HashSet<SocketAddr>,
+    pub credentials_root: Option<PathBuf>,
+    pub onvif: OnvifConfig,
+    /// Allowed rectangular model inputs, ordered as height then width.
+    pub model_shapes: Option<Vec<[u16; 2]>>,
+}
+
+pub struct CameraHealth {
+    pub id: Uuid,
+    pub revision: u64,
+    pub phase: CaptureState,
+    pub retrying: bool,
+    pub repeated_frame: bool,
+    pub clock_held: bool,
+    pub source_lagging: Option<bool>,
+    pub usable_epoch: Option<u64>,
+    pub last_frame_age_ms: Option<Counter>,
+}
+
+pub(crate) struct SourceRateSample {
+    dimensions: (u32, u32),
+    first: Option<i64>,
+    last: Option<i64>,
+    min_gap: i64,
+    max_gap: i64,
+    intervals: u32,
+    variable: bool,
+}
+
+impl SourceRateSample {
+    pub(crate) fn new(header: FrameHeader) -> Self {
+        let first = Self::native_pts(header);
+        Self {
+            dimensions: (header.width, header.height),
+            first,
+            last: first,
+            min_gap: i64::MAX,
+            max_gap: 0,
+            intervals: 0,
+            variable: false,
+        }
+    }
+
+    fn native_pts(header: FrameHeader) -> Option<i64> {
+        (header.pts_quality == PtsQuality::Native && !header.corrupt)
+            .then_some(header.source_micros)
+            .flatten()
+    }
+
+    pub(crate) fn add(&mut self, header: FrameHeader) -> bool {
+        let Some(pts) = Self::native_pts(header) else {
+            self.variable = true;
+            return true;
+        };
+        if self.dimensions != (header.width, header.height)
+            || self.last.is_some_and(|last| pts <= last)
+        {
+            self.variable = true;
+            return true;
+        }
+        let first = *self.first.get_or_insert(pts);
+        if let Some(last) = self.last.replace(pts) {
+            let gap = pts.saturating_sub(last);
+            self.min_gap = self.min_gap.min(gap);
+            self.max_gap = self.max_gap.max(gap);
+            self.intervals += 1;
+        }
+        pts.saturating_sub(first) >= 800_000 && self.intervals >= 5
+    }
+
+    pub(crate) fn measure(&self, advertised_millifps: Option<u32>) -> SourceRate {
+        let mut rate = SourceRate {
+            advertised_millifps,
+            ..SourceRate::default()
+        };
+        if self.variable {
+            rate.quality = SourceRateQuality::Variable;
+            return rate;
+        }
+        if let Some((first, last)) = self.first.zip(self.last) {
+            let span = last.saturating_sub(first);
+            if self.intervals >= 5 && span >= 400_000 {
+                let observed =
+                    (u64::from(self.intervals) * 1_000_000_000 + span as u64 / 2) / span as u64;
+                rate.observed_millifps = u32::try_from(observed).ok();
+                rate.quality =
+                    if self.max_gap.saturating_sub(self.min_gap) > 2_000.max(self.min_gap / 5) {
+                        SourceRateQuality::Variable
+                    } else {
+                        SourceRateQuality::Observed
+                    };
+            }
+        }
+        rate
+    }
+}
+
+impl CameraRegistry {
+    pub fn new(
+        store: Store,
+        worker: Option<WorkerBinary>,
+        mut sources: SourceConfig,
+        limits: CameraLimits,
+        inference_lanes: usize,
+        analysis_admission: Option<Arc<AnalysisAdmission>>,
+    ) -> Result<Arc<Self>, RegistryError> {
+        sources.replay_root = sources
+            .replay_root
+            .canonicalize()
+            .map_err(|_| RegistryError::Source)?;
+        if !sources.replay_root.is_dir()
+            || !(1..=64).contains(&limits.active)
+            || !(1..=8).contains(&inference_lanes)
+        {
+            return Err(RegistryError::Invalid);
+        }
+        if let Some(root) = &mut sources.credentials_root {
+            *root = root.canonicalize().map_err(|_| RegistryError::Source)?;
+            if !root.is_dir() {
+                return Err(RegistryError::Invalid);
+            }
+        }
+        let uploads = ReplayUploads::open(&sources.replay_root)?;
+        let onvif = Onvif::new(sources.onvif)?;
+        Ok(Arc::new(Self {
+            store,
+            worker,
+            replay_root: sources.replay_root,
+            rtsp_peers: sources.rtsp_peers,
+            credentials_root: sources.credentials_root,
+            limits,
+            analysis_admission,
+            model_shapes: sources.model_shapes,
+            inference_lanes,
+            analysis_frames: (0..inference_lanes).map(|_| Notify::new()).collect(),
+            budget: FrameBudget::new(limits.raw_bytes)?,
+            probes: Semaphore::new(2),
+            uploads,
+            onvif,
+            slots: RwLock::new(HashMap::new()),
+        }))
+    }
+
+    pub fn view(&self, item: CameraRecord) -> Camera {
+        let current = self.slots.read().ok().and_then(|slots| {
+            slots
+                .get(&item.id)
+                .filter(|slot| slot.revision == item.revision)
+                .map(|slot| slot.current.borrow().clone())
+        });
+        let state = current.unwrap_or_else(|| State {
+            phase: if !item.config.enabled {
+                CaptureState::Disabled
+            } else if self.worker.is_some() {
+                CaptureState::Starting
+            } else {
+                CaptureState::Unavailable
+            },
+            dropped: 0,
+            last: None,
+            usable_since: None,
+            first_source: None,
+            relative_lag: None,
+            lagging: None,
+            codec: None,
+            repeated_frame: false,
+            controlled_scene_suspended: item.reviewed_scene.is_some(),
+            retrying: false,
+            clock_held: false,
+        });
+        let (frame, last_frame_age_ms) = state.last.map_or((None, None), |(frame, time)| {
+            (
+                Some(Counter(frame)),
+                Some(Counter(
+                    u64::try_from(time.elapsed().as_millis()).unwrap_or(u64::MAX),
+                )),
+            )
+        });
+        Camera {
+            id: item.id,
+            revision: Counter(item.revision),
+            scene_revision: Counter(item.scene_revision),
+            source_epoch: Counter(item.epoch),
+            live: item.config.source.is_live(),
+            dimensions: item.dimensions,
+            scene_review: if item.config.controlled_fire_regions.is_empty() {
+                SceneReview::Unconfigured
+            } else if item.reviewed_scene.is_some() {
+                SceneReview::Confirmed
+            } else {
+                SceneReview::NeedsReview
+            },
+            config: item.config,
+            runtime: CameraRuntime {
+                state: state.phase,
+                frame,
+                dropped: Counter(state.dropped),
+                last_frame_age_ms,
+                first_source_us: state
+                    .first_source
+                    .filter(|(epoch, _)| *epoch == item.epoch)
+                    .map(|(_, pts)| pts.to_string()),
+                relative_source_lag_ms: state
+                    .relative_lag
+                    .filter(|(epoch, _)| *epoch == item.epoch)
+                    .map(|(_, lag)| lag),
+                source_lagging: state.lagging,
+                codec: state.codec.as_deref().map(str::to_owned),
+                repeated_frame: state.repeated_frame,
+                controlled_scene_suspended: item.reviewed_scene.is_some()
+                    && (state.controlled_scene_suspended
+                        || !matches!(
+                            state.phase,
+                            CaptureState::Streaming | CaptureState::Replaying
+                        )),
+                analysis: None,
+            },
+        }
+    }
+
+    pub fn latest(&self, id: Uuid) -> Option<Arc<CameraFrame>> {
+        self.slots.read().ok()?.get(&id)?.latest.borrow().clone()
+    }
+
+    pub fn frame_bytes_in_use(&self) -> u32 {
+        self.limits.raw_bytes - self.budget.available_bytes()
+    }
+
+    pub fn capture_health(&self) -> Option<Vec<CameraHealth>> {
+        let slots = self.slots.read().ok()?;
+        Some(
+            slots
+                .iter()
+                .map(|(&id, slot)| {
+                    let current = slot.current.borrow().clone();
+                    CameraHealth {
+                        id,
+                        revision: slot.revision,
+                        phase: current.phase,
+                        retrying: current.retrying,
+                        repeated_frame: current.repeated_frame,
+                        clock_held: current.clock_held,
+                        source_lagging: current.lagging,
+                        last_frame_age_ms: current
+                            .last
+                            .map(|(_, at)| Counter(at.elapsed().as_millis() as u64)),
+                        usable_epoch: slot.latest.borrow().as_ref().and_then(|frame| {
+                            (matches!(
+                                current.phase,
+                                CaptureState::Streaming | CaptureState::Replaying
+                            ) && frame.usable_for_analysis
+                                && frame.captured_at.elapsed() <= FRAME_TIMEOUT)
+                                .then_some(frame.scope.epoch)
+                        }),
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn inference_lane(&self, id: Uuid) -> Option<usize> {
+        self.slots.read().ok()?.get(&id)?.inference_lane
+    }
+
+    pub(crate) async fn wait_for_analysis_frame(&self, lane: usize) {
+        self.analysis_frames[lane].notified().await;
+    }
+
+    pub(crate) fn frames(&self) -> Vec<Arc<CameraFrame>> {
+        self.slots
+            .read()
+            .map(|slots| {
+                slots
+                    .values()
+                    .filter_map(|slot| slot.latest.borrow().clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn analysis_capacity(&self) -> AnalysisCapacity {
+        use sw_protocol::CapacityState;
+        let Some(profile) = &self.analysis_admission else {
+            return AnalysisCapacity {
+                state: CapacityState::Unknown,
+                profile_id: None,
+                profile_sha256: None,
+                admissible_workload: None,
+                available_camera_slots: None,
+                limiting_resource: Some("execution_profile".into()),
+                reason: "No matching verified execution profile is loaded".into(),
+            };
+        };
+        let active = self.slots.read().map_or(profile.workload.cameras, |slots| {
+            slots
+                .values()
+                .filter(|slot| slot.inference_lane.is_some())
+                .count() as u32
+        });
+        profile.status(
+            CapacityState::Verified,
+            profile.workload.cameras.saturating_sub(active),
+            None,
+            "A verified execution profile matches this host and configuration",
+        )
+    }
+
+    pub async fn devices(&self) -> Result<Vec<sw_protocol::CaptureDevice>, RegistryError> {
+        let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RegistryError::WorkerUnavailable)?;
+        Ok(worker.devices().await?)
+    }
+
+    pub async fn discover_onvif(&self) -> Result<Vec<OnvifDevice>, RegistryError> {
+        Ok(self.onvif.discover().await?)
+    }
+
+    pub async fn onvif_profiles(
+        &self,
+        request: OnvifProfilesRequest,
+    ) -> Result<Vec<OnvifProfile>, RegistryError> {
+        let device = self.onvif.allowed_device(&request.device_endpoint)?;
+        let credentials = self.source_credentials(request.credential_ref).await?;
+        Ok(self.onvif.profiles(&device, credentials.as_ref()).await?)
+    }
+
+    pub async fn onvif_stream(
+        &self,
+        request: OnvifStreamRequest,
+    ) -> Result<OnvifStream, RegistryError> {
+        let device = self.onvif.allowed_device(&request.device_endpoint)?;
+        let credentials = self.source_credentials(request.credential_ref).await?;
+        let source = self
+            .onvif
+            .stream(
+                &device,
+                credentials.as_ref(),
+                request.credential_ref,
+                request.media,
+                &request.token,
+            )
+            .await?;
+        let authorized = self.validate_source(&source).is_ok();
+        Ok(OnvifStream { source, authorized })
+    }
+
+    pub async fn apply(
+        &self,
+        command: CameraCommand,
+        now: UnixMillis,
+    ) -> Result<CameraResult, RegistryError> {
+        if let Some(saved) = self.store.cached_camera(command.clone(), now).await? {
+            return Ok(saved);
+        }
+        let (config, previous, confirm_scene) = match &command.action {
+            CameraAction::Create(config) => (
+                Some(config.clone()),
+                None,
+                !config.controlled_fire_regions.is_empty(),
+            ),
+            CameraAction::Patch {
+                id,
+                revision,
+                patch,
+            } => {
+                let previous = self.store.camera(*id).await?;
+                if previous.revision != *revision {
+                    if let Some(saved) = self.store.cached_camera(command, now).await? {
+                        return Ok(saved);
+                    }
+                    return Err(StoreError::Revision {
+                        current: previous.revision,
+                    }
+                    .into());
+                }
+                (
+                    Some(patch.merge(previous.config.clone())),
+                    Some(previous),
+                    patch
+                        .controlled_fire_regions
+                        .as_ref()
+                        .is_some_and(|regions| !regions.is_empty()),
+                )
+            }
+            CameraAction::Delete { .. } => (None, None, false),
+        };
+        let (dimensions, reviewed_scene, measured) = match config {
+            Some(config) => {
+                if !config.valid() {
+                    return Err(RegistryError::Invalid);
+                }
+                if previous
+                    .as_ref()
+                    .is_none_or(|previous| previous.config.source != config.source)
+                {
+                    self.validate_source(&config.source)?;
+                }
+                let replacing = previous.as_ref().map(|camera| camera.id);
+                let retained = previous.filter(|previous| {
+                    !confirm_scene
+                        && previous.config.enabled
+                        && previous.config.source == config.source
+                        && previous.config.privacy_masks == config.privacy_masks
+                        && (self.analysis_admission.is_none()
+                            || previous.source_measurements.is_some())
+                });
+                if config.enabled {
+                    if let Some(dimensions) = retained.and_then(|previous| previous.dimensions) {
+                        (Some(dimensions), None, None)
+                    } else {
+                        // Skip the decoder probe when all capture slots are already occupied.
+                        // The write transaction still arbitrates concurrent admissions.
+                        if !self
+                            .store
+                            .camera_slot_available(replacing, self.limits)
+                            .await?
+                        {
+                            if let Some(saved) = self.store.cached_camera(command, now).await? {
+                                return Ok(saved);
+                            }
+                            return Err(StoreError::CameraCapacity.into());
+                        }
+                        let (probe, scene) = self
+                            .probe_frame(
+                                &config.source,
+                                config.privacy_masks,
+                                self.analysis_admission.is_some(),
+                            )
+                            .await?;
+                        let Some(scene) = scene else {
+                            let capacity = self
+                                .store
+                                .camera_capacity(probe.dimensions, replacing, self.limits)
+                                .await?;
+                            return if capacity.fits {
+                                Err(RegistryError::Busy)
+                            } else {
+                                Err(StoreError::CameraCapacity.into())
+                            };
+                        };
+                        let reference = (confirm_scene && scene.visibility == Visibility::Good)
+                            .then(|| scene.fingerprint.to_vec());
+                        let measurements = Self::measurements(&probe);
+                        (Some(probe.dimensions), reference, Some(measurements))
+                    }
+                } else {
+                    (None, None, None)
+                }
+            }
+            None => (None, None, None),
+        };
+        Ok(self
+            .store
+            .mutate_camera_admitted(
+                command,
+                CameraAdmission {
+                    dimensions,
+                    reviewed_scene,
+                    source_measurements: measured,
+                    analysis: self.analysis_admission.clone(),
+                },
+                self.limits,
+                now,
+            )
+            .await?)
+    }
+
+    pub async fn probe(
+        &self,
+        source: &CameraSource,
+        masks: Vec<MaskRect>,
+        replacing: Option<Uuid>,
+        sampling: Option<CameraSampling>,
+        profile_id: Option<String>,
+    ) -> Result<SourceProbe, RegistryError> {
+        let sampling = sampling.unwrap_or_default();
+        if !sampling.valid()
+            || profile_id
+                .as_ref()
+                .is_some_and(|id| id.is_empty() || id.len() > 64)
+        {
+            return Err(RegistryError::Invalid);
+        }
+        let (mut probe, _) = self.probe_frame(source, masks, true).await?;
+        probe.capture_capacity = Some(
+            self.store
+                .camera_capacity(probe.dimensions, replacing, self.limits)
+                .await?,
+        );
+        if let Some([height, width]) =
+            self.unsupported_model_shape(probe.dimensions.width, probe.dimensions.height)
+        {
+            let mut capacity = self.analysis_capacity();
+            capacity.state = CapacityState::Insufficient;
+            capacity.available_camera_slots = None;
+            capacity.limiting_resource = Some("model_tensor_shape".into());
+            capacity.reason = format!(
+                "The analysis stream requires a {width}x{height} input outside the configured model profile"
+            );
+            probe.analysis_capacity = Some(capacity);
+            return Ok(probe);
+        }
+        let capacity = match &self.analysis_admission {
+            Some(profile) if profile_id.as_deref().is_none_or(|id| id == profile.id) => {
+                self.store
+                    .analysis_capacity(
+                        source.clone(),
+                        sampling,
+                        Self::measurements(&probe),
+                        replacing,
+                        profile.clone(),
+                    )
+                    .await?
+            }
+            _ => AnalysisCapacity {
+                state: sw_protocol::CapacityState::Unknown,
+                profile_id,
+                profile_sha256: None,
+                admissible_workload: None,
+                available_camera_slots: None,
+                limiting_resource: Some("execution_profile".into()),
+                reason: "No matching verified execution profile is loaded".into(),
+            },
+        };
+        probe.analysis_capacity = Some(capacity);
+        Ok(probe)
+    }
+
+    fn unsupported_model_shape(&self, width: u32, height: u32) -> Option<[u16; 2]> {
+        let shapes = self.model_shapes.as_ref()?;
+        let shape = rectangular_tensor_shape(width, height);
+        (!shapes.contains(&shape)).then_some(shape)
+    }
+
+    fn measurements(probe: &SourceProbe) -> CameraSourceMeasurements {
+        CameraSourceMeasurements {
+            analysis: probe.measurement(),
+            detail: probe.main_stream.as_ref().map(MainStreamProbe::measurement),
+        }
+    }
+
+    async fn probe_frame(
+        &self,
+        source: &CameraSource,
+        masks: Vec<MaskRect>,
+        measure_rate: bool,
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
+        let Some(main) = source.main_stream() else {
+            let request = self.request(source, masks).await?;
+            let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
+            return self
+                .inspect_source(request, source.is_live(), true, measure_rate)
+                .await;
+        };
+        let masked = !masks.is_empty();
+        let _slots = self
+            .probes
+            .try_acquire_many(2)
+            .map_err(|_| RegistryError::Busy)?;
+        let main = self.request(&main, masks.clone()).await?;
+        let request = self.request(source, masks).await?;
+        let (analysis, detail) = tokio::join!(
+            self.inspect_source(request, true, true, measure_rate),
+            self.inspect_source(main, true, false, measure_rate),
+        );
+        let (mut analysis, sample) = analysis?;
+        let (detail, _) = detail?;
+        if masked && !same_aspect_ratio(analysis.dimensions, detail.dimensions) {
+            return Err(RegistryError::StreamGeometry);
+        }
+        analysis.main_stream = Some(MainStreamProbe {
+            dimensions: detail.dimensions,
+            codec: detail.codec,
+            native_pts: detail.native_pts,
+            source_rate: detail.source_rate,
+        });
+        Ok((analysis, sample))
+    }
+
+    pub(crate) async fn probe_request(
+        &self,
+        request: CaptureRequest,
+        live: bool,
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
+        let _slot = self.probes.try_acquire().map_err(|_| RegistryError::Busy)?;
+        self.inspect_source(request, live, true, false).await
+    }
+
+    async fn inspect_source(
+        &self,
+        request: CaptureRequest,
+        live: bool,
+        measure_scene: bool,
+        measure_rate: bool,
+    ) -> Result<(SourceProbe, Option<scene::SceneSample>), RegistryError> {
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RegistryError::WorkerUnavailable)?;
+        let mut process = worker.capture(&request).await?;
+        let result = process
+            .next_with(FRAME_TIMEOUT, |_| {
+                measure_scene.then(|| self.budget.clone())
+            })
+            .await;
+        let (header, sample) = match result {
+            Err(error) => {
+                process.stop().await?;
+                return Err(error.into());
+            }
+            Ok(CaptureRead::End) => {
+                process.stop().await?;
+                return Err(RegistryError::Source);
+            }
+            Ok(CaptureRead::Frame(frame)) => {
+                let header = frame.header;
+                let masks = scene::pixel_masks(&request.masks, header.width, header.height);
+                (
+                    header,
+                    Some(scene::measure_masked(
+                        header.width,
+                        header.height,
+                        &frame.rgb,
+                        &masks,
+                    )),
+                )
+            }
+            // A decoded frame with no Core buffer permit still supplies dimensions.
+            Ok(CaptureRead::Dropped(header)) => (header, None),
+        };
+        let codec = process.codec().map(|codec| codec.to_string());
+        let mut rate = sw_protocol::SourceRate {
+            advertised_millifps: process.advertised_millifps(),
+            ..Default::default()
+        };
+        if measure_rate {
+            let mut sample = SourceRateSample::new(header);
+            // Dropping RGB after reading its header preserves the native timestamp
+            // sequence without using the analysis frame allocation budget.
+            let _ = tokio::time::timeout(Duration::from_millis(1_400), async {
+                for _ in 0..180 {
+                    let Ok(CaptureRead::Dropped(header)) =
+                        process.next_with(FRAME_TIMEOUT, |_| None).await
+                    else {
+                        break;
+                    };
+                    if sample.add(header) {
+                        break;
+                    }
+                }
+            })
+            .await;
+            rate = sample.measure(rate.advertised_millifps);
+        }
+        process.stop().await?;
+        Ok((
+            SourceProbe {
+                dimensions: Dimensions {
+                    width: header.width,
+                    height: header.height,
+                },
+                live,
+                native_pts: header.pts_quality == PtsQuality::Native,
+                codec,
+                capture_capacity: None,
+                source_rate: measure_rate.then_some(rate),
+                analysis_capacity: None,
+                main_stream: None,
+            },
+            sample,
+        ))
+    }
+
+    pub(crate) async fn open_main_stream(
+        &self,
+        config: &CameraConfig,
+    ) -> Result<CaptureProcess, RegistryError> {
+        let main = config.source.main_stream().ok_or(RegistryError::Invalid)?;
+        let request = self.request(&main, config.privacy_masks.clone()).await?;
+        let worker = self
+            .worker
+            .as_ref()
+            .ok_or(RegistryError::WorkerUnavailable)?;
+        Ok(worker.capture(&request).await?)
+    }
+
+    async fn request(
+        &self,
+        source: &CameraSource,
+        masks: Vec<MaskRect>,
+    ) -> Result<CaptureRequest, RegistryError> {
+        self.validate_source(source)?;
+        if masks.len() > 32 || !masks.iter().all(|mask| mask.valid()) {
+            return Err(RegistryError::Invalid);
+        }
+        let source = match source {
+            CameraSource::Replay { file, pace, .. } => {
+                let file = tokio::fs::canonicalize(self.replay_root.join(file))
+                    .await
+                    .map_err(|_| RegistryError::Source)?;
+                if !file.starts_with(&self.replay_root)
+                    || !tokio::fs::metadata(&file)
+                        .await
+                        .is_ok_and(|meta| meta.is_file())
+                {
+                    return Err(RegistryError::Source);
+                }
+                CaptureSource::Replay { file, pace: *pace }
+            }
+            CameraSource::Rtsp {
+                peer,
+                stream_path,
+                secure,
+                transport,
+                credential_ref,
+                ..
+            } => {
+                let worker = self
+                    .worker
+                    .as_ref()
+                    .ok_or(RegistryError::WorkerUnavailable)?;
+                if !worker.confined_rtsp().await? {
+                    return Err(WorkerError::NetworkPolicyUnavailable.into());
+                }
+                let credentials = self.source_credentials(*credential_ref).await?;
+                CaptureSource::Rtsp {
+                    peer: *peer,
+                    stream_path: stream_path.clone(),
+                    secure: *secure,
+                    transport: *transport,
+                    credentials,
+                }
+            }
+            CameraSource::Usb { device_id } => CaptureSource::Usb {
+                device_id: device_id.clone(),
+            },
+        };
+        Ok(CaptureRequest { source, masks })
+    }
+
+    fn validate_source(&self, source: &CameraSource) -> Result<(), RegistryError> {
+        if !source.valid() {
+            return Err(RegistryError::Invalid);
+        }
+        match source {
+            CameraSource::Replay { file, .. } if !self.uploads.permits_source(Path::new(file)) => {
+                Err(RegistryError::Source)
+            }
+            CameraSource::Replay { file, .. }
+                if !Path::new(file)
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_))) =>
+            {
+                Err(RegistryError::Source)
+            }
+            CameraSource::Rtsp { peer, .. } if !self.rtsp_peers.contains(peer) => {
+                Err(RegistryError::Source)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn source_credentials(
+        &self,
+        id: Option<Uuid>,
+    ) -> Result<Option<CameraCredentials>, RegistryError> {
+        let Some(id) = id else { return Ok(None) };
+        let root = self
+            .credentials_root
+            .as_ref()
+            .ok_or(RegistryError::Source)?;
+        crate::camera_credentials::read(root, id).await.map(Some)
+    }
+
+    pub async fn supervise(
+        self: Arc<Self>,
+        mut shutdown: watch::Receiver<bool>,
+    ) -> Result<(), RegistryError> {
+        let mut changes = self.store.subscribe();
+        let mut tasks = BTreeMap::<Uuid, Task>::new();
+        let mut fatal = None;
+        while !*shutdown.borrow() {
+            changes.borrow_and_update();
+            if let Ok(records) = self.store.enabled_cameras().await
+                && let Err(error) = self.reconcile(&mut tasks, records).await
+            {
+                fatal = Some(error);
+                break;
+            }
+            let next_retry = tasks
+                .values()
+                .filter_map(|task| match task.capture {
+                    CaptureTask::RetryAt(at) if at > Instant::now() => Some(at),
+                    _ => None,
+                })
+                .min();
+            let sleep = next_retry.map_or(Duration::from_secs(2), |at| {
+                at.saturating_duration_since(Instant::now())
+                    .min(Duration::from_secs(2))
+            });
+            tokio::select! {
+                result = changes.changed() => if result.is_err() { break; },
+                _ = shutdown.changed() => break,
+                _ = tokio::time::sleep(sleep) => {},
+            }
+        }
+        for task in tasks.values() {
+            if let CaptureTask::Running { stop, .. } = &task.capture {
+                stop.send_replace(true);
+            }
+        }
+        for (_, task) in tasks {
+            if let CaptureTask::Running { join, .. } = task.capture {
+                match join.await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        fatal.get_or_insert(error);
+                    }
+                    Err(_) => {
+                        fatal.get_or_insert(RegistryError::CaptureTask);
+                    }
+                }
+            }
+        }
+        if let Ok(mut slots) = self.slots.write() {
+            slots.clear();
+        }
+        if let Some(error) = fatal {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn reconcile(
+        self: &Arc<Self>,
+        tasks: &mut BTreeMap<Uuid, Task>,
+        records: Vec<CameraRecord>,
+    ) -> Result<(), RegistryError> {
+        let (mut active, mut reserved) = (0, 0u64);
+        let desired: BTreeMap<_, _> = records
+            .into_iter()
+            .map(|camera| {
+                let bytes = camera
+                    .dimensions
+                    .and_then(CameraLimits::required_raw_bytes)
+                    .map_or(u64::MAX, u64::from);
+                let compute_fits = self.analysis_admission.as_ref().is_none_or(|profile| {
+                    active < profile.workload.cameras
+                        && profile
+                            .matches_camera(&camera.config, camera.source_measurements.as_ref())
+                });
+                let admit = compute_fits
+                    && active < self.limits.active
+                    && reserved.saturating_add(bytes) <= u64::from(self.limits.raw_bytes);
+                if admit {
+                    active += 1;
+                    reserved += bytes;
+                }
+                (camera.id, (camera, admit))
+            })
+            .collect();
+        let obsolete: Vec<_> = tasks
+            .iter()
+            .filter(|(id, task)| {
+                !desired
+                    .get(id)
+                    .is_some_and(|(camera, admit)| *admit && camera.revision == task.revision)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in obsolete {
+            if let Some(task) = tasks.remove(&id)
+                && let CaptureTask::Running { stop, join } = task.capture
+            {
+                stop.send_replace(true);
+                let _ = join.await.map_err(|_| RegistryError::CaptureTask)??;
+            }
+        }
+        for task in tasks.values_mut() {
+            if matches!(&task.capture, CaptureTask::Running { join, .. } if join.is_finished())
+                && let CaptureTask::Running { join, .. } =
+                    std::mem::replace(&mut task.capture, CaptureTask::Dormant)
+            {
+                match join.await.map_err(|_| RegistryError::CaptureTask)?? {
+                    CameraOutcome::Completed | CameraOutcome::ConfigurationFailure => {}
+                    CameraOutcome::Stopped => {
+                        task.capture = CaptureTask::RetryAt(Instant::now());
+                    }
+                    CameraOutcome::RetryableFailure { stable } => {
+                        if stable {
+                            task.attempts = 0;
+                        }
+                        task.capture =
+                            CaptureTask::RetryAt(Instant::now() + capture_backoff(task.attempts));
+                        task.attempts = task.attempts.saturating_add(1);
+                    }
+                }
+            }
+        }
+        if let Ok(mut slots) = self.slots.write() {
+            slots.retain(|id, _| tasks.contains_key(id));
+        }
+        let mut assigned = [0; 8];
+        for task in tasks.values() {
+            assigned[task.inference_lane] += 1;
+        }
+        for (id, (camera, admit)) in desired {
+            if let Some(task) = tasks.get_mut(&id) {
+                if matches!(task.capture, CaptureTask::RetryAt(at) if Instant::now() >= at) {
+                    task.capture =
+                        self.spawn_camera(camera, task.inference_lane, Arc::clone(&task.feed));
+                }
+                continue;
+            }
+            let revision = camera.revision;
+            let inference_lane = admit.then(|| {
+                let lane = (0..self.inference_lanes)
+                    .min_by_key(|&lane| assigned[lane])
+                    .expect("a registry has at least one inference lane");
+                assigned[lane] += 1;
+                lane
+            });
+            let phase = if admit {
+                CaptureState::Starting
+            } else {
+                CaptureState::CapacityExceeded
+            };
+            let (state, current) = watch::channel(State {
+                phase,
+                dropped: 0,
+                last: None,
+                usable_since: None,
+                first_source: None,
+                relative_lag: None,
+                lagging: None,
+                codec: None,
+                repeated_frame: false,
+                controlled_scene_suspended: false,
+                retrying: false,
+                clock_held: false,
+            });
+            let (frame, latest) = watch::channel(None);
+            if let Ok(mut slots) = self.slots.write() {
+                slots.insert(
+                    id,
+                    Slot {
+                        revision,
+                        inference_lane,
+                        current,
+                        latest,
+                    },
+                );
+            }
+            let Some(inference_lane) = inference_lane else {
+                continue;
+            };
+            let feed = Arc::new(CameraFeed {
+                state,
+                latest: frame,
+            });
+            let capture = self.spawn_camera(camera, inference_lane, Arc::clone(&feed));
+            tasks.insert(
+                id,
+                Task {
+                    revision,
+                    inference_lane,
+                    capture,
+                    attempts: 0,
+                    feed,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn spawn_camera(
+        self: &Arc<Self>,
+        camera: CameraRecord,
+        inference_lane: usize,
+        feed: Arc<CameraFeed>,
+    ) -> CaptureTask {
+        let (stop, cancellation) = watch::channel(false);
+        let registry = self.clone();
+        let join = tokio::spawn(async move {
+            registry
+                .run_camera(camera, inference_lane, feed, cancellation)
+                .await
+        });
+        CaptureTask::Running { stop, join }
+    }
+
+    async fn run_camera(
+        &self,
+        camera: CameraRecord,
+        inference_lane: usize,
+        feed: Arc<CameraFeed>,
+        mut stop: watch::Receiver<bool>,
+    ) -> Result<CameraOutcome, RegistryError> {
+        let state = &feed.state;
+        let latest = &feed.latest;
+        let Some(worker) = &self.worker else {
+            set_phase(state, CaptureState::Unavailable);
+            return Ok(CameraOutcome::ConfigurationFailure);
+        };
+        let live = camera.config.source.is_live();
+        let repeat = matches!(
+            camera.config.source,
+            CameraSource::Replay { repeat: true, .. }
+        );
+        loop {
+            if *stop.borrow() {
+                return Ok(CameraOutcome::Stopped);
+            }
+            set_phase(state, CaptureState::Starting);
+            let mut active_camera = match self
+                .store
+                .bump_camera_epoch(camera.id, camera.revision)
+                .await
+            {
+                Ok(updated) => updated,
+                Err(StoreError::NotFound | StoreError::Revision { .. } | StoreError::Invalid) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let request = match self
+                .request(
+                    &active_camera.config.source,
+                    active_camera.config.privacy_masks.clone(),
+                )
+                .await
+            {
+                Ok(request) => request,
+                Err(RegistryError::Worker(WorkerError::Unreaped)) => {
+                    return Err(WorkerError::Unreaped.into());
+                }
+                Err(
+                    RegistryError::Invalid
+                    | RegistryError::WorkerUnavailable
+                    | RegistryError::Worker(WorkerError::NetworkPolicyUnavailable),
+                ) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let mut process = match worker.capture(&request).await {
+                Ok(process) => process,
+                Err(WorkerError::Unreaped) => return Err(WorkerError::Unreaped.into()),
+                Err(WorkerError::Unavailable | WorkerError::Config) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(_) => return Ok(capture_retry(&feed, false)),
+            };
+            let outcome = self
+                .read_camera(
+                    &mut active_camera,
+                    inference_lane,
+                    &mut process,
+                    &feed,
+                    &mut stop,
+                )
+                .await;
+            process.stop().await?;
+            match outcome {
+                Ok(CaptureState::Disabled) => return Ok(CameraOutcome::Stopped),
+                Ok(CaptureState::Completed) if repeat => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Starting);
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                        _ = stop.changed() => return Ok(CameraOutcome::Stopped),
+                    }
+                }
+                Ok(CaptureState::Completed) if !live => {
+                    set_phase(state, CaptureState::Completed);
+                    return Ok(CameraOutcome::Completed);
+                }
+                Ok(CaptureState::CapacityExceeded) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::CapacityExceeded);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                Err(
+                    RegistryError::Store(
+                        StoreError::NotFound | StoreError::Revision { .. } | StoreError::Invalid,
+                    )
+                    | RegistryError::Worker(WorkerError::Config),
+                ) => {
+                    latest.send_replace(None);
+                    set_phase(state, CaptureState::Unavailable);
+                    return Ok(CameraOutcome::ConfigurationFailure);
+                }
+                _ => {
+                    let stable = {
+                        let snapshot = state.borrow();
+                        snapshot.last.zip(snapshot.usable_since).is_some_and(
+                            |((_, last), since)| {
+                                last.saturating_duration_since(since) >= STABLE_CAPTURE
+                            },
+                        )
+                    };
+                    return Ok(capture_retry(&feed, stable));
+                }
+            }
+        }
+    }
+
+    async fn read_camera(
+        &self,
+        camera: &mut CameraRecord,
+        inference_lane: usize,
+        process: &mut CaptureProcess,
+        feed: &CameraFeed,
+        stop: &mut watch::Receiver<bool>,
+    ) -> Result<CaptureState, RegistryError> {
+        let state = &feed.state;
+        let latest = &feed.latest;
+        let mut clock = FrameClock::default();
+        let mut source_progress = SourceProgress::default();
+        let mut content = RepeatedFrames::default();
+        let live = camera.config.source.is_live();
+        let paced = live
+            || matches!(
+                camera.config.source,
+                CameraSource::Replay { pace: true, .. }
+            );
+        let empty = Arc::<[ControlledFireRegion]>::from([]);
+        let zones = Arc::from(camera.config.controlled_fire_regions.clone());
+        let mut moved_since = None;
+        let mut mask_dimensions = (0, 0);
+        let mut supported_model_shape = true;
+        let mut masks: Arc<[scene::PixelMask]> = Arc::from([]);
+        let mut rate_sample: Option<SourceRateSample> = None;
+        let mut qualified_rate = self.analysis_admission.is_none();
+        let source_kind = sw_protocol::SourceKind::from(&camera.config.source);
+        loop {
+            let read = tokio::select! {
+                _ = stop.wait_for(|value| *value) => return Ok(CaptureState::Disabled),
+                read = process.next(&self.budget, FRAME_TIMEOUT) => read?,
+            };
+            let frame = match read {
+                CaptureRead::Frame(frame) => frame,
+                CaptureRead::Dropped(_) => {
+                    source_progress.unobserved();
+                    state.send_modify(|state| {
+                        state.dropped = state.dropped.saturating_add(1);
+                        state.phase = CaptureState::CapacityExceeded;
+                        state.usable_since = None;
+                        state.repeated_frame = false;
+                        state.controlled_scene_suspended = camera.reviewed_scene.is_some();
+                        state.relative_lag = None;
+                        state.lagging = None;
+                        if state.codec.is_none() {
+                            state.codec = process.codec().cloned();
+                        }
+                    });
+                    continue;
+                }
+                CaptureRead::End => return Ok(CaptureState::Completed),
+            };
+            let now = Instant::now();
+            let observed_utc = sw_storage::utc_ms();
+            let (reset, geometry_changed, has_native_time) = clock.observe(frame.header, now);
+            let dimensions = (frame.header.width, frame.header.height);
+            if let Some(profile) = &self.analysis_admission {
+                let expected = &profile.workload.source;
+                if (expected.dimensions.width, expected.dimensions.height) != dimensions
+                    || process
+                        .codec()
+                        .is_none_or(|name| name.as_ref() != expected.codec)
+                    || process.advertised_millifps().is_none_or(|fps| {
+                        !(expected.min_millifps..=expected.max_millifps).contains(&fps)
+                    })
+                {
+                    return Ok(CaptureState::CapacityExceeded);
+                }
+                if reset || !has_native_time {
+                    qualified_rate = false;
+                    rate_sample = None;
+                }
+                if has_native_time {
+                    if let Some(sample) = &mut rate_sample {
+                        if sample.add(frame.header) {
+                            let measured = sw_protocol::SourceMeasurement {
+                                dimensions: expected.dimensions,
+                                codec: Some(expected.codec.clone()),
+                                rate: sample.measure(process.advertised_millifps()),
+                            };
+                            if !expected.admits_source(source_kind, &measured) {
+                                return Ok(CaptureState::CapacityExceeded);
+                            }
+                            rate_sample = None;
+                            qualified_rate = true;
+                        }
+                    } else {
+                        rate_sample = Some(SourceRateSample::new(frame.header));
+                    }
+                }
+            }
+            if dimensions != mask_dimensions {
+                mask_dimensions = dimensions;
+                supported_model_shape = self
+                    .unsupported_model_shape(dimensions.0, dimensions.1)
+                    .is_none();
+                masks =
+                    scene::pixel_masks(&camera.config.privacy_masks, dimensions.0, dimensions.1);
+            }
+            let sample = scene::measure_masked(dimensions.0, dimensions.1, &frame.rgb, &masks);
+            if reset {
+                content.clear();
+            }
+            if live && has_native_time {
+                content.observe(&frame.rgb, sample.fingerprint, now);
+            }
+            let usable = has_native_time
+                && qualified_rate
+                && supported_model_shape
+                && !content.unconfirmed(now);
+            let alignment = camera.reviewed_scene.as_ref().map(|reference| {
+                if usable {
+                    scene::alignment(reference, &sample)
+                } else {
+                    scene::SceneAlignment::Uncertain
+                }
+            });
+            let moved = alignment == Some(scene::SceneAlignment::Changed);
+            let confirmed_shift = if moved {
+                now.duration_since(*moved_since.get_or_insert(now)) >= Duration::from_millis(750)
+            } else {
+                moved_since = None;
+                false
+            };
+            if geometry_changed || confirmed_shift {
+                *camera = self
+                    .store
+                    .invalidate_camera_scene(camera.id, camera.revision)
+                    .await?;
+            } else if reset {
+                *camera = self
+                    .store
+                    .bump_camera_epoch(camera.id, camera.revision)
+                    .await?;
+            }
+            let frame_id = frame.header.frame;
+            let source_us = frame.header.source_micros;
+            let relative_lag = if paced && has_native_time {
+                source_progress.observe(camera.epoch, source_us, now)
+            } else {
+                source_progress.unobserved();
+                None
+            };
+            let source_lagging = relative_lag.map(|_| source_progress.lagging);
+            let observation_time = if source_lagging == Some(true) {
+                ObservationTime::from_delayed_source(observed_utc, now)
+            } else {
+                ObservationTime::new(observed_utc, now)
+            };
+            let scope = SourceScope {
+                camera_id: camera.id,
+                epoch: camera.epoch,
+                scene_revision: camera.scene_revision,
+            };
+            latest.send_replace(Some(Arc::new(CameraFrame {
+                scope,
+                captured_at: now,
+                observation_time,
+                usable_for_analysis: usable,
+                transport_valid: has_native_time,
+                source_lagging: source_lagging == Some(true),
+                live,
+                sampling: camera.config.sampling,
+                priority: camera.config.priority,
+                inference_lane,
+                visibility: sample.visibility,
+                scene_signature: sw_domain::SceneSignature(sample.fingerprint),
+                masks: Arc::clone(&masks),
+                controlled: if camera.reviewed_scene.is_some()
+                    && alignment == Some(scene::SceneAlignment::Aligned)
+                {
+                    Arc::clone(&zones)
+                } else {
+                    Arc::clone(&empty)
+                },
+                frame,
+            })));
+            state.send_modify(|state| {
+                if state.codec.is_none() {
+                    state.codec = process.codec().cloned();
+                }
+                state.phase = if has_native_time {
+                    if live {
+                        CaptureState::Streaming
+                    } else {
+                        CaptureState::Replaying
+                    }
+                } else {
+                    CaptureState::ClockHold
+                };
+                if has_native_time {
+                    state.last = Some((frame_id, now));
+                    if state
+                        .first_source
+                        .is_none_or(|(epoch, _)| epoch != scope.epoch)
+                    {
+                        state.first_source = source_us.map(|pts| (scope.epoch, pts));
+                    }
+                }
+                if reset || !usable || source_lagging == Some(true) {
+                    state.usable_since = None;
+                } else {
+                    state.usable_since.get_or_insert(now);
+                }
+                state.repeated_frame = content.holding;
+                state.controlled_scene_suspended = camera.reviewed_scene.is_some()
+                    && alignment != Some(scene::SceneAlignment::Aligned);
+                state.relative_lag = relative_lag.map(|lag| (scope.epoch, lag));
+                state.lagging = source_lagging;
+                state.retrying = false;
+                state.clock_held = clock
+                    .hold_started
+                    .is_some_and(|since| now.duration_since(since) >= Duration::from_secs(3));
+            });
+            if usable {
+                self.analysis_frames[inference_lane].notify_one();
+            }
+        }
+    }
+}
+
+pub(crate) fn same_aspect_ratio(a: Dimensions, b: Dimensions) -> bool {
+    a.width * b.height == b.width * a.height
+}
+
+struct Task {
+    revision: u64,
+    inference_lane: usize,
+    capture: CaptureTask,
+    attempts: u32,
+    feed: Arc<CameraFeed>,
+}
+
+struct CameraFeed {
+    state: watch::Sender<State>,
+    latest: watch::Sender<Option<Arc<CameraFrame>>>,
+}
+
+enum CaptureTask {
+    Running {
+        stop: watch::Sender<bool>,
+        join: JoinHandle<Result<CameraOutcome, RegistryError>>,
+    },
+    RetryAt(Instant),
+    Dormant,
+}
+
+enum CameraOutcome {
+    Completed,
+    Stopped,
+    RetryableFailure { stable: bool },
+    ConfigurationFailure,
+}
+
+fn capture_retry(feed: &CameraFeed, stable: bool) -> CameraOutcome {
+    feed.latest.send_replace(None);
+    set_phase(&feed.state, CaptureState::Retrying);
+    CameraOutcome::RetryableFailure { stable }
+}
+
+fn capture_backoff(attempt: u32) -> Duration {
+    let jitter = u64::from(Uuid::new_v4().as_bytes()[0]);
+    Duration::from_millis(((250u64 << attempt.min(7)) + jitter).min(30_000))
+}
+
+fn set_phase(state: &watch::Sender<State>, phase: CaptureState) {
+    state.send_modify(|state| {
+        state.phase = phase;
+        state.repeated_frame = false;
+        state.controlled_scene_suspended = false;
+        state.clock_held = false;
+        state.usable_since = None;
+        state.relative_lag = None;
+        state.lagging = None;
+        if phase != CaptureState::Completed {
+            state.codec = None;
+            state.first_source = None;
+        }
+        if phase == CaptureState::Retrying {
+            state.retrying = true;
+        }
+    });
+}
+
+#[derive(Default)]
+struct RepeatedFrames {
+    hasher: RandomState,
+    fingerprint: Option<[u8; scene::FINGERPRINT_BYTES]>,
+    last_sample: Option<Instant>,
+    repeat: Option<(u64, Instant)>,
+    holding: bool,
+}
+
+impl RepeatedFrames {
+    fn unconfirmed(&self, now: Instant) -> bool {
+        self.repeat
+            .is_some_and(|(_, since)| now.duration_since(since) >= CONTENT_CONFIRM_AFTER)
+    }
+
+    fn clear(&mut self) {
+        self.fingerprint = None;
+        self.last_sample = None;
+        self.repeat = None;
+        self.holding = false;
+    }
+
+    fn observe(&mut self, rgb: &[u8], fingerprint: [u8; scene::FINGERPRINT_BYTES], now: Instant) {
+        if self.fingerprint.replace(fingerprint) != Some(fingerprint) {
+            self.last_sample = Some(now);
+            self.repeat = None;
+            self.holding = false;
+            return;
+        }
+        if self
+            .last_sample
+            .is_some_and(|at| now.duration_since(at) < CONTENT_SAMPLE_INTERVAL)
+        {
+            return;
+        }
+        // The cheap scene sample gates a bounded-rate hash of the decoded bytes.
+        // Static-looking scenes with changing decoded pixels remain available.
+        self.last_sample = Some(now);
+        let hash = self.hasher.hash_one(rgb);
+        let (_, since) = self
+            .repeat
+            .filter(|(old, _)| *old == hash)
+            .unwrap_or((hash, now));
+        self.repeat = Some((hash, since));
+        self.holding = now.duration_since(since) >= CONTENT_HOLD_AFTER;
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct FrameClock {
+    geometry: Option<(u32, u32)>,
+    last_pts: Option<i64>,
+    hold_started: Option<Instant>,
+}
+
+impl FrameClock {
+    pub(crate) fn observe(&mut self, header: FrameHeader, now: Instant) -> (bool, bool, bool) {
+        let geometry = (header.width, header.height);
+        let changed = self
+            .geometry
+            .replace(geometry)
+            .is_some_and(|previous| previous != geometry);
+        let pts = header
+            .source_micros
+            .filter(|_| header.pts_quality == PtsQuality::Native && !header.corrupt);
+        let gap = pts
+            .zip(self.last_pts)
+            .is_some_and(|(new, old)| !(-1_000_000..=5_000_000).contains(&new.saturating_sub(old)));
+        let advances =
+            pts.is_some_and(|pts| changed || gap || self.last_pts.is_none_or(|last| pts > last));
+        if !advances {
+            self.hold_started.get_or_insert(now);
+            if changed {
+                self.last_pts = None;
+            }
+            return (changed, changed, false);
+        }
+        let resumed = self
+            .hold_started
+            .take()
+            .is_some_and(|start| now.duration_since(start) > Duration::from_secs(3));
+        self.last_pts = pts;
+        (changed || gap || resumed, changed, true)
+    }
+}
+
+#[derive(Default)]
+struct SourceProgress {
+    anchor: Option<(u64, i64, Instant)>,
+    pending: Option<Instant>,
+    lagging: bool,
+}
+
+impl SourceProgress {
+    fn observe(&mut self, epoch: u64, pts: Option<i64>, at: Instant) -> Option<i32> {
+        let pts = pts?;
+        if self.anchor.is_none_or(|(old_epoch, ..)| old_epoch != epoch) {
+            *self = Self {
+                anchor: Some((epoch, pts, at)),
+                ..Self::default()
+            };
+            return None;
+        }
+        let (_, first_pts, first_receive) = self.anchor?;
+        let source_us = i128::from(pts) - i128::from(first_pts);
+        let wall = at - first_receive;
+        if source_us < 1_000_000 || wall < Duration::from_secs(2) {
+            return None;
+        }
+        // Relative to the first received frame of the scope. This never shifts the anchor
+        // to a late frame, which would hide a growing capture backlog.
+        let wall_us = wall.as_micros() as i128;
+        let lag_ms = (wall_us - source_us) / 1_000;
+        // Allow up to 100 ppm of accumulated clock skew for the health decision.
+        // Keep the measured lag unadjusted for diagnostics and qualification.
+        let adjusted_lag_ms = lag_ms - wall_us / 10_000_000;
+        let (crossed, hold) = if self.lagging {
+            (adjusted_lag_ms <= 500, Duration::from_secs(3))
+        } else {
+            (adjusted_lag_ms >= 1_000, Duration::from_secs(2))
+        };
+        if crossed {
+            if at - *self.pending.get_or_insert(at) >= hold {
+                self.lagging = !self.lagging;
+                self.pending = None;
+            }
+        } else {
+            self.pending = None;
+        }
+        Some(lag_ms.clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32)
+    }
+
+    fn unobserved(&mut self) {
+        self.pending = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_pts_advancing_at_half_speed_accumulates_lag_until_epoch_changes() {
+        let mut progress = SourceProgress::default();
+        let start = Instant::now();
+        assert_eq!(progress.observe(1, Some(-200_000), start), None);
+        assert_eq!(
+            progress.observe(1, Some(300_000), start + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            progress.observe(1, Some(800_000), start + Duration::from_secs(2)),
+            Some(1000)
+        );
+        assert_eq!(
+            progress.observe(1, Some(2_800_000), start + Duration::from_secs(6)),
+            Some(3000)
+        );
+        assert!(progress.lagging);
+        let restarted = start + Duration::from_secs(8);
+        assert_eq!(progress.observe(2, Some(200_000), restarted), None);
+        assert!(!progress.lagging);
+        assert_eq!(
+            progress.observe(2, Some(2_203_000), restarted + Duration::from_secs(2)),
+            Some(-3)
+        );
+        assert_eq!(
+            progress.observe(2, Some(2_700_000), restarted + Duration::from_millis(2550)),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn source_probe_measures_pts_and_flags_variable_or_missing_rates() {
+        let frame = |source_micros, frame| FrameHeader {
+            width: 640,
+            height: 360,
+            frame,
+            raw_pts: source_micros,
+            source_micros,
+            time_base_num: 1,
+            time_base_den: 1_000_000,
+            pts_quality: PtsQuality::Native,
+            corrupt: false,
+        };
+        let mut sample = SourceRateSample::new(frame(Some(0), 1));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Unknown
+        );
+        for i in 1..=12 {
+            sample.add(frame(Some(i * 1_000_000 / 15), i as u64 + 1));
+        }
+        assert_eq!(sample.measure(Some(15_000)).observed_millifps, Some(15_000));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Observed
+        );
+        sample.add(frame(Some(960_000), 14));
+        assert_eq!(
+            sample.measure(Some(15_000)).quality,
+            SourceRateQuality::Variable
+        );
+    }
+
+    #[test]
+    fn source_lag_tolerates_clock_drift_and_recovers_with_observed_progress() {
+        let mut progress = SourceProgress::default();
+        let start = Instant::now();
+        progress.observe(7, Some(0), start);
+        for second in [1_000, 90_000, 180_000] {
+            // 80 ppm of skew plus up to 150 ms of temporary jitter.
+            let pts = second * 999_920 - 150_000;
+            progress.observe(7, Some(pts), start + Duration::from_secs(second as u64));
+            assert!(!progress.lagging);
+        }
+        let observe = |progress: &mut SourceProgress, seconds: i64, extra_lag_us: i64| {
+            progress.observe(
+                7,
+                Some(seconds * 999_920 - extra_lag_us),
+                start + Duration::from_secs(seconds as u64),
+            );
+            progress.lagging
+        };
+        assert!(!observe(&mut progress, 180_002, 6_000_000));
+        progress.unobserved();
+        assert!(!observe(&mut progress, 180_003, 5_500_000));
+        assert!(observe(&mut progress, 180_005, 5_500_000));
+        assert!(observe(&mut progress, 180_006, 4_600_000));
+        assert!(observe(&mut progress, 180_008, 3_000_000));
+        assert!(!observe(&mut progress, 180_011, 3_000_000));
+    }
+
+    #[test]
+    fn plateau_does_not_advance_analysis_and_resumption_rotates_scope() {
+        let mut clock = FrameClock::default();
+        let now = Instant::now();
+        let frame = FrameHeader {
+            width: 320,
+            height: 240,
+            frame: 1,
+            raw_pts: Some(0),
+            source_micros: Some(0),
+            time_base_num: 1,
+            time_base_den: 1_000,
+            pts_quality: PtsQuality::Native,
+            corrupt: false,
+        };
+        assert_eq!(clock.observe(frame, now), (false, false, true));
+        assert_eq!(
+            clock.observe(frame, now + Duration::from_millis(100)),
+            (false, false, false)
+        );
+        let resumed = FrameHeader {
+            raw_pts: Some(10),
+            source_micros: Some(10_000),
+            ..frame
+        };
+        assert_eq!(
+            clock.observe(resumed, now + Duration::from_secs(4)),
+            (true, false, true)
+        );
+        assert_eq!(
+            clock.observe(
+                FrameHeader {
+                    width: 640,
+                    ..resumed
+                },
+                now + Duration::from_secs(5)
+            ),
+            (true, true, true)
+        );
+    }
+
+    #[test]
+    fn prolonged_repeated_pixels_hold_until_actual_content_changes() {
+        let mut tracker = RepeatedFrames::default();
+        let now = Instant::now();
+        let fingerprint = [12; scene::FINGERPRINT_BYTES];
+        for tick in 0..=10 {
+            tracker.observe(
+                &[17, 41, 111],
+                fingerprint,
+                now + CONTENT_SAMPLE_INTERVAL * tick,
+            );
+            assert!(!tracker.holding);
+        }
+        let frozen = now + CONTENT_SAMPLE_INTERVAL * 11;
+        tracker.observe(&[17, 41, 111], fingerprint, frozen);
+        assert!(tracker.holding);
+
+        tracker.observe(
+            &[17, 42, 111],
+            fingerprint,
+            frozen + CONTENT_SAMPLE_INTERVAL,
+        );
+        assert!(!tracker.holding);
+        tracker.observe(
+            &[17, 42, 111],
+            [13; scene::FINGERPRINT_BYTES],
+            frozen + Duration::from_secs(9),
+        );
+        assert!(!tracker.holding);
+    }
+}

@@ -1,0 +1,140 @@
+{
+  "protocol": "fast-rc-v3-short",
+  "based_on_commit": "525fd096bd5e834a51f9bb3086b37bf079a6406c",
+  "historical_v2_reports_unchanged": true,
+  "scope": "Finite native engineering qualification; independent event quality and external release gates remain separate.",
+  "budget_seconds": 2700,
+  "maximum_continuous_quiet_seconds": 720,
+  "stage_boundaries_seconds": {
+    "preflight": [0, 240],
+    "logical": [240, 540],
+    "faults_and_capacity": [540, 1140],
+    "storage_and_crash": [1140, 1620],
+    "quiet_load": [1620, 2460],
+    "final": [2460, 2700]
+  },
+  "quiet_load": {
+    "minimum_seconds": 720,
+    "warmup_budget_seconds": 120,
+    "wall_window_seconds": 60,
+    "wall_window_step_seconds": 1,
+    "minimum_wall_accepted_fraction": 0.95,
+    "source_window_seconds": 10,
+    "minimum_source_pose_fraction": 0.8,
+    "minimum_source_fire_fraction": 0.75,
+    "api_read_control_p95_ms": 250,
+    "receive_to_accept_p95_ms": 500,
+    "receive_to_accept_p99_ms": 1000,
+    "max_accepted_result_age_ms": 3000,
+    "relative_source_lag_sustained_ms": 1000,
+    "relative_source_lag_max_growth_ms_per_60s": 500,
+    "resource_sample_period_seconds": 5,
+    "max_tick_lateness_seconds": 2,
+    "max_terminal_overrun_seconds": 5,
+    "minimum_resource_samples": 145,
+    "complete_minute_blocks": 12,
+    "resource_samples_per_complete_minute": 12,
+    "minimum_real_access_rotations": 1,
+    "viewer_renewal_at_seconds": [180, 360, 540]
+  },
+  "deadlines_ms": {
+    "cpu_worker_startup": 30000,
+    "cuda_worker_startup": 60000,
+    "live_inference": 2000
+  },
+  "minimum_completed_fault_cycles": {
+    "rtsp_reconnect": 48,
+    "inference_child_restart": 8,
+    "core_restart": 6,
+    "viewer_grant_offer_close": 24
+  },
+  "rtsp_distribution_by_profile_camera_count": {
+    "4": {"minimum_each": 12, "maximum_batch_cameras": 4},
+    "16": {"minimum_each": 3, "maximum_batch_cameras": 8}
+  },
+  "minimum_resource_samples_per_fault_kind": 6,
+  "minimum_fault_injection_spacing_seconds": 0,
+  "faults_must_finish_before_next_same_camera_cycle": true,
+  "capacity_ramp_cameras": [1, 4, 8, 16],
+  "short_resources": {
+    "mode": "finite-observation-only",
+    "core_restart_sample_reference": "all-declared-cameras-ready",
+    "core_restart_sample_age_seconds": 20,
+    "core_restart_sample_age_tolerance_seconds": 0.5,
+    "steady_delta": "median(last complete minute) - median(first complete minute)",
+    "churn_delta": "median(last three comparable samples) - median(first three comparable samples)",
+    "required_profile_budget_field": "budgets.short_growth_bytes",
+    "required_growth_groups": ["steady", "rtsp_reconnect", "inference_child_restart", "core_restart", "viewer_grant_offer_close"],
+    "required_growth_resources_cpu": ["rss_bytes"],
+    "required_growth_resources_cuda": ["rss_bytes", "vram_bytes"],
+    "growth_budget_must_be_frozen_before_run": true,
+    "missing_or_late_comparable_samples": "INCOMPLETE",
+    "peak_limit_or_finite_delta_exceeded": "FAIL",
+    "projected_24h_growth_used_for_pass": false,
+    "persistent_disk_growth": "high-water plus retained incident/blob accounting; do not confuse intended retention with a memory leak",
+    "drain_requirements_unchanged_from_v2": true
+  },
+  "cases": {
+    "preflight": [
+      "artifacts.exact-digests-and-release-features",
+      "models.active-numeric-observation-event-gates",
+      "models.all-role-numeric-report",
+      "models.native-warmup-all-shapes"
+    ],
+    "logical": [
+      "evaluator.censoring-coverage-and-grounding",
+      "clock.source-monotonic-utc-boundaries",
+      "state.seeded-invariants",
+      "storage.pre-aged-retention-at-volume",
+      "quality.required-regressions"
+    ],
+    "faults_and_capacity": [
+      "source.reconnect-completed",
+      "worker.inference-restart-completed",
+      "service.core-restart-completed",
+      "media.viewer-cycle-completed",
+      "capacity.ramp-and-concurrent-admission",
+      "capacity.overload-and-recovery",
+      "pipeline.canary-after-each-fault"
+    ],
+    "storage_and_crash": [
+      "storage.sqlite-quota-and-busy",
+      "storage.pinned-wal-reader",
+      "storage.blob-enospc-and-reconciliation",
+      "storage.incident-outbox-and-blob-cutpoints",
+      "storage.semantic-recovery-cutpoints",
+      "storage.refresh-lost-response-and-restart",
+      "storage.backup-publish-cutpoint",
+      "pipeline.canary-after-storage-faults"
+    ],
+    "quiet_load": [
+      "capacity.complete-isolated-quiet-interval",
+      "capacity.every-camera-cadence-latency-and-source-lag",
+      "capacity.declared-viewer-snapshot-evidence-load",
+      "resources.high-water-and-growth",
+      "pipeline.useful-detections-under-load"
+    ],
+    "final": [
+      "pipeline.final-live-canary",
+      "storage.restore-integrity-and-generation",
+      "resources.churn-drain-and-cleanup"
+    ]
+  },
+  "report_rules": {
+    "protocol_must_equal": "fast-rc-v3-short",
+    "must_retain_all_32_native_cases": true,
+    "candidate_profile_contract_harness_hashes_required": true,
+    "stage_overrun_or_missing_proof": "INCOMPLETE",
+    "measured_requirement_violation": "FAIL",
+    "component_validator_may_issue_native_pass": false,
+    "old_v2_report_may_be_relabelled": false
+  },
+  "not_established_by_this_run": [
+    "24-hour or multi-day memory stability",
+    "Population false-Review or false-Urgent rate",
+    "Independent event recall and per-stratum generalisation",
+    "Physical camera, audio, phone or external NAT results",
+    "Production Firebase or signing-credential results"
+  ],
+  "quality_contract": "qualification/quality-contract.json unchanged; unique verified source exposure and independent scene clusters are required separately"
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "differences": [
+    {
+      "plan_finding": "AUD-03",
+      "fixture": "counterexample::fire_gaps_and_epochs",
+      "legacy_behavior": "A later smoke observation can confirm the first one across a 30-second gap or a new source epoch.",
+      "required_behavior": "Reset confirmation across an evidence gap or source epoch. An isolated low-confidence observation remains under observation."
+    },
+    {
+      "plan_finding": "AUD-04",
+      "fixture": "fire::configured_confidence_and_robust_growth_are_separate",
+      "legacy_behavior": "The immediate-priority check used a hardcoded confidence value of 0.65.",
+      "required_behavior": "Use the configured strong-detection threshold. Urgent attention also requires corroborating observations under the current policy."
+    },
+    {
+      "plan_finding": "AUD-05",
+      "legacy_behavior": "Evidence file writes can be reported successful after a database write failure.",
+      "required_behavior": "Report failed or partial persistence and expose the unavailable evidence state."
+    }
+  ]
+}

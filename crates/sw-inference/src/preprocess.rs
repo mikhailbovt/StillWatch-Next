@@ -1,0 +1,403 @@
+use crate::{InferenceError, InputProfile, TensorSize, pack::SIDE};
+
+const PAD: f32 = 114.0 / 255.0;
+const COEF: i32 = 1 << 11;
+
+#[derive(Clone, Copy)]
+pub struct Image<'a> {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) rgb: &'a [u8],
+}
+
+impl<'a> Image<'a> {
+    pub fn rgb(width: u32, height: u32, rgb: &'a [u8]) -> Result<Self, InferenceError> {
+        if !(1..=3840).contains(&width)
+            || !(1..=2160).contains(&height)
+            || rgb.len() != width as usize * height as usize * 3
+        {
+            return Err(InferenceError::Tensor);
+        }
+        Ok(Self {
+            width: width as usize,
+            height: height as usize,
+            rgb,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Letterbox {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) resized_width: usize,
+    pub(crate) resized_height: usize,
+    pub(crate) left: usize,
+    pub(crate) top: usize,
+    tensor: TensorSize,
+}
+
+impl Letterbox {
+    fn new(width: usize, height: usize, profile: InputProfile, side: usize) -> Self {
+        let [resized_height, resized_width] = sw_domain::letterbox_resize(width, height, side);
+        let tensor = if profile == InputProfile::Square {
+            TensorSize::SQUARE
+        } else {
+            TensorSize::bounded(
+                resized_height.next_multiple_of(32),
+                resized_width.next_multiple_of(32),
+                side,
+            )
+            .expect("stride-rounded letterbox dimensions")
+        };
+        let [tensor_h, tensor_w] = tensor.dimensions();
+        Self {
+            width,
+            height,
+            resized_width,
+            resized_height,
+            left: (tensor_w - resized_width) / 2,
+            top: (tensor_h - resized_height) / 2,
+            tensor,
+        }
+    }
+
+    pub fn tensor_size(self) -> TensorSize {
+        self.tensor
+    }
+
+    pub(crate) fn x(self, value: f32) -> f64 {
+        let gain = (self.resized_width as f64 / self.width as f64) as f32;
+        f64::from(((value - self.left as f32) / gain).clamp(0.0, self.width as f32))
+    }
+
+    pub(crate) fn y(self, value: f32) -> f64 {
+        let gain = (self.resized_height as f64 / self.height as f64) as f32;
+        f64::from(((value - self.top as f32) / gain).clamp(0.0, self.height as f32))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Sample {
+    low: usize,
+    high: usize,
+    weights: [i32; 2],
+}
+
+fn samples(source: usize, target: usize, vertical: bool) -> Vec<Sample> {
+    let scale = source as f64 / target as f64;
+    (0..target)
+        .map(|i| {
+            let center = ((i as f64 + 0.5) * scale - 0.5) as f32;
+            let low = center.floor() as isize;
+            let fraction = if vertical || (0..(source as isize - 1)).contains(&low) {
+                center - low as f32
+            } else {
+                0.0
+            };
+            let coefficient = |value: f32| (value * COEF as f32).round_ties_even() as i32;
+            Sample {
+                low: low.clamp(0, source as isize - 1) as usize,
+                high: (low + 1).clamp(0, source as isize - 1) as usize,
+                weights: [coefficient(1.0 - fraction), coefficient(fraction)],
+            }
+        })
+        .collect()
+}
+
+pub struct Preprocessor {
+    profile: InputProfile,
+    side: usize,
+    input: Vec<f32>,
+    geometry: Option<Letterbox>,
+    maps: Vec<ResizeMap>,
+}
+
+struct ResizeMap {
+    geometry: Letterbox,
+    horizontal: Vec<Sample>,
+    vertical: Vec<Sample>,
+}
+
+const MAX_RESIZE_MAPS: usize = 4;
+
+impl Preprocessor {
+    pub fn new(profile: InputProfile) -> Self {
+        Self::with_side(profile, SIDE)
+    }
+
+    #[cfg(feature = "diagnostics")]
+    pub fn diagnostic_fire_scale() -> Self {
+        Self::with_side(InputProfile::Rectangular, crate::pack::DIAGNOSTIC_FIRE_SIDE)
+    }
+
+    fn with_side(profile: InputProfile, side: usize) -> Self {
+        Self {
+            profile,
+            side,
+            input: Vec::with_capacity(3 * side * side),
+            geometry: None,
+            maps: Vec::new(),
+        }
+    }
+    /// Fills a reusable RGB NCHW tensor and returns the exact integer padding.
+    pub fn prepare(&mut self, image: Image<'_>) -> (&[f32], Letterbox) {
+        let geometry = Letterbox::new(image.width, image.height, self.profile, self.side);
+        if self.geometry != Some(geometry) {
+            self.input.resize(geometry.tensor.input_values(), PAD);
+            self.input.fill(PAD);
+            self.geometry = Some(geometry);
+        }
+        let [tensor_h, tensor_w] = geometry.tensor.dimensions();
+        let plane = tensor_h * tensor_w;
+        if image.width == geometry.resized_width && image.height == geometry.resized_height {
+            let (red, rest) = self.input.split_at_mut(plane);
+            let (green, blue) = rest.split_at_mut(plane);
+            for (row, rgb) in image.rgb.chunks_exact(image.width * 3).enumerate() {
+                let output = (row + geometry.top) * tensor_w + geometry.left;
+                let end = output + image.width;
+                let channels = red[output..end]
+                    .iter_mut()
+                    .zip(&mut green[output..end])
+                    .zip(&mut blue[output..end]);
+                for (((r, g), b), rgb) in channels.zip(rgb.chunks_exact(3)) {
+                    *r = f32::from(rgb[0]) / 255.0;
+                    *g = f32::from(rgb[1]) / 255.0;
+                    *b = f32::from(rgb[2]) / 255.0;
+                }
+            }
+            return (&self.input, geometry);
+        }
+        let index = if let Some(index) = self.maps.iter().position(|map| map.geometry == geometry) {
+            index
+        } else {
+            if self.maps.len() == MAX_RESIZE_MAPS {
+                self.maps.remove(0);
+            }
+            self.maps.push(ResizeMap {
+                geometry,
+                horizontal: samples(image.width, geometry.resized_width, false),
+                vertical: samples(image.height, geometry.resized_height, true),
+            });
+            self.maps.len() - 1
+        };
+        let map = &self.maps[index];
+        let area_2x = image.width == geometry.resized_width * 2
+            && image.height == geometry.resized_height * 2;
+        for (row, vertical) in map.vertical.iter().enumerate() {
+            let upper = vertical.low * image.width * 3;
+            let lower = vertical.high * image.width * 3;
+            let output = (row + geometry.top) * tensor_w + geometry.left;
+            for (column, horizontal) in map.horizontal.iter().enumerate() {
+                let x0 = horizontal.low * 3;
+                let x1 = horizontal.high * 3;
+                let [left, right] = horizontal.weights;
+                let [top, bottom] = vertical.weights;
+                for channel in 0..3 {
+                    let rgb = image.rgb;
+                    let a = i32::from(rgb[upper + x0 + channel]);
+                    let b = i32::from(rgb[upper + x1 + channel]);
+                    let c = i32::from(rgb[lower + x0 + channel]);
+                    let d = i32::from(rgb[lower + x1 + channel]);
+                    let value = if area_2x {
+                        (a + b + c + d + 2) >> 2
+                    } else {
+                        // OpenCV's 8-bit INTER_LINEAR narrows the horizontal sums before blending rows.
+                        let h0 = (a * left + b * right) >> 4;
+                        let h1 = (c * left + d * right) >> 4;
+                        (((top * h0) >> 16) + ((bottom * h1) >> 16) + 2) >> 2
+                    };
+                    self.input[channel * plane + output + column] = value as f32 / 255.0;
+                }
+            }
+        }
+        (&self.input, geometry)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb_channels_are_not_swapped_and_padding_tracks_geometry_changes() {
+        const PLANE: usize = SIDE * SIDE;
+        let mut resize = Preprocessor::new(InputProfile::Square);
+        let image = Image::rgb(2, 1, &[255, 0, 1, 255, 0, 1]).unwrap();
+        let (tensor, geometry) = resize.prepare(image);
+        assert_eq!(geometry.top, 160);
+        assert_eq!(tensor[0], PAD);
+        assert_eq!(tensor[160 * SIDE], 1.0);
+        assert_eq!(tensor[PLANE + 160 * SIDE], 0.0);
+        assert_eq!(tensor[2 * PLANE + 160 * SIDE], 1.0 / 255.0);
+        let (tensor, geometry) = resize.prepare(Image::rgb(1, 2, &[0; 6]).unwrap());
+        assert_eq!(geometry.left, 160);
+        assert_eq!(tensor[160 * SIDE], PAD);
+    }
+
+    #[test]
+    fn rectangular_input_uses_only_the_stride_padding() {
+        let mut resize = Preprocessor::new(InputProfile::Rectangular);
+        let image = Image::rgb(5, 3, &[0; 45]).unwrap();
+        let (tensor, geometry) = resize.prepare(image);
+        assert_eq!(geometry.tensor_size().dimensions(), [384, 640]);
+        assert_eq!(tensor.len(), 3 * 384 * 640);
+        assert_eq!(geometry.tensor_size().anchors(), 5040);
+    }
+
+    #[test]
+    fn fire_proposal_order_matches_the_candidate_adapter_cases() {
+        use sw_domain::{Box2d, ObservationLabel::Fire, ObservationLabel::Smoke};
+
+        // These are the same source coordinates and scores used by
+        // tools/benchmark/test_compare_fire_model.py. Rust stores smoke first.
+        let smoke = [50.0, 160.0, 30.0, 30.0];
+        let flame = [240.0, 200.0, 20.0, 20.0];
+        let padding = [50.0, 20.0, 30.0, 20.0];
+        let flame_in_letterbox = [240.0, 160.0, 20.0, 20.0];
+        let cases = [
+            (
+                320,
+                [
+                    vec![(smoke, 0.70, 0.0)],
+                    vec![(smoke, 0.19, 0.0); 12],
+                    vec![(flame, 0.0, 0.15)],
+                ]
+                .concat(),
+                vec![Fire],
+            ),
+            (
+                320,
+                [vec![(smoke, 0.19, 0.0); 12], vec![(flame, 0.0, 0.15)]].concat(),
+                vec![Smoke, Fire],
+            ),
+            (
+                160,
+                [
+                    vec![(padding, 0.19, 0.0); 12],
+                    vec![(flame_in_letterbox, 0.0, 0.15)],
+                ]
+                .concat(),
+                vec![Fire],
+            ),
+            (
+                320,
+                vec![(smoke, 0.19, 0.0), (smoke, 0.0, 0.15)],
+                vec![Smoke, Fire],
+            ),
+        ];
+        let tensor = TensorSize::new(320, 320).unwrap();
+        let anchors = tensor.anchors();
+        for (height, rows, expected) in cases {
+            let pixels = vec![0; 320 * height * 3];
+            let image = Image::rgb(320, height as u32, &pixels).unwrap();
+            let geometry = Letterbox {
+                width: 320,
+                height,
+                resized_width: 320,
+                resized_height: height,
+                left: 0,
+                top: (320 - height) / 2,
+                tensor,
+            };
+            let mut values = vec![0.0; 6 * anchors];
+            for (index, ([x, y, w, h], smoke, flame)) in rows.into_iter().enumerate() {
+                for (channel, value) in [x, y, w, h, smoke, flame].into_iter().enumerate() {
+                    values[channel * anchors + index] = value;
+                }
+            }
+            let (_, proposals) =
+                crate::decode_fire_with_proposals(&values, image, geometry, 1.0).unwrap();
+            assert_eq!(
+                proposals.iter().map(|item| item.label).collect::<Vec<_>>(),
+                expected
+            );
+            if height == 160 {
+                assert_eq!(
+                    proposals[0].region,
+                    Box2d {
+                        x1: 230.0,
+                        y1: 70.0,
+                        x2: 250.0,
+                        y2: 90.0
+                    }
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn diagnostic_scale_maps_padding_and_edges_without_widening_live_shapes() {
+        let mut prep = Preprocessor::diagnostic_fire_scale();
+        for (width, height, shape, pad) in [
+            (640, 360, [544, 960], [0, 2]),
+            (360, 640, [960, 544], [2, 0]),
+        ] {
+            let pixels = vec![255; width as usize * height as usize * 3];
+            let (tensor, geo) = prep.prepare(Image::rgb(width, height, &pixels).unwrap());
+            assert_eq!(geo.tensor_size().dimensions(), shape);
+            assert_eq!([geo.left, geo.top], pad);
+            assert_eq!(tensor[0], PAD);
+            assert!(!InputProfile::Rectangular.accepts(geo.tensor_size()));
+            assert_eq!(geo.x(geo.left as f32), 0.0);
+            assert_eq!(geo.y(geo.top as f32), 0.0);
+            assert_eq!(geo.x(shape[1] as f32), f64::from(width));
+            assert_eq!(geo.y(shape[0] as f32), f64::from(height));
+        }
+    }
+
+    #[test]
+    fn direct_nchw_and_mixed_geometry_preserve_bit_exact_pixels_and_padding() {
+        let mut reuse = Preprocessor::new(InputProfile::Rectangular);
+        let mut random = 123_u32;
+        for (width, height) in [
+            (640, 360),
+            (360, 640),
+            (640, 640),
+            (1280, 720),
+            (511, 383),
+            (300, 193),
+            (392, 256),
+            (900, 650),
+            (840, 510),
+            (511, 383),
+            (640, 360),
+        ] {
+            let mut pixels = vec![0; width * height * 3];
+            for value in &mut pixels {
+                random = random.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *value = (random >> 24) as u8;
+            }
+            let image = Image::rgb(width as u32, height as u32, &pixels).unwrap();
+            let mut fresh = Preprocessor::new(InputProfile::Rectangular);
+            let (current, geometry) = reuse.prepare(image);
+            let (reference, expected) = fresh.prepare(image);
+            assert_eq!(geometry, expected);
+            assert!(
+                current
+                    .iter()
+                    .zip(reference)
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+            if (width, height) == (geometry.resized_width, geometry.resized_height) {
+                let [rows, cols] = geometry.tensor_size().dimensions();
+                for (channel, plane) in current.chunks_exact(rows * cols).enumerate() {
+                    for (y, row) in plane.chunks_exact(cols).enumerate() {
+                        for (x, &value) in row.iter().enumerate() {
+                            let expected =
+                                match (x.checked_sub(geometry.left), y.checked_sub(geometry.top)) {
+                                    (Some(x), Some(y)) if x < width && y < height => {
+                                        f32::from(pixels[(y * width + x) * 3 + channel]) / 255.0
+                                    }
+                                    _ => PAD,
+                                };
+                            assert_eq!(value.to_bits(), expected.to_bits());
+                        }
+                    }
+                }
+            }
+            assert!(reuse.maps.len() <= MAX_RESIZE_MAPS);
+        }
+    }
+}

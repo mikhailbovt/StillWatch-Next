@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bootstrap",
+  "type": "object",
+  "properties": {
+    "analysis_capacity_probe": {
+      "type": "boolean"
+    },
+    "camera_main_stream": {
+      "type": "boolean"
+    },
+    "camera_priority": {
+      "type": "boolean"
+    },
+    "camera_probe_capacity": {
+      "type": "boolean"
+    },
+    "camera_sampling": {
+      "type": "boolean"
+    },
+    "instance_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ios_push": {
+      "type": "boolean"
+    },
+    "refresh_replay": {
+      "type": "boolean"
+    },
+    "version": {
+      "$ref": "#/$defs/ApiVersion"
+    }
+  },
+  "required": [
+    "instance_id",
+    "version"
+  ],
+  "$defs": {
+    "ApiVersion": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ]
+    }
+  }
+}

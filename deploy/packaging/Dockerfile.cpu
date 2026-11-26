@@ -1,0 +1,11 @@
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+ARG DEB=stillwatch-core_1.0.1_amd64.deb
+COPY ${DEB} /tmp/stillwatch-core.deb
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/stillwatch-core.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/stillwatch-core.deb
+USER stillwatch
+WORKDIR /var/lib/stillwatch
+VOLUME ["/var/lib/stillwatch"]
+ENTRYPOINT ["/usr/bin/stillwatch-core"]

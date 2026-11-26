@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CaptureRequest",
+  "type": "object",
+  "properties": {
+    "masks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MaskRect"
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/CaptureSource"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "masks"
+  ],
+  "$defs": {
+    "CameraCredentials": {
+      "type": "object",
+      "properties": {
+        "password": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "username",
+        "password"
+      ]
+    },
+    "CaptureSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "replay"
+            },
+            "pace": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "file",
+            "pace"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "credentials": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CameraCredentials"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "rtsp"
+            },
+            "peer": {
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            },
+            "stream_path": {
+              "type": "string"
+            },
+            "transport": {
+              "$ref": "#/$defs/RtspTransport"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "peer",
+            "stream_path",
+            "secure",
+            "transport"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "usb"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "device_id"
+          ]
+        }
+      ]
+    },
+    "MaskRect": {
+      "type": "object",
+      "properties": {
+        "bottom": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "left": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "right": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "top": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ]
+    },
+    "RtspTransport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    }
+  }
+}

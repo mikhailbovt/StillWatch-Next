@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HealthEventPage",
+  "type": "object",
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/HealthEvent"
+      }
+    },
+    "next": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "events"
+  ],
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "HealthEvent": {
+      "type": "object",
+      "properties": {
+        "camera_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "code": {
+          "description": "Stable event code. Clients display unfamiliar codes as generic technical events.",
+          "type": "string"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opened_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "sequence": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "sequence",
+        "code",
+        "opened_at"
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

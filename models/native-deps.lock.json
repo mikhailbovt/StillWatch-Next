@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "vc_runtime": {
+    "version": "14.51.36231.0",
+    "source": "https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files",
+    "windows-x64": {
+      "msvcp140.dll": "639342ea9a67c0009122238ce070a8257e2e04d367d627509fec29f8442afb42",
+      "msvcp140_1.dll": "456aebccb449fcba35f1109c259ba0aa10923e660f4de812a490d35f37f54fc9",
+      "msvcp140_2.dll": "7a403abf753d0bdf09776cf4bcb13b5a6ebe3a47670de124a3c621aa4b952f82",
+      "vcruntime140.dll": "19c293ac482fdb882cd29d2b0e6d807419efdcada04068f03e5723670895e17d",
+      "vcruntime140_1.dll": "a253a12e4a8e9e23ebfe0ced829f7751e4f42c60066986bf20515ced8dcc68cd"
+    }
+  },
+  "ort": {
+    "crate": "2.0.0-rc.15",
+    "native_version": "1.31.0",
+    "license": "MIT",
+    "cpu_nuget": {
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.31.0/microsoft.ml.onnxruntime.1.31.0.nupkg",
+      "archive_sha256": "7e35fdb4f5adb62f01e60798e2e5ed05108f5fbbe1cca03fbcc37903cf7c5e3b",
+      "members": {
+        "windows-x64": "runtimes/win-x64/native/onnxruntime.dll",
+        "linux-x64": "runtimes/linux-x64/native/libonnxruntime.so"
+      }
+    },
+    "windows-x64": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-win-x64-1.31.0.zip",
+      "archive_sha256": "3958d8a44984160692c1b4ffd0de3cb48f8c39f9d34bb31e433db06e30b82195",
+      "library": "onnxruntime-win-x64-1.31.0/lib/onnxruntime.dll",
+      "library_sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c"
+    },
+    "linux-x64": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz",
+      "archive_sha256": "cc5c72baf5ae5c8238a6841f0897227be2d02826b9cf98eaf02fdefaeeb03a57",
+      "library": "onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0",
+      "library_sha256": "469849977cb60744ea160927e1a3a0643fd4c55c0aff743251c6d293402e334e"
+    },
+    "linux-x64-cuda13": {
+      "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-gpu_cuda13-1.31.0.tgz",
+      "archive_sha256": "2867dec99c6a4926e8142361b9d4d1518c16c85b854b4d41d28d65d3b2c81135",
+      "library": "onnxruntime-linux-x64-gpu_cuda13-1.31.0/lib/libonnxruntime.so.1.31.0",
+      "library_sha256": "7a7a2cfec3da75774dd8116e6a31fe466b46f5f6901e3fa87350d9391a840bfa",
+      "provider_sha256": "5ea2ec896db647cd9bb1ab08e943cda07d497975b6d6b967a2bd88b8a1303f00",
+      "provider_shared_sha256": "c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772",
+      "runtime": "NVIDIA CUDA 13.5.37 and cuDNN 9.28.1.4, qualification only"
+    }
+  },
+  "mediamtx": {
+    "native_version": "1.21.3",
+    "license": "MIT",
+    "windows-x64": {
+      "url": "https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_windows_amd64.zip",
+      "archive_sha256": "b2f5246b07cb72961df03b8d5e8cad43dc657bcf3f49a87bb031bdf22721af74",
+      "executable_sha256": "13a0bfaa852d83ce976c94342a1af130941bd79fac2c1e95a2175879c92304c0"
+    },
+    "linux-x64": {
+      "url": "https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_linux_amd64.tar.gz",
+      "archive_sha256": "0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635",
+      "executable_sha256": "bfa372a169751bbf6da2ebddcbcd2f7d3ab3dca3cc553022162eda36fe03e73d"
+    }
+  },
+  "ffmpeg_capture": {
+    "native_version": "8.1.3",
+    "source_sha256": "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
+    "patch_sha256": "b4026170a90a515c063673a340d753e5e8994f710d75503262d413f7036a3c4a",
+    "windows-x64": {
+      "avcodec-62.dll": "d4c4f5f499477352855978d5c8994658a13e912b441158899531bf18a7b54388",
+      "avdevice-62.dll": "ec9ac011ba2b90c027d13787441ff222f0a78e055f12b345e7c6ad6169974983",
+      "avfilter-11.dll": "38bbd890914426bed0ae268b69c15686960e23a2298fa2527e8232af34b1932a",
+      "avformat-62.dll": "d3e63fc26b3ad3c247426c396b250f59478642df60d2b62b044ab0ac214c3e73",
+      "avutil-60.dll": "9bfd056793473288e39970ef7df30af8dad1a49c7d11c4482f5e52c3b495efa9",
+      "swresample-6.dll": "d1a85d5b0446e418d8e489f4f5de32eb4ef217bd4aeec7bc650ae557cd9c6d27",
+      "swscale-9.dll": "71706e6fc6a6b6e9e2283bbae55152a3ae508db1d62c6ff54892683844d7da81"
+    },
+    "linux-x64": {
+      "libavcodec.so.62": "522e495037bc4a65ea41d949bb9875c720a7cc4ee136f86ca5b5ad43b797daa6",
+      "libavdevice.so.62": "372d216a01e6a1a92f7c72af2ca3297ad65a14c489baa7b09f37ebfc1e138f25",
+      "libavfilter.so.11": "c4f0cf3c1d13ea6f459400909515a05fcf9f1dd9e24f2da64511e527fd2aa1cb",
+      "libavformat.so.62": "4eaf6c7722e995c3bf89645b4b7b1e5f88444c1f359f05600dfe9327346c4d5e",
+      "libavutil.so.60": "be5f4e10e0b7c3d1e7829deec90a7bd2976c1a66d935a0ecd0c54f1a8330a9e9",
+      "libswresample.so.6": "ba6112d4c5d237e26b90ff645d130d8d3412abd8f09b57d6b2c0b07032d75edd",
+      "libswscale.so.9": "20aa7b64a4a7c76a760eff1cde7dd4441e8c36dce87fe5afdec83f2cc2767e78"
+    }
+  },
+  "ffmpeg_encoder": {
+    "native_version": "8.1.3",
+    "openh264_version": "2.7.0",
+    "openh264_source_sha256": "5178775c8b440073e70920e97d195efff721c0e56d0a78cc82c919e95d54924d",
+    "windows-x64": { "executable_sha256": "693b497b2eb769f8c4cd95e6f3007595a7de13f5dedf09f566c5c63bc89507b0" },
+    "linux-x64": { "executable_sha256": "78a766855595cafc68e3ec1f5dfcc4f0da373a6c8a4ed5379e17ae6463fa5707" }
+  },
+  "ffmpeg": {
+    "crate": "8.1.0",
+    "windows-x64": {
+      "native_version": "8.1.2",
+      "variant": "Gyan full shared development build",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build-shared.zip",
+      "archive_sha256": "274923c68904a9b76c73b908f57923dafba81155856cd742138515ded570d066",
+      "directory": "ffmpeg-8.1.2-full_build-shared",
+      "executable_sha256": "9be30133edcc5786f16e632d57e2dab5b259fea9a5243ba99758ca3adc110bd9",
+      "dll_sha256": {
+        "avcodec-62.dll": "34f5b1baac01c4be3edf464309c79db05ffbd4a9c905c94b4a4651cd15370296",
+        "avdevice-62.dll": "d213d6cad9f3a526f7664ebb3f93d6882669540db7164daecd03f52e0f5288cc",
+        "avfilter-11.dll": "e318cac83d648869180d0b57c45f21aad1e4db34a467000c157da2938ff7f63f",
+        "avformat-62.dll": "c04e6ed2f9f36d42325d4f4df5babb5d6ce7c55dbffeb7ef1007e25e97bcb716",
+        "avutil-60.dll": "6f172b5d10224fcc3f729c8baa6fd36a97bb58042bb3b1417078d77d2da59b87",
+        "swresample-6.dll": "72e2721672c11fd37d983b05cc2370f612784e4e3218362a0cb4315d08c917fb",
+        "swscale-9.dll": "3d07972cada6ba38c492e92b0f6c025a6835607fe00cdf83afc604c2fbdfe550"
+      }
+    },
+    "linux-x64": {
+      "native_version": "6.1.1-3ubuntu5",
+      "distribution": "Ubuntu 24.04",
+      "pkg_config": {
+        "libavcodec": "60.31.102",
+        "libavdevice": "60.3.100",
+        "libavformat": "60.16.100",
+        "libavutil": "58.29.100",
+        "libswscale": "7.5.100"
+      }
+    }
+  }
+}

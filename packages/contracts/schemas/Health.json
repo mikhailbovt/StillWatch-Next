@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Health",
+  "type": "object",
+  "properties": {
+    "api": {
+      "$ref": "#/$defs/ApiVersion"
+    },
+    "state": {
+      "$ref": "#/$defs/HealthState"
+    }
+  },
+  "required": [
+    "state",
+    "api"
+  ],
+  "$defs": {
+    "ApiVersion": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ]
+    },
+    "HealthState": {
+      "type": "string",
+      "enum": [
+        "live",
+        "ready",
+        "degraded"
+      ]
+    }
+  }
+}

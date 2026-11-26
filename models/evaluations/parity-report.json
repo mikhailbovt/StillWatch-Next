@@ -1,0 +1,259 @@
+{
+  "baseline": "b0d20a20d38a5bbc22178d150999e57cc9e7bfb3",
+  "cases": {
+    "black": {
+      "image": null,
+      "tensor_sha256": "f824c1a8a1128713f17dd8d1190d70e6012b509606d986e7a6c81e40b628df2b"
+    },
+    "gray": {
+      "image": null,
+      "tensor_sha256": "d4e05bfc32af71b56bac53465531642c4a5824f39e042c89f34ffbc4884a7966"
+    },
+    "reference_00": {
+      "image": {
+        "encoded_sha256": "beab48da0253910018d2a5f1658765aa2dfe203a485595e105cef38de015b32a",
+        "rgb_shape": [
+          1080,
+          1920,
+          3
+        ]
+      },
+      "tensor_sha256": "835f67e7d36aa68bd744842f58549ac35f0c94ebf0c312fba6b7ea6fa99fe90e"
+    },
+    "reference_01": {
+      "image": {
+        "encoded_sha256": "78520e3e9a25322a21d0ce2c42958f4f04716e3cd37484be49e8dfe23bc2c5da",
+        "rgb_shape": [
+          1080,
+          1920,
+          3
+        ]
+      },
+      "tensor_sha256": "ec9bfc4ebe26d974d51277f0ddad03d75fec1c0f1f9f2e14067e2ea7a490746b"
+    },
+    "reference_02": {
+      "image": {
+        "encoded_sha256": "d34f6d2dd339bf10d970b7fda099408b6cb19ea3f1a3422f24eb934a2d174973",
+        "rgb_shape": [
+          1080,
+          1920,
+          3
+        ]
+      },
+      "tensor_sha256": "deb7af906942a1f1f7acbec5621603426e30ea0632de8f8670de67e22611d5d7"
+    },
+    "reference_03": {
+      "image": {
+        "encoded_sha256": "f14ae5dde13a595559192b2856ad789829d764770b4e1c0dba95150609cbab79",
+        "rgb_shape": [
+          1080,
+          1920,
+          3
+        ]
+      },
+      "tensor_sha256": "28cdb2db5d439a6a4f97fc4e80770facb36175fb85c915a969ac4a82a84ea829"
+    },
+    "seeded_noise": {
+      "image": null,
+      "tensor_sha256": "b8f07074fae731878874ff71560c2ef8efed5c90e4c3217403972d2acaf6d895"
+    }
+  },
+  "models": {
+    "fire": {
+      "black": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 2.0489096641540527e-07,
+        "min_reference_threshold_distance": 0.17291919887065887,
+        "raw_max_abs": 0.001800537109375,
+        "raw_mean_abs": 2.1232866695506276e-05,
+        "reference_sha256": "4e511aa868716d5d75c3d08eb7e126119f4c8ad5f107e0108b40568d4b3defc3"
+      },
+      "gray": {
+        "above_threshold_onnx": 5,
+        "above_threshold_reference": 5,
+        "max_abs_ranked_confidence": 2.5331974029541016e-06,
+        "min_reference_threshold_distance": 0.007111787796020508,
+        "raw_max_abs": 0.002410888671875,
+        "raw_mean_abs": 3.232258786810615e-05,
+        "reference_sha256": "44c8e1b26390d373873c1f30e6eed7f949f38cb6fafa8dbd8427350d26c414ac"
+      },
+      "reference_00": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 1.0097210179083049e-07,
+        "min_reference_threshold_distance": 0.1825299859046936,
+        "raw_max_abs": 0.0010986328125,
+        "raw_mean_abs": 1.9879074828018572e-05,
+        "reference_sha256": "7360bca0d0ac44bbe1431cdba00f2e7c8b6ac1f19bba26186c186585e4083d5c"
+      },
+      "reference_01": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 9.017821867018938e-08,
+        "min_reference_threshold_distance": 0.19670671224594116,
+        "raw_max_abs": 0.0009765625,
+        "raw_mean_abs": 1.948108190911268e-05,
+        "reference_sha256": "dadf7cbcae85d3a121054d63a104a153b2a4c90b6eee2a3ab4ddb8952d6d0ba3"
+      },
+      "reference_02": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 9.751238394528627e-08,
+        "min_reference_threshold_distance": 0.19808804988861084,
+        "raw_max_abs": 0.0008544921875,
+        "raw_mean_abs": 1.9111534563242223e-05,
+        "reference_sha256": "c4e825b455694fa0f5d6db9414f2b68a11660458f48ad8d00f5ce28afbae3d6e"
+      },
+      "reference_03": {
+        "above_threshold_onnx": 18,
+        "above_threshold_reference": 18,
+        "max_abs_ranked_confidence": 1.6242265701293945e-06,
+        "min_reference_threshold_distance": 0.00958356261253357,
+        "raw_max_abs": 0.001190185546875,
+        "raw_mean_abs": 1.9663869408290997e-05,
+        "reference_sha256": "4a952ff75e214c2fd4a39ddbe0f60f03a67fe9bfd86e14dfa2a8f9c12c4266c1"
+      },
+      "seeded_noise": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 8.434471965301782e-08,
+        "min_reference_threshold_distance": 0.19994306564331055,
+        "raw_max_abs": 0.000640869140625,
+        "raw_mean_abs": 1.2295930236114389e-05,
+        "reference_sha256": "ae183fb6383980ecddff2f8da136ec655ee3fcf5c4fe9aa8e7dc78c94f49ba45"
+      }
+    },
+    "pose": {
+      "black": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 1.816079020500183e-07,
+        "min_reference_threshold_distance": 0.14527936279773712,
+        "raw_max_abs": 0.0085906982421875,
+        "raw_mean_abs": 0.00011448741731786445,
+        "reference_sha256": "559ad94fe49c6bfc9eb9059ee4316655f7ee23fd5ef874954722bfa2748b19f9"
+      },
+      "gray": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 3.264285624027252e-07,
+        "min_reference_threshold_distance": 0.14788466691970825,
+        "raw_max_abs": 0.0073394775390625,
+        "raw_mean_abs": 0.0001019085559504054,
+        "reference_sha256": "78e0f449fda2b94efe2caf4945cdcd73e3ae69923413674937cee44a69251d2f"
+      },
+      "reference_00": {
+        "above_threshold_onnx": 9,
+        "above_threshold_reference": 9,
+        "max_abs_ranked_confidence": 4.76837158203125e-06,
+        "min_reference_threshold_distance": 0.13588283956050873,
+        "raw_max_abs": 0.0098114013671875,
+        "raw_mean_abs": 6.827028785895066e-05,
+        "reference_sha256": "45a53af7840d6249686aa57031701ba67473d925629db8dcbf28610eaddbb5f4"
+      },
+      "reference_01": {
+        "above_threshold_onnx": 10,
+        "above_threshold_reference": 10,
+        "max_abs_ranked_confidence": 5.602836608886719e-06,
+        "min_reference_threshold_distance": 0.01986926794052124,
+        "raw_max_abs": 0.01050567626953125,
+        "raw_mean_abs": 7.278851114978772e-05,
+        "reference_sha256": "8a8bd400090d4fe4d32cd1288abc187b3fa9e95bee6d481d6914db0daa893b6d"
+      },
+      "reference_02": {
+        "above_threshold_onnx": 14,
+        "above_threshold_reference": 14,
+        "max_abs_ranked_confidence": 1.2218952178955078e-06,
+        "min_reference_threshold_distance": 0.019584789872169495,
+        "raw_max_abs": 0.012420654296875,
+        "raw_mean_abs": 7.349477848047747e-05,
+        "reference_sha256": "7c1aa4dec90c0de71a18b0ca52e7461edba003d376c8e9ec5b52c34b207a9f08"
+      },
+      "reference_03": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 2.5704503059387207e-07,
+        "min_reference_threshold_distance": 0.1082991510629654,
+        "raw_max_abs": 0.0072021484375,
+        "raw_mean_abs": 7.29972170499285e-05,
+        "reference_sha256": "7271fdb1d2fb0d055f4715e1757e0ae14a61b98d7ca5366680a37027e89c6db5"
+      },
+      "seeded_noise": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 1.0081566870212555e-07,
+        "min_reference_threshold_distance": 0.14501778781414032,
+        "raw_max_abs": 0.01143646240234375,
+        "raw_mean_abs": 5.5707053405660855e-05,
+        "reference_sha256": "cc00fd13e35f4d2fc2f70c5d3b4751f5abec27b8aaf25871b61e5fb1025a8e66"
+      }
+    },
+    "pose_balanced": {
+      "black": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 1.018488546833396e-07,
+        "min_reference_threshold_distance": 0.148670956492424,
+        "raw_max_abs": 0.002197265625,
+        "raw_mean_abs": 1.51408958177998e-05,
+        "reference_sha256": "fd660033cd8ec937be7ada6446fe3a64af2654fc2dba1fccae20c4ded6663707"
+      },
+      "gray": {
+        "above_threshold_onnx": 14,
+        "above_threshold_reference": 14,
+        "max_abs_ranked_confidence": 1.2367963790893555e-05,
+        "min_reference_threshold_distance": 0.018729746341705322,
+        "raw_max_abs": 0.002777099609375,
+        "raw_mean_abs": 2.056664352560676e-05,
+        "reference_sha256": "1732dcdcaf8f8ec27845512119b031d5758e8299d71e57e44db43f30290322a6"
+      },
+      "reference_00": {
+        "above_threshold_onnx": 8,
+        "above_threshold_reference": 8,
+        "max_abs_ranked_confidence": 8.270144462585449e-07,
+        "min_reference_threshold_distance": 0.03087753802537918,
+        "raw_max_abs": 0.0037841796875,
+        "raw_mean_abs": 2.754880640187232e-05,
+        "reference_sha256": "b12a07a2556b0a55eed2773e4008d6ec988fdecb22dfa3cd159320682f18fdb1"
+      },
+      "reference_01": {
+        "above_threshold_onnx": 9,
+        "above_threshold_reference": 9,
+        "max_abs_ranked_confidence": 2.384185791015625e-06,
+        "min_reference_threshold_distance": 0.10309901833534241,
+        "raw_max_abs": 0.0028076171875,
+        "raw_mean_abs": 2.5201153759210806e-05,
+        "reference_sha256": "420a1d46709dff881c285bbe8a56ddfad37b1166e5f3e3ae4eeb7bb35e1707e6"
+      },
+      "reference_02": {
+        "above_threshold_onnx": 8,
+        "above_threshold_reference": 8,
+        "max_abs_ranked_confidence": 1.3783574104309082e-06,
+        "min_reference_threshold_distance": 0.04601401835680008,
+        "raw_max_abs": 0.0035400390625,
+        "raw_mean_abs": 2.7074961090724975e-05,
+        "reference_sha256": "1103584b9d0f00a45e77ab4d40a4abcd108e0de009be37baaa6f8ccefc654925"
+      },
+      "reference_03": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 8.486676961183548e-08,
+        "min_reference_threshold_distance": 0.14831729233264923,
+        "raw_max_abs": 0.004302978515625,
+        "raw_mean_abs": 2.3836404151782465e-05,
+        "reference_sha256": "ea38ce66d5592981111b7d8f0ae31bebebf394280a6d986c789e883859bda3ea"
+      },
+      "seeded_noise": {
+        "above_threshold_onnx": 0,
+        "above_threshold_reference": 0,
+        "max_abs_ranked_confidence": 1.0160147212445736e-07,
+        "min_reference_threshold_distance": 0.14571312069892883,
+        "raw_max_abs": 0.00125885009765625,
+        "raw_mean_abs": 1.8393190878118597e-05,
+        "reference_sha256": "1ca380e8018ce78d1cf9e02eb67fb7ffd878c130926ae4cb6f91e9b60c8e0fe7"
+      }
+    }
+  },
+  "profile": "cpu_fp32_square_640"
+}
