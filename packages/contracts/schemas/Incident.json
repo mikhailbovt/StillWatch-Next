@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Incident",
+  "type": "object",
+  "properties": {
+    "acknowledgement": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Acknowledgement"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "analysis_origin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisOrigin"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "assessment": {
+      "$ref": "#/$defs/Assessment"
+    },
+    "attention": {
+      "$ref": "#/$defs/Attention"
+    },
+    "attention_cycle": {
+      "$ref": "#/$defs/Counter"
+    },
+    "camera_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "category": {
+      "$ref": "#/$defs/Category"
+    },
+    "created_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "detection_reason": {
+      "type": "string"
+    },
+    "evidence_packet_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "evidence_state": {
+      "$ref": "#/$defs/EvidenceState"
+    },
+    "evidence_version": {
+      "$ref": "#/$defs/Counter"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/Lifecycle"
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "needs_reassessment": {
+      "type": "boolean"
+    },
+    "opening_delayed": {
+      "type": "boolean"
+    },
+    "opening_observed_host_utc": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "possible_continuation_of": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UncertainIncidentLink"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resolution": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Resolution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "scene_revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "source_epoch": {
+      "$ref": "#/$defs/Counter"
+    },
+    "updated_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    }
+  },
+  "required": [
+    "id",
+    "camera_id",
+    "source_epoch",
+    "scene_revision",
+    "revision",
+    "evidence_version",
+    "evidence_state",
+    "category",
+    "detection_reason",
+    "assessment",
+    "attention",
+    "attention_cycle",
+    "lifecycle",
+    "live",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "Acknowledgement": {
+      "type": "object",
+      "properties": {
+        "acknowledged_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "actor_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "actor_id",
+        "acknowledged_at"
+      ]
+    },
+    "AnalysisOrigin": {
+      "type": "object",
+      "properties": {
+        "model_manifest_sha256": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_manifest_sha256",
+        "policy_version"
+      ]
+    },
+    "Assessment": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "no_visible_concern",
+        "concern",
+        "immediate_visible_concern"
+      ]
+    },
+    "Attention": {
+      "type": "string",
+      "enum": [
+        "info",
+        "review",
+        "urgent"
+      ]
+    },
+    "Category": {
+      "type": "string",
+      "enum": [
+        "medical",
+        "fire",
+        "overview"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "EvidenceState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "persisted",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "Lifecycle": {
+      "type": "string",
+      "enum": [
+        "open",
+        "resolved"
+      ]
+    },
+    "Resolution": {
+      "type": "object",
+      "properties": {
+        "actor_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolved_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        }
+      },
+      "required": [
+        "resolved_at",
+        "reason"
+      ]
+    },
+    "UncertainIncidentLink": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_epoch": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "incident_id",
+        "source_epoch"
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

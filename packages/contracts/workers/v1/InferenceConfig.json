@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InferenceConfig",
+  "type": "object",
+  "properties": {
+    "cuda": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CudaConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "library": {
+      "type": "string"
+    },
+    "library_sha256": {
+      "type": "string"
+    },
+    "live_profile": {
+      "description": "A pinned live profile restricts model roles and shapes before READY.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LiveModelProfile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "manifest_sha256": {
+      "type": "string"
+    },
+    "models": {
+      "type": "string"
+    },
+    "threads": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "library",
+    "library_sha256",
+    "models",
+    "manifest_sha256",
+    "threads"
+  ],
+  "$defs": {
+    "CudaConfig": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "graph_shape": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "provider_sha256": {
+          "type": "string"
+        },
+        "shared_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "provider_sha256",
+        "shared_sha256"
+      ]
+    },
+    "LiveModelProfile": {
+      "type": "object",
+      "properties": {
+        "fire_sha256": {
+          "type": "string"
+        },
+        "pose_balanced_sha256": {
+          "type": "string"
+        },
+        "warm_shapes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_balanced_sha256",
+        "fire_sha256",
+        "warm_shapes"
+      ]
+    }
+  }
+}

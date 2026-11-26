@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "evaluation": "KMU indoor smoke and source-labeled confusers, locked local detector transfer",
+  "dataset": {
+    "source": "https://cvpr.kmu.ac.kr/Dataset/Dataset.htm",
+    "citation": "ByoungChul Ko, Jun-Yong Kwak, Jae-Yeal Nam, Wildfire Smoke Detection using Temporal-Spatial Features and Random Forest Classifiers, Optical Engineering 51(1), 2012.",
+    "rights": "The publisher offers downloads for research and requests citation. No redistribution license for the recordings was identified. Media is used only for local evaluation.",
+    "archive_sha256": {
+      "Indoor_outdoor(short_distance)smoke.zip": "f8c4c57629514306275ecef335ef72e79804989c9bd194ba935ea86bd595ddda",
+      "Smoke_flame_like_moving_object.zip": "c9c7b951faa2c40a7a7b1edb171df6d58721250191ed948f56bcbd9e52ccac18"
+    }
+  },
+  "annotation": "One reviewer inspected sampled frames before inference. The two smoke variants share a room. The negative group uses the source archive's label, with no independent per-frame annotations. Positive observations can reflect a recorded plume under controlled conditions. No thresholds are tuned on this corpus.",
+  "preprocess": "One-thread libx264 H.264, CRF 15, YUV420p, video only, original geometry and timestamps.",
+  "thresholds": {
+    "before_onset_tolerance_s": 2.0,
+    "max_delay_s": 8.0
+  },
+  "clips": [
+    {
+      "file": "indoor_daytime_smoke.mp4",
+      "archive": "smoke.zip",
+      "archive_member": "indoor_daytime_smoke.avi",
+      "source_sha256": "009318691241be0dcc6fb9c312dc110f34f534e066bca44ee4b7e9d05ab7f2bf",
+      "sha256": "271b836013b722dcfd6ebed9abd1ebc56fa3ebefdf0d4a0747ceb72020a78397",
+      "duration_s": 26.166667,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "group": "fire_visible_smoke_at_start",
+      "scene_id": "kmu-indoor-smoke-same-room",
+      "onset_note": "Persistent pale plume already visible above the source in the first sampled frame."
+    },
+    {
+      "file": "indoor_night_smoke.mp4",
+      "archive": "smoke.zip",
+      "archive_member": "indoor_night_smoke.avi",
+      "source_sha256": "ab9ddc9ff5dc38ceaec4f1b606a3c5d3e068638de906d77293b553aff5310795",
+      "sha256": "3de0c2e8238b01fd82bc1df6676ce97bbcc42996cbe5638bb61d2599714c0e91",
+      "duration_s": 39.333333,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": 34.0,
+      "group": "fire_low_light_smoke_onset",
+      "scene_id": "kmu-indoor-smoke-same-room",
+      "onset_note": "Last sampled unambiguous pre-plume frame at 32 s, first clear plume at 34 s with persistence at 36 s; camera menu overlays the scene."
+    },
+    {
+      "file": "smoke_or_flame_like_object_1.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_1.avi",
+      "source_sha256": "0a463939f7665880c764f260e9b72309f5ca7b600b8a06b29ad817bc0ad09d7d",
+      "sha256": "c1eae0e43d98f01ade48ea0ccbdcc2be500ee55af734c1199dab8f6c931430af",
+      "duration_s": 7.125,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_10.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_10.avi",
+      "source_sha256": "c748a2cb452e35f4f6a444716e71b333298724043fcb1c372ad0127d7ef670f8",
+      "sha256": "42be06948284f24962e00dbfafd9057235b544d9c0e81e9339445020db85686b",
+      "duration_s": 76.25,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_2.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_2.avi",
+      "source_sha256": "7657e63b43c51f28c67dc8b8e2f75305c9995726593d809ed8d016d0211272b9",
+      "sha256": "df1bb8239fb70730201772c7cf72b16bc02aae87233a5ac3d2e19f219c7be202",
+      "duration_s": 22.083008,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_3.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_3.avi",
+      "source_sha256": "26a8524f1e85220c28b92d60a3db34def810e7cb17533b36291413afd3e31a2e",
+      "sha256": "d4f274f9c2225d7805cc56e4d757ba5ef25ccd6dd170387f911e509e8dba6171",
+      "duration_s": 35.916667,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_4.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_4.avi",
+      "source_sha256": "c8ce9de19f1fa5952d083de6067a80b5d93a9e4ab74434c8776f5c3ce4354efb",
+      "sha256": "7d6818dbf4ac3a0c0412ab28b6beda5478918af7e01827224743a073b13e3ab8",
+      "duration_s": 37.666667,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_5.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_5.avi",
+      "source_sha256": "25d0b02085747b151986419280a4931a69a8f280cdc5a808c93d55b8480f8a02",
+      "sha256": "5fcb5c2927b88616dba5c882f1e136b37f6cf7491293578c2a081e86b611f6f5",
+      "duration_s": 342.875,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_6.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_6.avi",
+      "source_sha256": "6a3f56ed97777cd3e4a208d5ae6e7ba27cc7acff5a19df21b3511f3868b63004",
+      "sha256": "18634bef233c11d0a2a5cbcf30e176cc9fffb82a428e503c084299c585574234",
+      "duration_s": 304.875,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_7.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_7.avi",
+      "source_sha256": "3abd3625f1a9f08132283a467fefb2dc2c58d9499eaf89847e80bb205a3683b1",
+      "sha256": "28ca526a87645c0a3db7b0a715c49d66472a2969121844cde85a8f5de96c6140",
+      "duration_s": 83.833333,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_8.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_8.avi",
+      "source_sha256": "5505d67dff1f5c49b07e858548dd1fc1700265b9c102cc18c5c60b69b9b570f8",
+      "sha256": "7a8cf0da95e4271676c9440262ba2822d4cab8f2e722b58f530f383a3cf6c4e9",
+      "duration_s": 35.375,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    },
+    {
+      "file": "smoke_or_flame_like_object_9.mp4",
+      "archive": "confusers.zip",
+      "archive_member": "smoke_or_flame_like_object_9.avi",
+      "source_sha256": "8ec5ad37d6c8d4b110c928fa8448525feed95cf22c42d2f43480fb455a31f838",
+      "sha256": "c3dc2b077145fbc546de9154e52208f1008007009effb77049ff6d2684859208",
+      "duration_s": 116.958008,
+      "dimensions": [
+        320,
+        240
+      ],
+      "fps": "24/1",
+      "cloud_consent": false,
+      "onset_s": null,
+      "group": "fire_source_confusers"
+    }
+  ]
+}

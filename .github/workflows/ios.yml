@@ -1,0 +1,137 @@
+name: iOS Companion checks
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Install locked Flutter framework
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/stillwatch-flutter"
+          git -C "$RUNNER_TEMP/stillwatch-flutter" remote add origin https://github.com/flutter/flutter.git
+          git -C "$RUNNER_TEMP/stillwatch-flutter" fetch --depth 1 origin refs/tags/3.50.0:refs/tags/3.50.0
+          test "$(git -C "$RUNNER_TEMP/stillwatch-flutter" rev-parse '3.50.0^{commit}')" = ab2912035e160d9cad6306df307576da6128ebdb
+          git -C "$RUNNER_TEMP/stillwatch-flutter" checkout --detach 3.50.0
+          echo "$RUNNER_TEMP/stillwatch-flutter/bin" >> "$GITHUB_PATH"
+      - name: Analyze and test Companion
+        working-directory: apps/companion
+        run: |
+          xcodebuild -version
+          flutter --version
+          flutter pub get --enforce-lockfile
+          flutter analyze --fatal-infos
+          flutter test --no-pub
+      - name: Build unsigned iOS archive
+        working-directory: apps/companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ipa --release --no-codesign --no-pub
+          archive=build/ios/archive/Runner.xcarchive
+          app="$archive/Products/Applications/Runner.app"
+          test -d "$app"
+          find "$app" -type f -print | sed "s|^$app/||" | LC_ALL=C sort > "$RUNNER_TEMP/ios-inventory.txt"
+          if grep -Ei '(\.(onnx|pt|safetensors|tflite)$|onnxruntime|stillwatch-core|firebase[._-]ai)' "$RUNNER_TEMP/ios-inventory.txt"; then
+            exit 1
+          fi
+          if test -n "$(find "$app" -name embedded.mobileprovision -print -quit)"; then
+            exit 1
+          fi
+          /usr/bin/lipo "$app/Runner" -verify_arch arm64
+          /usr/bin/lipo "$app/Frameworks/App.framework/App" -verify_arch arm64
+          /usr/bin/xcrun vtool -show-build "$app/Runner" > "$RUNNER_TEMP/ios-device-platform.txt"
+          grep -Eq '^[[:space:]]+platform IOS$' "$RUNNER_TEMP/ios-device-platform.txt"
+          mkdir -p "$RUNNER_TEMP/stillwatch-ios-device"
+          tar -czf "$RUNNER_TEMP/stillwatch-ios-device/StillWatch-Companion-unsigned.xcarchive.tar.gz" \
+            -C build/ios/archive Runner.xcarchive
+          cp "$RUNNER_TEMP/ios-inventory.txt" "$RUNNER_TEMP/ios-device-platform.txt" "$RUNNER_TEMP/stillwatch-ios-device/"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/stillwatch-ios-device/source-commit.txt"
+          (
+            cd "$RUNNER_TEMP/stillwatch-ios-device"
+            shasum -a 256 StillWatch-Companion-unsigned.xcarchive.tar.gz > SHA256SUMS
+          )
+      - name: Retain unsigned iOS device archive for offline signing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stillwatch-ios-device-unsigned
+          path: ${{ runner.temp }}/stillwatch-ios-device/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Build and launch on iOS Simulator
+        working-directory: apps/companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build ios --simulator --debug --no-pub
+          device=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for key, devices in sorted(runtimes.items(), reverse=True)
+                     if "SimRuntime.iOS-" in key for d in devices if d["name"].startswith("iPhone")))
+          ')
+          app=build/ios/iphonesimulator/Runner.app
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$app"
+          xcrun simctl launch "$device" "$bundle"
+          sleep 2
+          mkdir -p "$RUNNER_TEMP/stillwatch-ios"
+          cp "$RUNNER_TEMP/ios-inventory.txt" "$RUNNER_TEMP/stillwatch-ios/"
+          xcrun simctl io "$device" screenshot "$RUNNER_TEMP/stillwatch-ios/first-run.png"
+          echo "STILLWATCH_IOS_SIMULATOR=$device" >> "$GITHUB_ENV"
+      - name: Run pinned TLS pairing and masked WHEP on iOS Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          command -v pkg-config >/dev/null || brew install pkgconf
+          test -x "$(brew --prefix ffmpeg)/bin/ffmpeg" || brew install ffmpeg
+          native="$RUNNER_TEMP/stillwatch-native"
+          mkdir -p "$native"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://github.com/bluenviron/mediamtx/releases/download/v1.21.3/mediamtx_v1.21.3_darwin_arm64.tar.gz \
+            -o "$native/mediamtx.tar.gz"
+          printf '%s  %s\n' bc1a0762fd18ffb413bcd81dcb9a072ac159fbd1f27e79ac6f14598aaac5ed3f \
+            "$native/mediamtx.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$native/mediamtx.tar.gz" -C "$native" mediamtx
+          curl --fail --silent --show-error --location --retry 2 \
+            https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz -o "$native/ffmpeg.tar.xz"
+          printf '%s  %s\n' 7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3 \
+            "$native/ffmpeg.tar.xz" | shasum -a 256 -c -
+          tar -xf "$native/ffmpeg.tar.xz" -C "$native"
+          (
+            cd "$native/ffmpeg-8.1.3"
+            ./configure --prefix="$native/capture" --enable-shared --disable-static \
+              --disable-autodetect --disable-programs --disable-doc --disable-everything \
+              --enable-demuxer=mov --enable-decoder=h264 --enable-protocol=file > "$native/configure.log" 2>&1
+            make -s -j "$(sysctl -n hw.logicalcpu)" > "$native/make.log" 2>&1
+            make -s install > "$native/install.log" 2>&1
+          ) || { tail -n 35 "$native"/*.log; exit 1; }
+          rustup toolchain install 1.97.1 --profile minimal
+          ffmpeg=$(brew --prefix ffmpeg)
+          export PKG_CONFIG_LIBDIR="$native/capture/lib/pkgconfig"
+          export LIBCLANG_PATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib"
+          cargo +1.97.1 build --locked -p stillwatch-core -p stillwatch-worker -p stillwatch-cli
+          app=apps/companion
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/build/ios/iphonesimulator/Runner.app/Info.plist")
+          xcrun simctl terminate "$STILLWATCH_IOS_SIMULATOR" "$bundle"
+          python3 tests/e2e/companion_ios.py --bin target/debug --ffmpeg "$ffmpeg/bin/ffmpeg" \
+            --mediamtx "$native/mediamtx" --app "$app" --address 127.0.0.1 \
+            --device "$STILLWATCH_IOS_SIMULATOR"
+      - name: Retain simulator screenshot and archive inventory
+        if: ${{ !cancelled() && env.STILLWATCH_IOS_SIMULATOR != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stillwatch-ios-simulator
+          path: ${{ runner.temp }}/stillwatch-ios/
+          if-no-files-found: error
+          retention-days: 1

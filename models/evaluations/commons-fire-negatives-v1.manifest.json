@@ -1,0 +1,107 @@
+{
+  "schema_version": 2,
+  "dataset_id": "commons-fire-negatives-v1",
+  "sources": {
+    "commons-108227496": {
+      "origin": "https://commons.wikimedia.org/wiki/File:Fume_hood_-_dry_ice_fog.webm",
+      "rights": "local_evaluation",
+      "license_or_permission": "CC BY-SA 4.0"
+    },
+    "commons-98112799": {
+      "origin": "https://commons.wikimedia.org/wiki/File:%D0%9A%D0%B8%D0%BF%D1%8F%D1%87%D0%B5%D0%BD%D0%B8%D0%B5_%D0%B2%D0%BE%D0%B4%D1%8B_%D0%B2_%D1%87%D0%B0%D0%B9%D0%BD%D0%B8%D0%BA%D0%B5.ogv",
+      "rights": "local_evaluation",
+      "license_or_permission": "CC0"
+    },
+    "commons-143627092": {
+      "origin": "https://commons.wikimedia.org/wiki/File:Boiling_water_thrown_into_cold_air.webm",
+      "rights": "local_evaluation",
+      "license_or_permission": "CC0"
+    }
+  },
+  "clips": [
+    {
+      "file": "dry-ice-hood.mp4",
+      "sha256": "9bd73346dc3a4279d3e38434f2f3c1d548834fb65aa2cf89686ac7ce4f7772f4",
+      "duration_s": 12.0,
+      "category": "fire",
+      "group": "fire_negative_indoor_fog",
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "negative",
+      "events": [],
+      "negative_strata": [
+        "vapor_mist_fog"
+      ],
+      "lineage": {
+        "source_id": "commons-108227496",
+        "scene_id": "dry-ice-hood",
+        "camera_id": "dry-ice-hood",
+        "session_id": "dry-ice-hood",
+        "transform": "scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15",
+        "original_segments": [
+          {
+            "sha256": "942f57820803c6b94777051fedd82299dfa7156ec7be6542e006e2d08bb0d841",
+            "start_s": 4,
+            "duration_s": 12
+          }
+        ]
+      }
+    },
+    {
+      "file": "kettle.mp4",
+      "sha256": "4e2b183baa7dbde3eebb332af17949f7dd2976922ddc010b1659dfe202985363",
+      "duration_s": 30.0,
+      "category": "fire",
+      "group": "fire_negative_appliance_light",
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "negative",
+      "events": [],
+      "negative_strata": [
+        "reflection_display_light"
+      ],
+      "lineage": {
+        "source_id": "commons-98112799",
+        "scene_id": "kettle",
+        "camera_id": "kettle",
+        "session_id": "kettle",
+        "transform": "scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15",
+        "original_segments": [
+          {
+            "sha256": "1e7c1469c1a33ea5e02b14710b2e4cc727ceff358e7b2180fe4f39aa805f233a",
+            "start_s": 0,
+            "duration_s": 30
+          }
+        ]
+      }
+    },
+    {
+      "file": "winter-vapor.mp4",
+      "sha256": "c8fd140be5e55fddd6993b75fec2a17a472edb48e3f4ca7ec839eaa0a4bcab4d",
+      "duration_s": 8.0,
+      "category": "fire",
+      "group": "fire_negative_outdoor_vapor",
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "negative",
+      "events": [],
+      "negative_strata": [
+        "vapor_mist_fog"
+      ],
+      "lineage": {
+        "source_id": "commons-143627092",
+        "scene_id": "winter-vapor",
+        "camera_id": "winter-vapor",
+        "session_id": "winter-vapor",
+        "transform": "scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bilinear,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=15",
+        "original_segments": [
+          {
+            "sha256": "090cdf609917c5af12a146b2a8fc499607e43b9a7f40046d5b6ea03ee80f0375",
+            "start_s": 4,
+            "duration_s": 8
+          }
+        ]
+      }
+    }
+  ]
+}

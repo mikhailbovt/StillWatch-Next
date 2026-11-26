@@ -1,0 +1,201 @@
+{
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "processor": "x86_64",
+  "physical_cores": 24,
+  "logical_cores": 24,
+  "system_ram_bytes": 33319673856,
+  "core_sha256": "15c88f7c590b49a58ae8d839268a7d556fef8a51cef7297360882bcf7ca1bfe4",
+  "worker_sha256": "11c5a1c5df56590ca9d18c44a793931d8e48548ae8f65ce8a9a0adcdcd275d90",
+  "ffmpeg_sha256": "ed16af623947494a72e284b6eb8ff225f2da22b38b5d5069c2fd4b4ba3384e41",
+  "demo_sha256": "42121b24381b163e057eab7f7fe617269c6a26cc6acde05689222899ea80e656",
+  "model_manifest_sha256": "b1389a94fc0c90d68a49277906e1a4c8b427217b6b2301883b9c0f5dfcb23a8c",
+  "runtime_sha256": "469849977cb60744ea160927e1a3a0643fd4c55c0aff743251c6d293402e334e",
+  "profile": "cpu-fp32",
+  "threads_per_worker": 3,
+  "inference_workers": 4,
+  "raw_frame_bytes": 268435456,
+  "width": 640,
+  "warmup_seconds": 6,
+  "results": [
+    {
+      "cameras": 1,
+      "seconds": 24.026,
+      "api_p95_ms": 1.0292,
+      "inference_worker_p95_ms_sampled": 90,
+      "analysis_age_p95_ms_sampled": 198,
+      "rss_median_mib": 734.66,
+      "rss_max_mib": 734.66,
+      "cpu_percent_one_core": 81.99,
+      "threads_max": 56,
+      "processes_max": 6,
+      "degraded_samples": 0,
+      "analysis_samples": 24,
+      "per_camera": {
+        "bdca4145-d301-49ca-afa0-2d4854f602a5": {
+          "pose_fps": 4.987,
+          "fire_fps": 1.865
+        }
+      }
+    },
+    {
+      "cameras": 4,
+      "seconds": 24.0,
+      "api_p95_ms": 1.001,
+      "inference_worker_p95_ms_sampled": 104,
+      "analysis_age_p95_ms_sampled": 291,
+      "rss_median_mib": 1079.13,
+      "rss_max_mib": 1082.12,
+      "cpu_percent_one_core": 405.16,
+      "threads_max": 61,
+      "processes_max": 9,
+      "degraded_samples": 0,
+      "analysis_samples": 96,
+      "per_camera": {
+        "df25a9f0-8a2e-412e-ac3f-64c4bb1ed9de": {
+          "pose_fps": 4.997,
+          "fire_fps": 1.869
+        },
+        "3f601aa9-74b1-46d0-8ca3-ce80eb484dbe": {
+          "pose_fps": 4.997,
+          "fire_fps": 1.869
+        },
+        "5d5e72e9-c372-4826-a2d8-bb9d4b9c75ce": {
+          "pose_fps": 5.041,
+          "fire_fps": 1.869
+        },
+        "596f9d07-bd19-4192-bb00-59a26374956b": {
+          "pose_fps": 5.041,
+          "fire_fps": 1.869
+        }
+      }
+    },
+    {
+      "cameras": 8,
+      "seconds": 24.0,
+      "api_p95_ms": 1.0277,
+      "inference_worker_p95_ms_sampled": 135,
+      "analysis_age_p95_ms_sampled": 352,
+      "rss_median_mib": 1294.07,
+      "rss_max_mib": 1299.91,
+      "cpu_percent_one_core": 905.33,
+      "threads_max": 65,
+      "processes_max": 13,
+      "degraded_samples": 0,
+      "analysis_samples": 192,
+      "per_camera": {
+        "7c9b5c75-e74e-43ba-972b-13820c053ddc": {
+          "pose_fps": 4.693,
+          "fire_fps": 1.608
+        },
+        "a0a96d64-f52f-4bd8-8c43-4c5bac4a291d": {
+          "pose_fps": 4.65,
+          "fire_fps": 1.695
+        },
+        "e832b93a-caa8-4038-92d9-fd4289533b78": {
+          "pose_fps": 4.78,
+          "fire_fps": 1.651
+        },
+        "58e476e7-3f0a-4378-a09f-6b42e806d85e": {
+          "pose_fps": 4.737,
+          "fire_fps": 1.651
+        },
+        "014f170b-9f10-425c-a8e7-300d3bc1d1fc": {
+          "pose_fps": 4.693,
+          "fire_fps": 1.608
+        },
+        "357d985e-5762-4680-9930-827df240be88": {
+          "pose_fps": 4.65,
+          "fire_fps": 1.695
+        },
+        "c9656042-1349-4a98-b91d-8db616a96868": {
+          "pose_fps": 4.737,
+          "fire_fps": 1.608
+        },
+        "b38dfc18-94e1-47c0-9970-cad1b7bd0aab": {
+          "pose_fps": 4.737,
+          "fire_fps": 1.608
+        }
+      }
+    },
+    {
+      "cameras": 16,
+      "seconds": 24.0,
+      "api_p95_ms": 0.928,
+      "inference_worker_p95_ms_sampled": 121,
+      "analysis_age_p95_ms_sampled": 541,
+      "rss_median_mib": 1723.64,
+      "rss_max_mib": 1733.21,
+      "cpu_percent_one_core": 997.37,
+      "threads_max": 72,
+      "processes_max": 21,
+      "degraded_samples": 0,
+      "analysis_samples": 384,
+      "per_camera": {
+        "ae193d79-9af0-451c-8e20-519c72d201ff": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.217
+        },
+        "229b6f0b-3cdb-48ad-8bdd-5fd4f7eeedab": {
+          "pose_fps": 2.391,
+          "fire_fps": 1.261
+        },
+        "f4163745-7057-42a0-87b0-6af4073647e8": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.261
+        },
+        "8e7b038b-fc4d-4ee8-9e61-5c5573730a90": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.304
+        },
+        "f1a6d103-0612-451e-a7df-b4340eed3ed4": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.261
+        },
+        "c80e93e2-a2d6-4848-b231-4ca066823c54": {
+          "pose_fps": 2.391,
+          "fire_fps": 1.261
+        },
+        "0949c567-1af7-44f5-9271-e526c2f8e414": {
+          "pose_fps": 2.478,
+          "fire_fps": 1.304
+        },
+        "1d474c88-b282-4cfe-850c-084b9231c5cc": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.261
+        },
+        "a273d3d3-f1cc-4752-8dbb-e3cb570943e7": {
+          "pose_fps": 2.478,
+          "fire_fps": 1.261
+        },
+        "4b71fcf9-49a5-4d5c-8990-184261ac9a38": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.261
+        },
+        "19b861a5-c0b5-47a3-b181-b52e5664307f": {
+          "pose_fps": 2.478,
+          "fire_fps": 1.261
+        },
+        "ed8aa0fe-6317-42b8-9a27-1fc1148ec411": {
+          "pose_fps": 2.391,
+          "fire_fps": 1.261
+        },
+        "79f89a77-1b49-47c0-bb6f-ea3e4834bd2f": {
+          "pose_fps": 2.478,
+          "fire_fps": 1.261
+        },
+        "aed03025-d4a4-4755-8974-c20b00f0f9b8": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.261
+        },
+        "5a68e057-ba03-4c16-a7c1-331e943ff528": {
+          "pose_fps": 2.478,
+          "fire_fps": 1.261
+        },
+        "49bfee2c-dd5a-463b-a2ee-372f8c1ad5f0": {
+          "pose_fps": 2.434,
+          "fire_fps": 1.304
+        }
+      }
+    }
+  ]
+}

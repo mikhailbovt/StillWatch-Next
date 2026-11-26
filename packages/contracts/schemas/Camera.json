@@ -1,0 +1,658 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Camera",
+  "type": "object",
+  "properties": {
+    "config": {
+      "$ref": "#/$defs/CameraConfig"
+    },
+    "dimensions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Dimensions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "runtime": {
+      "$ref": "#/$defs/CameraRuntime"
+    },
+    "scene_review": {
+      "$ref": "#/$defs/SceneReview"
+    },
+    "scene_revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "source_epoch": {
+      "$ref": "#/$defs/Counter"
+    }
+  },
+  "required": [
+    "id",
+    "revision",
+    "scene_revision",
+    "source_epoch",
+    "live",
+    "config",
+    "scene_review",
+    "runtime"
+  ],
+  "$defs": {
+    "AnalysisCadence": {
+      "type": "object",
+      "properties": {
+        "below_target": {
+          "type": "boolean"
+        },
+        "fire_frames_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fire_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_frames_per_minute": {
+          "description": "Accepted model results in the last ten seconds, normalized by source time.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pose_frames_per_minute",
+        "fire_frames_per_minute",
+        "pose_target_per_minute",
+        "fire_target_per_minute",
+        "below_target"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "AnalysisStatus": {
+      "type": "object",
+      "properties": {
+        "cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extra_fire_frames": {
+          "description": "Accepted fire inferences dispatched ahead of the configured base interval.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fire_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "fire_regions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "last_analysis_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_fire_source_us": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+        },
+        "last_pose_source_us": {
+          "description": "Native presentation timestamp in microseconds, as a signed decimal string.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+        },
+        "last_queue_age_ms": {
+          "description": "Time between receiving the last accepted frame and dispatching it to a worker.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "last_worker_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "people": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "pose_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "smoke_regions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "source_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "wall_cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "pose_frames",
+        "fire_frames"
+      ]
+    },
+    "CameraConfig": {
+      "type": "object",
+      "properties": {
+        "cloud_consent": {
+          "description": "Allows semantic evidence from this camera to be sent to Firebase AI Logic.",
+          "type": "boolean"
+        },
+        "controlled_fire_regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ControlledFireRegion"
+          },
+          "maxItems": 16
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/CameraPriority"
+        },
+        "privacy_masks": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MaskRect"
+          }
+        },
+        "sampling": {
+          "description": "Omit to use 5 pose, 2 fire and 5 evidence frames per second.",
+          "$ref": "#/$defs/CameraSampling"
+        },
+        "source": {
+          "$ref": "#/$defs/CameraSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "enabled",
+        "source"
+      ]
+    },
+    "CameraPriority": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "high"
+      ]
+    },
+    "CameraRuntime": {
+      "type": "object",
+      "properties": {
+        "analysis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "controlled_scene_suspended": {
+          "description": "The confirmed polygon is suspended because the current view could not be aligned.",
+          "type": "boolean"
+        },
+        "dropped": {
+          "$ref": "#/$defs/Counter"
+        },
+        "first_source_us": {
+          "description": "Native presentation timestamp in microseconds of the first usable frame in the epoch.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+        },
+        "frame": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_frame_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relative_source_lag_ms": {
+          "description": "Signed change in source lag since the first usable native PTS of this live or paced epoch.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "repeated_frame": {
+          "type": "boolean"
+        },
+        "source_lagging": {
+          "description": "Sustained relative lag with hysteresis, omitted until measured.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/CaptureState"
+        }
+      },
+      "required": [
+        "state",
+        "dropped"
+      ]
+    },
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
+      ]
+    },
+    "CameraSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "pace": {
+              "type": "boolean"
+            },
+            "repeat": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "replay"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "file",
+            "pace"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "credential_ref": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            },
+            "main_stream_path": {
+              "description": "Optional detail stream on the same camera. Both paths share the camera's masks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "peer": {
+              "type": "string"
+            },
+            "secure": {
+              "type": "boolean"
+            },
+            "stream_path": {
+              "type": "string"
+            },
+            "transport": {
+              "$ref": "#/$defs/RtspTransport"
+            },
+            "type": {
+              "type": "string",
+              "const": "rtsp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "peer",
+            "stream_path",
+            "secure",
+            "transport"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "device_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "usb"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "device_id"
+          ]
+        }
+      ]
+    },
+    "CaptureState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "replaying",
+        "streaming",
+        "clock_hold",
+        "completed",
+        "retrying",
+        "unavailable",
+        "capacity_exceeded"
+      ]
+    },
+    "ControlledFireRegion": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Operator annotation for its expected duty cycle.",
+          "$ref": "#/$defs/ControlledMode"
+        },
+        "polygon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RegionPoint"
+          },
+          "maxItems": 16,
+          "minItems": 3
+        },
+        "source": {
+          "description": "Operator annotation for the expected source within the polygon.",
+          "$ref": "#/$defs/ControlledSource"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "mode",
+        "polygon"
+      ]
+    },
+    "ControlledMode": {
+      "type": "string",
+      "enum": [
+        "steady",
+        "intermittent"
+      ]
+    },
+    "ControlledSource": {
+      "type": "string",
+      "enum": [
+        "burner",
+        "candle",
+        "fireplace",
+        "grill"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "Dimensions": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    },
+    "MaskRect": {
+      "type": "object",
+      "properties": {
+        "bottom": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "left": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "right": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "top": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
+      ]
+    },
+    "RegionPoint": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 10000,
+          "minimum": 0
+        },
+        "y": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 10000,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "RtspTransport": {
+      "type": "string",
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    },
+    "SceneReview": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "needs_review",
+        "confirmed"
+      ]
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
+      ]
+    }
+  }
+}

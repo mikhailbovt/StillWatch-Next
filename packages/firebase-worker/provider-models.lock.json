@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "firebase_js_sdk": "13.3.0",
+  "gemini_developer_api": ["gemini-3.5-flash-lite"],
+  "on_device": "chrome_gemini_nano",
+  "live_evaluation_qualified": false
+}

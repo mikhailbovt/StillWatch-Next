@@ -1,0 +1,19 @@
+[Unit]
+Description=Renew StillWatch production Firebase App Check token
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=stillwatch-firebase
+Group=stillwatch-firebase
+WorkingDirectory=/opt/stillwatch/firebase-worker
+EnvironmentFile=/etc/stillwatch/firebase-app-check.conf
+ExecStart=/usr/bin/node src/issue-app-check.js ${CONFIG_FILE} ${APP_CHECK_FILE} ${SIGNING_SERVICE_ACCOUNT}
+UMask=0077
+StateDirectory=stillwatch-firebase
+StateDirectoryMode=0700
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes

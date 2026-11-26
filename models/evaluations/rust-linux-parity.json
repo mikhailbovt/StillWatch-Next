@@ -1,0 +1,116 @@
+{
+  "models": {
+    "fire": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.001800537109375,
+        "mean_abs": 0.000021232866695506283
+      },
+      "gray": {
+        "above_threshold": 5,
+        "max_abs": 0.002410888671875,
+        "mean_abs": 0.00003232258786810617
+      },
+      "reference_00": {
+        "above_threshold": 0,
+        "max_abs": 0.0010986328125,
+        "mean_abs": 0.00001987907482801859
+      },
+      "reference_01": {
+        "above_threshold": 0,
+        "max_abs": 0.0009765625,
+        "mean_abs": 0.00001948108190911267
+      },
+      "reference_02": {
+        "above_threshold": 0,
+        "max_abs": 0.0008544921875,
+        "mean_abs": 0.00001911153456324223
+      },
+      "reference_03": {
+        "above_threshold": 18,
+        "max_abs": 0.001190185546875,
+        "mean_abs": 0.000019663869408291004
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.000640869140625,
+        "mean_abs": 0.000012295930236114392
+      }
+    },
+    "pose": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.0084686279296875,
+        "mean_abs": 0.00011521622680710755
+      },
+      "gray": {
+        "above_threshold": 0,
+        "max_abs": 0.0073089599609375,
+        "mean_abs": 0.00010194428055739494
+      },
+      "reference_00": {
+        "above_threshold": 9,
+        "max_abs": 0.010009765625,
+        "mean_abs": 0.0000682960042064772
+      },
+      "reference_01": {
+        "above_threshold": 10,
+        "max_abs": 0.010498046875,
+        "mean_abs": 0.00007235644499183407
+      },
+      "reference_02": {
+        "above_threshold": 14,
+        "max_abs": 0.0121612548828125,
+        "mean_abs": 0.00007330502494747794
+      },
+      "reference_03": {
+        "above_threshold": 0,
+        "max_abs": 0.0072021484375,
+        "mean_abs": 0.00007355613415226976
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.01071929931640625,
+        "mean_abs": 0.00005603371738817904
+      }
+    },
+    "pose_balanced": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.002197265625,
+        "mean_abs": 0.000015132708660830918
+      },
+      "gray": {
+        "above_threshold": 14,
+        "max_abs": 0.002777099609375,
+        "mean_abs": 0.000020549873005584147
+      },
+      "reference_00": {
+        "above_threshold": 8,
+        "max_abs": 0.0037841796875,
+        "mean_abs": 0.00002753719719473995
+      },
+      "reference_01": {
+        "above_threshold": 9,
+        "max_abs": 0.0028076171875,
+        "mean_abs": 0.000025195461643929195
+      },
+      "reference_02": {
+        "above_threshold": 8,
+        "max_abs": 0.0035400390625,
+        "mean_abs": 0.000027070922671918656
+      },
+      "reference_03": {
+        "above_threshold": 0,
+        "max_abs": 0.004302978515625,
+        "mean_abs": 0.000023831056412029398
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.00125885009765625,
+        "mean_abs": 0.000018387140678810335
+      }
+    }
+  },
+  "ort": "ORT Build Info: git-branch=HEAD, git-commit-id=402979a, fp8-kv-cache=1, build type=Release"
+}

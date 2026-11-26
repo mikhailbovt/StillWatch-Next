@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StreamGrant",
+  "type": "object",
+  "properties": {
+    "camera_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "codec": {
+      "type": "string"
+    },
+    "expires_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "ice_servers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/IceServer"
+      }
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "profile": {
+      "$ref": "#/$defs/StreamProfile"
+    },
+    "redacted": {
+      "type": "boolean"
+    },
+    "scene_revision": {
+      "$ref": "#/$defs/Counter"
+    },
+    "source_epoch": {
+      "$ref": "#/$defs/Counter"
+    },
+    "whep_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "camera_id",
+    "profile",
+    "source_epoch",
+    "scene_revision",
+    "whep_path",
+    "expires_at",
+    "redacted",
+    "codec"
+  ],
+  "$defs": {
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "IceServer": {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "username",
+        "credential"
+      ]
+    },
+    "StreamProfile": {
+      "type": "string",
+      "enum": [
+        "preview",
+        "detail"
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

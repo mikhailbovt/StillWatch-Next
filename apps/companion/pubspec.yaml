@@ -1,0 +1,36 @@
+name: stillwatch_companion
+description: Live cameras and incident response for StillWatch Next.
+publish_to: none
+version: 0.1.0+4
+
+environment:
+  sdk: '>=3.14.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  stillwatch_sdk:
+    path: ../../packages/stillwatch-dart
+  crypto: 3.0.8
+  file_selector: 1.1.0
+  material_ui: 1.1.0
+  flutter_webrtc: 1.6.3
+  flutter_secure_storage: 11.2.0
+  bonsoir: 7.1.6
+  flutter_local_notifications: 23.0.1
+  qr_flutter: 4.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/mark.png
+  licenses:
+    - ../../LICENSE
+    - ../../NOTICE

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StillWatch Firebase worker</title>
+  <link rel="stylesheet" href="/worker.css">
+</head>
+<body>
+  <main>
+    <h1>StillWatch Firebase worker</h1>
+    <p id="status" role="status">Connect this browser to the worker.</p>
+    <div class="credential">
+      <label for="key">Worker credential</label>
+      <div>
+        <input id="key" type="password" maxlength="64" autocomplete="off" spellcheck="false">
+        <button id="connect" type="button">Connect</button>
+      </div>
+    </div>
+    <label><input id="keep" type="checkbox"> Reconnect in this dedicated browser profile</label>
+    <div class="actions">
+      <button id="disconnect" type="button" hidden>Disconnect browser</button>
+      <button id="prepare" type="button" disabled>Initialize Chrome model</button>
+    </div>
+    <section id="evaluation" aria-labelledby="evaluation-title" hidden>
+      <h2 id="evaluation-title">Latest evaluation</h2>
+      <dl>
+        <dt>Incident</dt><dd id="evaluation-incident"></dd>
+        <dt>Evidence version</dt><dd id="evaluation-version"></dd>
+        <dt>Requested route</dt><dd id="evaluation-requested"></dd>
+        <dt>Execution route</dt><dd id="evaluation-route"></dd>
+        <dt>Model</dt><dd id="evaluation-model"></dd>
+        <dt>Model classification</dt><dd id="evaluation-classification"></dd>
+      </dl>
+      <p id="evaluation-result"></p>
+      <figure id="evaluation-evidence" hidden>
+        <img id="evaluation-frame" alt="Privacy-masked overview from the evaluation packet">
+        <figcaption id="evaluation-frame-time"></figcaption>
+      </figure>
+    </section>
+  </main>
+  <script src="/hybrid.js" type="module"></script>
+</body>
+</html>

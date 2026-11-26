@@ -1,0 +1,807 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CoreStatus",
+  "type": "object",
+  "properties": {
+    "analysis_capacity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisCapacity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "camera_coverage": {
+      "description": "Bounded local snapshot sized by the camera registry.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/CameraCoverage"
+      }
+    },
+    "inference": {
+      "$ref": "#/$defs/InferenceStatus"
+    },
+    "local_attention_ceiling": {
+      "description": "Highest attention level available from currently loaded local models.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Attention"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "media": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MediaStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resources": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalResourceUsage"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "string"
+    },
+    "writer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WriterStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "version",
+    "inference"
+  ],
+  "$defs": {
+    "AnalysisCapacity": {
+      "type": "object",
+      "properties": {
+        "admissible_workload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available_camera_slots": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "limiting_resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CapacityState"
+        }
+      },
+      "required": [
+        "state",
+        "reason"
+      ]
+    },
+    "AnalysisCoverage": {
+      "type": "object",
+      "properties": {
+        "fire_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "last_analysis_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pose_frames": {
+          "$ref": "#/$defs/Counter"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "wall_cadence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WallCadence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "pose_frames",
+        "fire_frames"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "AnalysisWorkload": {
+      "type": "object",
+      "properties": {
+        "cameras": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "detail_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media": {
+          "$ref": "#/$defs/MediaWorkloadLimits"
+        },
+        "min_fire_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_pose_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sampling": {
+          "$ref": "#/$defs/CameraSampling"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceWorkload"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "sampling",
+        "cameras",
+        "min_pose_per_wall_minute",
+        "min_fire_per_wall_minute",
+        "media"
+      ]
+    },
+    "Attention": {
+      "type": "string",
+      "enum": [
+        "info",
+        "review",
+        "urgent"
+      ]
+    },
+    "CameraCoverage": {
+      "type": "object",
+      "properties": {
+        "analysis": {
+          "$ref": "#/$defs/AnalysisCoverage"
+        },
+        "camera_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "capture_state": {
+          "$ref": "#/$defs/CaptureState"
+        },
+        "current_source_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_frame_age_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Counter"
+        },
+        "source_lagging": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "camera_id",
+        "revision",
+        "capture_state",
+        "analysis"
+      ]
+    },
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
+      ]
+    },
+    "CapacityState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unknown",
+        "insufficient"
+      ]
+    },
+    "CaptureState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "replaying",
+        "streaming",
+        "clock_hold",
+        "completed",
+        "retrying",
+        "unavailable",
+        "capacity_exceeded"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "Dimensions": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    },
+    "InferenceBackend": {
+      "type": "string",
+      "enum": [
+        "cpu",
+        "cuda",
+        "unrecognized"
+      ]
+    },
+    "InferenceCounts": {
+      "type": "object",
+      "properties": {
+        "fire": {
+          "$ref": "#/$defs/TaskCounts"
+        },
+        "pose": {
+          "$ref": "#/$defs/TaskCounts"
+        }
+      },
+      "required": [
+        "pose",
+        "fire"
+      ]
+    },
+    "InferenceFailure": {
+      "type": "string",
+      "enum": [
+        "model_pack_unavailable",
+        "model_initialization_failed",
+        "runtime_unavailable",
+        "worker_unavailable",
+        "worker_timeout",
+        "worker_failed",
+        "evidence_backpressure",
+        "unrecognized"
+      ]
+    },
+    "InferenceStatus": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceBackend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configured_workers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceFailure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ready_workers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "totals": {
+          "description": "Task totals since Core started. Visible to the owner.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InferenceCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "ready_workers",
+        "configured_workers"
+      ]
+    },
+    "LocalResourceUsage": {
+      "type": "object",
+      "properties": {
+        "capture_frame_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "evidence_write_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "media": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaResourceUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "capture_frame_bytes_in_use",
+        "evidence_write_bytes_in_use"
+      ]
+    },
+    "MediaResourceUsage": {
+      "type": "object",
+      "properties": {
+        "detail_frame_bytes_in_use": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "publisher_units_in_use": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "publishers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "snapshot_encoders_in_use": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "viewers": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "viewers",
+        "publishers",
+        "publisher_units_in_use",
+        "snapshot_encoders_in_use",
+        "detail_frame_bytes_in_use"
+      ]
+    },
+    "MediaStatus": {
+      "type": "object",
+      "properties": {
+        "redacted_transcode": {
+          "type": "boolean"
+        },
+        "router_ready": {
+          "type": "boolean"
+        },
+        "video_codec": {
+          "type": "string"
+        },
+        "workload_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaWorkloadLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "router_ready",
+        "video_codec",
+        "redacted_transcode"
+      ]
+    },
+    "MediaWorkloadLimits": {
+      "description": "Simultaneous allowances on the host, including both encoder and decoder work.",
+      "type": "object",
+      "properties": {
+        "detail_decoder_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_decoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "publisher_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_encoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_requests_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "viewer_sessions": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "preview_publishers",
+        "detail_publishers",
+        "detail_decoders",
+        "viewer_sessions",
+        "publisher_units",
+        "preview_units",
+        "detail_units",
+        "detail_decoder_units",
+        "snapshot_encoders",
+        "snapshot_requests_per_minute"
+      ]
+    },
+    "SourceKind": {
+      "type": "string",
+      "enum": [
+        "paced_replay",
+        "unpaced_replay",
+        "rtsp_tcp",
+        "rtsp_udp",
+        "rtsps",
+        "usb"
+      ]
+    },
+    "SourceWorkload": {
+      "description": "Named profiles admit only sources whose decoder workload matches this class.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "max_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "codec",
+        "dimensions",
+        "min_millifps",
+        "max_millifps"
+      ]
+    },
+    "TaskCounts": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "$ref": "#/$defs/Counter"
+        },
+        "cancelled": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dispatched": {
+          "$ref": "#/$defs/Counter"
+        },
+        "intentional_burst": {
+          "description": "Accepted results from intentionally early Fire dispatches.",
+          "$ref": "#/$defs/Counter"
+        },
+        "missed_source_slots": {
+          "description": "Skipped base slots before a dispatch and rejected base claims within one source clock.",
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_generation": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_scope": {
+          "$ref": "#/$defs/Counter"
+        },
+        "rejected_stale": {
+          "$ref": "#/$defs/Counter"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Counter"
+        },
+        "worker_failed": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "dispatched",
+        "accepted",
+        "timeout",
+        "worker_failed",
+        "cancelled",
+        "rejected_stale",
+        "rejected_scope",
+        "rejected_generation",
+        "missed_source_slots",
+        "intentional_burst"
+      ]
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
+      ]
+    },
+    "WriterStatus": {
+      "type": "object",
+      "properties": {
+        "cancelled_queued": {
+          "$ref": "#/$defs/Counter"
+        },
+        "completed": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maximum_operation_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maximum_queue_wait_ms": {
+          "$ref": "#/$defs/Counter"
+        },
+        "oldest_queued_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queue_capacity": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "queue_high_water": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "queued": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rejected_queue_full": {
+          "$ref": "#/$defs/Counter"
+        },
+        "running_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "queue_capacity",
+        "queued",
+        "queue_high_water",
+        "completed",
+        "rejected_queue_full",
+        "cancelled_queued",
+        "maximum_queue_wait_ms",
+        "maximum_operation_ms"
+      ]
+    }
+  }
+}

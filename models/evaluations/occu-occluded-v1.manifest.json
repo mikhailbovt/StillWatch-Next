@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "dataset_id": "occu-visibility-development-v1",
+  "sources": {
+    "occu-15494102": {
+      "origin": "https://zenodo.org/records/15494102",
+      "rights": "redistributable",
+      "license_or_permission": "CC BY 4.0"
+    }
+  },
+  "clips": [
+    {
+      "file": "camera1-early.mp4",
+      "sha256": "783e48546e766fc599751888d0179cec5a39ffe281634a3f7c061892c9d06f6b",
+      "group": "occu-hidden-landing",
+      "category": "medical",
+      "duration_s": 11,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "uncertain",
+      "lineage": {
+        "source_id": "occu-15494102",
+        "subject_ids": [
+          "subject-01"
+        ],
+        "scene_id": "room-bed",
+        "session_id": "subject-01",
+        "camera_id": "view1",
+        "original_segments": [
+          {
+            "sha256": "8b69cfb0d50e65e9cdfa4c3486bbd5e18206d9fb37fcc02399bf2d0721d80f45",
+            "start_s": 0,
+            "duration_s": 11
+          }
+        ],
+        "transform": "Native 320x240 source geometry. H.264 at 15 fps. The subject descends and disappears behind the foreground bed."
+      },
+      "events": [],
+      "negative_strata": []
+    },
+    {
+      "file": "camera2-next.mp4",
+      "sha256": "3ef7aaefe577d4540df51f1b28f16ba44cd6658dccbc3619fa6d0d8da39552f5",
+      "group": "occu-hidden-landing",
+      "category": "medical",
+      "duration_s": 11,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "uncertain",
+      "lineage": {
+        "source_id": "occu-15494102",
+        "subject_ids": [
+          "subject-01"
+        ],
+        "scene_id": "room-bed",
+        "session_id": "subject-01",
+        "camera_id": "view2",
+        "original_segments": [
+          {
+            "sha256": "362b2f1848f4c2e42aa59ce5ec89d8a29d4256f4bb706ffc0d69e35f1353d8bc",
+            "start_s": 12,
+            "duration_s": 11
+          }
+        ],
+        "transform": "Native 320x240 source geometry. H.264 at 15 fps. The subject descends and disappears behind the foreground bed."
+      },
+      "events": [],
+      "negative_strata": []
+    }
+  ]
+}

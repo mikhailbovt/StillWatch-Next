@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Problem",
+  "type": "object",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/ProblemCode"
+    },
+    "detail": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "status": {
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "title": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "status",
+    "code"
+  ],
+  "$defs": {
+    "ProblemCode": {
+      "type": "string",
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "revision_conflict",
+        "idempotency_conflict",
+        "invalid_transition",
+        "capacity_exceeded",
+        "cursor_expired",
+        "rate_limited",
+        "provider_unavailable",
+        "storage_unavailable",
+        "internal_error",
+        "unrecognized"
+      ]
+    }
+  }
+}

@@ -1,0 +1,483 @@
+{
+  "index_version": 1,
+  "split": "development",
+  "qualification_holdout_opened": false,
+  "corpora": [
+    {
+      "id": "nist-tn1969-cooktop-reignition",
+      "manifest": "nist-tn1969-cooktop-reignition-v1.manifest.json",
+      "sha256": "e68d7cf77c0562b33ec2ce0c3b4866dd18d358f98b721ddb4b85c4c9c88d85e4",
+      "seen_media_sha256": [
+        "dc749063878f51234d7ef7b2496c1eeffa7d720f2976ff182b3ed0935e914782"
+      ],
+      "seen_lineage": [
+        [
+          "nist-tn1969",
+          "camera_id",
+          "cooktop-front"
+        ],
+        [
+          "nist-tn1969",
+          "scene_id",
+          "cooktop-kitchen"
+        ],
+        [
+          "nist-tn1969",
+          "session_id",
+          "oil-reignition"
+        ]
+      ],
+      "lineage": "Same NIST kitchen experiment and original Kaltura entry 1_a1tulnxv across resolutions. Keep recuts and other views in development.",
+      "purpose": "Observe whether local flame evidence opens a new incident after suppression. The media includes an earlier fire. The suppression plume contributes no negative exposure."
+    },
+    {
+      "id": "bilkent-smoke-onsets",
+      "manifest": "bilkent-smoke-onset-v2.manifest.json",
+      "sha256": "ed7ace87f76c5069c56eb946e506151a840c063cdf547dd93cbfc36e437c7f49",
+      "seen_media_sha256": [
+        "0d4f56b67c5bc2d3efb8e84f1be42bbd41fe2e6f378beaa74f809e8bb46aad54",
+        "865fb88dd2b1913b6e0434e9a249ef6c14cb91c57e9b3c43c32f1d3062ad6349",
+        "a19a33a67aadd76328ab43d00af3c747521ee6e249fa942068ef501be3637131",
+        "ca7167b18899071ff9b672251fd0d4413a7c708c731aee5d7fad70bd80283e61",
+        "dc97293166e64144b13175ebffdacbb5d43e872c4b37290253fd40c0a42adbc7",
+        "fcc0dbdf2d5cca339fb7c4fa954ff6150a6831a87ccf909a13ecd21dbb748340"
+      ],
+      "seen_lineage": [
+        [
+          "bilkent-visifire",
+          "camera_id",
+          "backlit-corridor"
+        ],
+        [
+          "bilkent-visifire",
+          "camera_id",
+          "exterior-bin"
+        ],
+        [
+          "bilkent-visifire",
+          "scene_id",
+          "backlit-corridor"
+        ],
+        [
+          "bilkent-visifire",
+          "scene_id",
+          "exterior-bin"
+        ],
+        [
+          "bilkent-visifire",
+          "session_id",
+          "backlit-corridor-run1"
+        ],
+        [
+          "bilkent-visifire",
+          "session_id",
+          "backlit-corridor-run2"
+        ],
+        [
+          "bilkent-visifire",
+          "session_id",
+          "exterior-bin-run1"
+        ]
+      ],
+      "lineage": "Two recordings share the backlit corridor camera. The exterior bin forms a second scene. Both belong to Bilkent VisiFire. Official samples are development data.",
+      "purpose": "Ground smoke on the immutable opening observation. All original decoded pixels and timestamps are preserved. The initial category-only manifest is bilkent-smoke-onset-v1.manifest.json."
+    },
+    {
+      "id": "edf-first-fall",
+      "manifest": "edf-first-fall-v1.manifest.json",
+      "sha256": "7ab5c59717b696280bf1b2fc0c85e351e1c7074c902d839ce0e350877c95ef61",
+      "seen_media_sha256": [
+        "e3f7d8f65bde887d35966109686f72844f42fdb4aaee790f9de7179385070738",
+        "93a56f0f8a124826d46d384ec5874a56c1d83c16f25d6199ba79e0bf09f45433"
+      ],
+      "seen_lineage": [
+        ["edf-15494102", "scene_id", "room-blue-mat"],
+        ["edf-15494102", "camera_id", "camera-01"],
+        ["edf-15494102", "session_id", "subject01-recording01"],
+        ["edf-15494102", "subject", "edf-subject-01"]
+      ],
+      "lineage": "One staged fall, one recording and one participant. Keep other views and crops of this session together.",
+      "purpose": "Visible onset bracket and subject identity reviewed on 67 native timestamps before replay."
+    },
+    {
+      "id": "occu-occluded",
+      "manifest": "occu-occluded-v1.manifest.json",
+      "sha256": "0bf6a3bebcdf0e5a9797d970fdbc9ec38bbfaba2d33230f0771da02482f413f9",
+      "seen_media_sha256": [
+        "8b69cfb0d50e65e9cdfa4c3486bbd5e18206d9fb37fcc02399bf2d0721d80f45",
+        "362b2f1848f4c2e42aa59ce5ec89d8a29d4256f4bb706ffc0d69e35f1353d8bc",
+        "783e48546e766fc599751888d0179cec5a39ffe281634a3f7c061892c9d06f6b",
+        "3ef7aaefe577d4540df51f1b28f16ba44cd6658dccbc3619fa6d0d8da39552f5"
+      ],
+      "seen_lineage": [
+        ["occu-15494102", "scene_id", "room-bed"],
+        ["occu-15494102", "camera_id", "view1"],
+        ["occu-15494102", "camera_id", "view2"],
+        ["occu-15494102", "session_id", "subject-01"],
+        ["occu-15494102", "subject", "subject-01"]
+      ],
+      "lineage": "Two views of one participant and furnished room.",
+      "purpose": "The landing surface and final posture are hidden from both cameras. Both intervals carry uncertain labels."
+    },
+    {
+      "id": "edinburgh-door-orientation",
+      "manifest": "edinburgh-door-orientation-v1.manifest.json",
+      "sha256": "fcf6ead3bf19b7b9cc0dc5fb6ee89b38055fc523a4d54305e1acb8992153fd10",
+      "seen_media_sha256": [
+        "4ee987abc851751f839d8e1ccf1341cfb17f977502fe17c516f1946fdb75b5ea",
+        "6e9912f3497fc995fbbbdfa891c2c17089b1e297d7fe20c0bfbbb66d0df33900",
+        "3c1b923758636d90bca93a704a3454eaf69e32c9955ccd4dafdace4110bcbdab"
+      ],
+      "seen_lineage": [
+        ["edinburgh-test1", "scene_id", "test1"],
+        ["edinburgh-test1", "camera_id", "door"],
+        ["edinburgh-test1", "session_id", "test1"]
+      ],
+      "lineage": "Paired views of the same door recording and timestamps as the door onset study.",
+      "purpose": "Measure the effect of quarter-turn camera orientation with fixed image size and source timestamps."
+    },
+    {
+      "id": "edinburgh-test1-door-onset",
+      "manifest": "edinburgh-door-onset-v1.manifest.json",
+      "sha256": "2bbd1c2fa1afe3a3c2c5d696e21ec0e3a860426bb6df56dcbcfab1153a6acad9",
+      "seen_media_sha256": [
+        "4ee987abc851751f839d8e1ccf1341cfb17f977502fe17c516f1946fdb75b5ea",
+        "6cfee41f99f43b48a6687727361a780cbd5c0507bee1730a2a99a55327f5817e"
+      ],
+      "seen_lineage": [
+        [
+          "edinburgh-test1",
+          "scene_id",
+          "test1"
+        ],
+        [
+          "edinburgh-test1",
+          "camera_id",
+          "door"
+        ],
+        [
+          "edinburgh-test1",
+          "session_id",
+          "test1"
+        ]
+      ],
+      "lineage": "Same room and experiment as Edinburgh Test 1 door part 2.",
+      "purpose": "Source-bracketed early flame replay in the first complete camera recording."
+    },
+    {
+      "id": "indoor-fire-head-development",
+      "manifest": "indoor-fire-head-development-v1.json",
+      "sha256": "e4559b3c62a3546ed2671b4e934e42526ee1a6c502e1ed5f64eaf007106e9a98",
+      "seen_media_sha256": [
+        "f5e4b452bc0e74508366b4ce3f62d7479d1a790a7438a1f0ebee145a216d7b6a",
+        "3ed8e831716a2b5615a8c3b87f79340bb5f8f7dd0bac2fca1d87976c0b00061a",
+        "46244f7d64a58c1ee437d42e42c29fb78e88e951769dfaa9ffed472c5bfeb433",
+        "69261d1793a27508c9abcad6720035f16be1bd324b82a3de7c4ca3ed1c77a9b2",
+        "2f69b8a962d1c3cc2f09c802d8350fc105fd053db7bb3201b5e5f54f1aa24862",
+        "7c2a38808fed11a7421100571c15e6bb0f90d1bc92fd2f5c90f8ef20b5a0056f",
+        "6a8040b180295ca8f738824093985c2097399693d3c097b7b311b42c7dee2a51",
+        "3ff61664206c10572bf9bb02e31e2ec1c4390494d147ff47926c5a5aedeea67e",
+        "589eb9d0668106c7f017ac141f236c05f7511c67542822185dae8fef54df6b36",
+        "d433d55de5d88469b69185eb57950bb9984eaff04b8d730de66e5700c3c4c8a2",
+        "002dea1d6b59bf6bbac21b41337572c1f73578ee7e52a3c9a44eb02d30f1f898",
+        "c96ddb62cc86a94c15faea1d2beae1cd2e6442da308aabf46b48c2b06d3a597c",
+        "ad39210969de0520f7937ca4fdd7ff52c4aea62e48a5db95984b3e4207d41003",
+        "9123941b63469312c6b605df01dc983ee2ea1554280e7ba1d812cf03315e4247",
+        "3ca341de6f2fadd5e1ec18698f244f12a37fd0741997292c80b87b64b1a8d839",
+        "2aa99a83645397c886a7b0a0a56d4212d31255f93ce8e60c915a1fe3723e9410",
+        "710a0215990486320acf4d16f427f3a8e1ffc634d3f1bb0fa6d833e006d62884",
+        "fde65666aac6c659d9fb1893da67e18b3e7f627a0bebc580b50aa239fa6f21c2",
+        "90c7c88cf91703855f8fd8b722b4a0f15677bf31274049af1119c338fef474be",
+        "e1de3af1a75088f3ebdb07231335279ab550a55a406815e771166b2a134434f6",
+        "0ab5cc8b2644d12dc87db37868468842f00f95cba55ba52c3cc7639627a3931e",
+        "eb011902930df906078b7b75917747d24f18d5d5b9bdc15c90d94795936da3d3",
+        "f58b69575ad2410560e6716645da7d99ab2b6b9d0b0b3f7d6ff61cacdba65bea",
+        "553f62789573bc51501de76fd49aaf2f3dd3de41e2752d39bab915cf2d41b6e5",
+        "d89565ec8d89fea6d16bc405b807b790d22a1fc54f17b5bdde8390a4d93d28c1",
+        "297d8fb6565a88ecca094f62b95ea3c9693a01dede0341e7d90896598ce5f3da",
+        "488462f1c3308af6a020522efda77eb39b8c2d9fe62de399d3476eabb06a7cd5",
+        "59402e696d3a3c838df23d31f1772e2d7686642a25d078da9b3d93561848e248",
+        "b6c5ce24548f4594c751367636fe87e05b56f0a6e113eac3826bf0aa3b74dac9",
+        "68e8810b173a3feaa66a9f65b5d828be5090cd1d0d990861397f0f06a95a7b17",
+        "6427069dc43fc7e9f792cd456c86e5957d2198c2cb55e4e88ac6ca45574a8d87",
+        "47f674a7b3df5f4e735ee5f37e05ae6d338c74043692ed29ab58c232df382a4c",
+        "598a6debadc099b1d035b4e6980bcd11480312ad5e54f6027626da7e80b689f6",
+        "6494be60b30c88af7ff79c8a2f37230a48eb71f8c32d94480e51f17e25183941",
+        "cd6ead71d2a9d33d10a04e41864e9df56411bf6f216d78930affeef33d828a14",
+        "8f4498076608d082bf2905405fb8dc44fc40a59d379828a62d5c50cca33645ea",
+        "7ad169b9556b4afde5f1e43d2ef3f703819845f3fa57964d4d73338005f9b8e5",
+        "242ed6ea512476284af1ea67e6cbb851bba4ae299b68f29bee891fd489266de9",
+        "b0b3ea4c6906d0bef017fa619d7f3f587e8b219aeb32c35868100cc18a1ae948",
+        "97ab527bfb7ca9e1a9d44ac80026190f6a2a47d951d0e64991b53e10c22ae810",
+        "efae2c423c22fc00d49875afa757e0900ffcaa2ff630ca31bf4f32376fd4ebae",
+        "fb65b053cd5b2108e7e6bfdbebf4cd0dfc547e8182381c8c42e9979ed87b61a0",
+        "df734c1e12c1679a0f46cae4310dc5ae119f23d36a6767178630546645c09f3f",
+        "074a4ba521cb4452d5c32dbe56f2209777a667f1d077bd5d20f0ca68b0104233",
+        "5537e5c35aeb8dce5b3b885aa2f594da0a895157074845a9399f4c453ad7476d",
+        "31c27667b3a951a864aa4cffd29b26f8364fcc913339ca2d5da636d0fb3f4911",
+        "6c8357868bb7fd1c1393c35b053ac54d7e84a88a810ffabb90c2e2c8eba71544",
+        "d018deab6e1099d37eb23956811693c36fc40bfe0d334d40e05403a8ee823233",
+        "364db0f545242d8539a98eb7130f34e9f303c8c1c06f64890eeeb77e5d7dc068",
+        "ae89e83e03af93e10482dd462442b1dbdb32826853470b25f12ef7ec6028fcab",
+        "2078fffa7457630cd054e37330ad020ea01736854e6b206f840cae5ce82c86ea",
+        "dbd0b026e1ea4df943643197315caa160b4739dcebe658893c6b3dfe160e1570",
+        "fbf47bce7af2482d1e7701268c5c3bd0891a167e4d77c67a8681dcfd342b4f0c",
+        "dc62da1073b4297d91cb7422ab281752512be619dc9e3df7e5dcff6488f24c07",
+        "89ca24265d5c2d35d31af4ca19bb2c28d95bdb3990c7a09a397985dd9302df42",
+        "4fc4973960712036c84f5a092a0985d4d40f5ee222d0b57c789daee11e1c6495",
+        "69cfbfd2471c20fca34b8ff9475642dee4d0a5d4d024e58f3a61c9be00e87963",
+        "378a7e1991d80db33e503f4a17fd147ed378fac8fd380b367ff8d6d3aa56eae2",
+        "7a89f92d036154df19b1e8bea3bfefab3aed933357116b65217b1e81fbf08387",
+        "9333b1839c74ed14900882df6dd49c7ca80ec161f8ffef8ba7dae6cc336a9fda",
+        "0290f5e4bd2d5cc189cbe7e73c3c65f01ee268103d63890b4fec6868be5bbe45",
+        "56eec4cda3006f9463bb636270cfaf91b3ef3b9edf6188e04aa7ababdbb7f17c",
+        "73e1dee31b3084c9d06c4f07495c2701d830da17c1de46ddd02fe620808f0d45",
+        "3e1a285db7f0329621c118948243620f3e4a40c17f299e5a966984131a23b243",
+        "7082a554e8c71693c34c5b6f6bf97f0f19a2df53f652447e977be410f25efc21",
+        "c97c309222b39d3800ffdca72f0ca7aba048466ce587802aad67c606abd79595",
+        "4483d7672bcd141cbe240845e2df51f40781276c6aafcae7f06afacdb5efe89a",
+        "42debb04d752d8e729754cfe70f4173bb721da4e24f21e785fd18941d4243608",
+        "7c2492791000f65a4e52cc0e26a27df875df512e413ee68690059bb63f4da938",
+        "1ac71592f6474202fe27dbf6aa0b39b9ea4e8367224e0da598c545d81f584923",
+        "4e4c8e8d3640fce1ddd76783db18aae5c1daa76621d4ebe310794f8f092cdfe1",
+        "58ad808c108d2474f22762376c3919d2f9fa8eabf099ea067791c202c9cbc85b",
+        "bd7cc88deccfe217d3818bea5bf644ef25878e76dd77703b6bf140c7e56ff4eb",
+        "02800b75c49955bfe99be0aa64e16cef8e7a3a2af074c590dde190d500ea7e4e",
+        "c7c060c886ed19279d9e0d9810d5316106ea94b4b6bf02863cfc952b8ba6fbe3",
+        "159e8fa704e2d45d91f00efd95e7f8f21a3fa2c3b5e409b487fbf371bfaa0b43",
+        "d610837a0a5a87b671f5fba4ea951a9479c2df1cbe70c5e40ba9bea3928e073f",
+        "d574c8adfee8cd3abb7eef5903a0fdb49066f539466b69e809b833045c9bddff",
+        "4dde7f414465938bc78fcec6ac4733779e482fd656083b6a6e9dd509c9daa54e",
+        "5ffd11ef87e21d3080c0fdc2409d5e758cfc91798236c210d21273aff81adf6c",
+        "3298f7a0adff52490654406ee5a01fccb1bc1a300297c2603415b24130d05704",
+        "d90953e292ce50bf0f77ae31ebedf366a752f4326547caa25ad395dfc3f889b3",
+        "401916a290d35581a9f5e121863d86ec1d361ecd7ad50e62da58bb7c18a4ca28",
+        "ade7770e3c9ffe2b71641f847931b6fdfd89db2fefc75effb7296febcfb0b517",
+        "a8fae222ef823b83666dc5c449583210d07d4ea7e2d3804011841f7226460635",
+        "ae68c462aec8c70511a0cbf2c5f672840c5cb48b1d77df1fd6b83974b5967ea5",
+        "dfbd8b6868d276990f148231f60f1aa4ea34284d977971890e57f2263f980bd3",
+        "3e92b84712f3e9882aab05ff27206aba8a61aac8f1d39896792106203f9f56bc",
+        "74d3b82c0681f96abf111a13071bdb44764c14d6866c0044089fc87a41dfe0d8",
+        "3bc50ef7e84101a960da4cf90c14449f9850ce51d301e4f17c2862eb4d9cad1a",
+        "5f9ae445025d256e55522e59413330651e17ce2d753fa5a4be7d2e03ac10901c",
+        "f2c2d15362e5f7deaa976e2a41e141aa038989a987f07e7ac231e650deb88c2b",
+        "e0ce7c63d1908598eee079980c20df2266d2721b25f2246c49a5648c61c63cb8",
+        "43ef795030b1a9af350859e1a4cb69b422149ddb2b5261061541a1e420e76800",
+        "97c7af9a4306ddff3efa46547578344d1e52d8fdb1bb2f867aa5fec78bdfde70",
+        "f8d1970bd1c1000e5e90ede98dc5a995d20be82fde97304439d5ccf532c6f66a",
+        "6608f1e1a180c7aaae445376130611399c86bc6b959140fd9a6704303d405da4",
+        "53f8b493b049fab08474bfd8f04a2f670d652f63e1fa69d5a151957c1b1761ce",
+        "559a960089e919dc0cd2a606a0df38988ecae014f9f52c7336dbcd0d95e2a852",
+        "a79a0b9bf5ef75cc03a3c26233a879ffd929ac41f8a1b993821191b9fdbfe54a",
+        "9903ac709ebd3629d9dcb891c31bc7ecfe1dd0b51f7dc2c876ca17ab95813f28"
+      ],
+      "lineage": "All 100 inspected Indoor Fire Smoke images, including those excluded from training. The training hood clip is registered with the other Commons recordings.",
+      "purpose": "Output-head transfer, observed on fixed development frames. Scene independence of web-sourced images has not been established."
+    },
+    {
+      "id": "commons-fire-negatives",
+      "manifest": "commons-fire-negatives-v1.manifest.json",
+      "sha256": "00118891ddc79f134565ed0d07add6fbcfcbc0524e26e75c4c2036aab3fe918f",
+      "lineage": "Three original Wikimedia Commons recordings. Keep each original and all its derivatives together. Winter vapor is an outdoor scene.",
+      "purpose": "Local replay of visible lab fog (Limpanuparb et al.), a lit kettle (Monoklon) and outdoor water vapor (Sillerkiil). The kettle window is labeled for appliance light."
+    },
+    {"id": "mmodalfire", "manifest": "mmodalfire-v1.manifest.json", "sha256": "4731d9caedb1bc51ab8dcd297377ec0af0f753cf7bf85d28a23631db8f34c7f1", "lineage": "One source camera and room across all clips. The original manifest pins source videos and sensor files.", "purpose": "Early flame, combustion smoke, water mist and dry ice regressions."},
+    {"id": "kmu-fire-smoke", "manifest": "kmu-fire-smoke-v1.manifest.json", "sha256": "e1836c81374f8b7a321d9c912655ec98f3b3f3427aeda124292e23408cf60426", "lineage": "Both positive clips share a room. Lookalikes are grouped by archive until scene identity is verified.", "purpose": "Already-visible and right-censored smoke plus source-labeled confusers.", "annotation_overrides": {"indoor_night_smoke.mp4": {"last_negative_s": 32}}},
+    {"id": "firesense", "manifest": "firesense-v1.manifest.json", "sha256": "65183ef9ac1c26ce08be553a1a0e90b1a1908feddb6af87c68fb4b82bf3b6daa", "lineage": "Camera and scene overlap is possible across source archives. Unknown relationships are not assumed independent.", "purpose": "Visible hazard transfer, controlled fireplaces and appearance confusers."},
+    {"id": "controlled-flame", "manifest": "controlled-flame-v1.manifest.json", "sha256": "c8bbe358d250d9a4fb3d9666adf6b986c1923b0a5d1a789b642534b9c084eab4", "lineage": "The clip entries pin the individual public source videos and region annotations.", "purpose": "Expected flame in operator-reviewed zones."},
+    {"id": "gmdcsa24", "manifest": "gmdcsa24-v2.1.manifest.json", "sha256": "8d7a45caf43af90ac7dc5188988f361155381430c7f70f0b4bc6407ab5ba2c1c", "lineage": "Split or resample by original subject and environment. Categories share subjects.", "purpose": "Twelve positive fall regressions and sixteen staged ADL clips."},
+    {"id": "legacy-heldout-pilot", "manifest": "heldout-pilot.manifest.json", "sha256": "d57b202601849250f2ba0d44c3efafefe1ddcc8de7c13379e9702254546a0bee", "lineage": "CaucaFall test subjects 8 and 9 and named FURG source recordings. Keep all footage from one captured scene together.", "purpose": "Nine positive fall regressions, ten ADL clips and visible-fire pilot."},
+    {
+      "id": "ucf-fighting018-compact-track",
+      "manifest": "../../tests/fixtures/observations/compact-track.json",
+      "sha256": "a927d0a2e65b4b14fa3232321a30276ecd1372a156da496112f7dc046e180174",
+      "seen_media_sha256": [
+        "a135cc99b9b7d1f314375cc5e29b6a38aa1131544bf0d9ca133a95644668abf6"
+      ],
+      "lineage": "One original UCF Fighting018 recording. Numeric Pose observations cover a grounded person and a crossing runner.",
+      "purpose": "Track identity development regression at measured source timestamps."
+    },
+    {
+      "id": "furg",
+      "manifest": ".local/qualification/holdout/furg/frozen-nov14-manifest.json",
+      "sha256": "71bf1e4b0dca362d824979e3e254356f335218e41f78cda25a24b47c720b57a0",
+      "seen_media_sha256": [
+        "0c12ad8ababe1aef3291ed18f4a73c69b90728ac867e269dd5d145f81fc79011",
+        "1af9a1d4dd42244f8905e5c164088d1fee387a65a401967addad46785d9a4b3b",
+        "2e851792b0bfa29d5ec274b187b2bc4e563a655da25eb08f1a46a138385b1b15",
+        "3c220fb2fed63528b713b3497fbaf8860e6881759d6ddf04c8f2ddea137ad0b4",
+        "423068b833a825b557740770ed704e281d7eb0af8df77df28d8d713b68e6431f",
+        "46cf0e2b2e4b7b628c6029e7bdad213320146e5ad3ed0cf974b93a1183e1b8ae",
+        "5b5d573d03c102c2ccc913bc0cf011d50c75a57189197e2824073758398e04dd",
+        "5ebaf97bd9cea68804d3da5872de778261c23a7ff8ae6299d8830e0f3fcafb60",
+        "6176a6ae902d83305b3c8941f3ffe63bb61956fb4d3a541d96d1a700df922091",
+        "65e392c1ce5eaf29da879403c43aa47bad481526f1315d1a7eced4a3e9e60357",
+        "68f4757b833107b6facf32d5425a4828222ceb0d72081bd1407fded913b73ce5",
+        "9944ba783633107c1b90d7204834cf441d5c11f962404d3f8fddeffb281266f3",
+        "b3e59cf1d8f4916727bc459a0b7c09d5ddfde4b8f0440b9586944abfda7d890c",
+        "e2137769a0ec50cdc5e49911b9e902ae760e9fc35bfa54e1b45de043b69aeef1",
+        "ec26e340444a551a99b5e0c4d7ba3cd6a69ac0669b4277fd526858521268ca2d"
+      ],
+      "lineage": "Group with all FURG recordings in the pilot until source ancestry has been checked.",
+      "purpose": "Visible flame timing and contextual recordings.",
+      "annotation_overrides": {
+        "case2_outside.mp4": {
+          "annotation": "uncertain"
+        }
+      }
+    },
+    {
+      "id": "visifire",
+      "manifest": ".local/qualification/holdout/bilkent-visifire/manifest.json",
+      "sha256": "5b72c40579b7f5638443653b7022c053c2445d7012e27a56f6a938d3077795ee",
+      "seen_media_sha256": [
+        "0f0d154133d4c1debec956d95911dfafe3ac1015430803233bbeadb5aeba3594",
+        "3a5656483ba84bd189bd8660c078b09ef4fc2ec4aedb0a7b718d470862ab3886",
+        "4c51cf205b185ee014936d1b93014d9ea311b6713ef19e746fd57ad380aa83bd",
+        "61ac563cd9d1a080ba6aeafff364b4d9fd8f69bed68e3aa32c5a0606937f88ac",
+        "8d169d97b1cf085798c8d99b11abbf52d181737cc84fc47f7b42251d7573e785",
+        "aaffa80524cdd8dbe6424d6181128c78b9a57daeb099e2e54761f87ea8c2b51f",
+        "c993f0187fd796bd02864baee9a10d7b21724cca2a6e8fd2649987330b43289b",
+        "ddd4c7548f2432a60baff23d1b4c2f014b65c4f8f7bda0c7d795d8cfed1e171b",
+        "e230a00f10bfb55d33fb5defd48fda615b15680f05d956d48058f0ab50cc68a1",
+        "e297984b80c04f1ff7356f094a8924bbde359f0a4abdaea53d4fc050711b1553",
+        "e968f306a512a88f67f7051f71d8d4f3d79ad1a07c2717b0200f5988144f6038",
+        "ee7e7080eb049e4175dca0c11bb7867ba61bff3fe6f4cda580874446f3a3bcb0"
+      ],
+      "lineage": "Forest views can share an incident. Keep source-linked views together; count repeated views as one session for uncertainty.",
+      "purpose": "Outdoor transfer and moving objects."
+    },
+    {"id": "indoor-fire-smoke-images", "manifest": ".local/qualification/holdout/zenodo-indoor-fire-smoke-15826133/manifest.json", "sha256": "dba7f1668bc96b8e0928f1b4aa694810503422a67a7c34308d23a3bf6bf13d11", "lineage": "Source episodes are unknown for some images. Previously excluded exact and filename duplicates do not establish scene independence.", "purpose": "Perception transfer only. The smoke label contains stage fog and humidifier vapor."},
+    {
+      "id": "edinburgh-test1-grounded",
+      "manifest": ".local/qualification/completion-step-12/edinburgh-f17-grounding/manifest.json",
+      "sha256": "93ccf50326b43fcf99fef7b879d63d2e1b266e77ba9ccf079491cfdbe70aa41a",
+      "seen_lineage": [
+        ["edinburgh-test1", "scene_id", "test1"],
+        ["edinburgh-test1", "camera_id", "door"],
+        ["edinburgh-test1", "session_id", "test1"]
+      ],
+      "seen_media_sha256": [
+        "f6b011f4e372a94ff6c7497655e739207af42d826ed7cf6d2e57b0b31566d47e",
+        "ae1f4d89c2afd5dba842305f2ed803954cb79059e8dc462df6cb6cf1bfccd087"
+      ],
+      "lineage": "The visible-fire lead is from Edinburgh Test 1. Related views of the same room stay in development.",
+      "purpose": "Grounded Fire openings and fixed-phase backend comparison."
+    },
+    {
+      "id": "umafall-forward-grounded",
+      "manifest": ".local/qualification/completion-step-12/umafall-f17-grounding/manifest.json",
+      "sha256": "ff6ed52523b7da9d3a2fc04d87493e759dfa271db60364454aadfec1334e473b",
+      "seen_lineage": [
+        ["umafall-v8", "scene_id", "mat-forward"],
+        ["umafall-v8", "camera_id", "mat-camera"],
+        ["umafall-v8", "session_id", "video-demo"],
+        ["umafall-v8", "subject", "forward-volunteer"]
+      ],
+      "seen_media_sha256": [
+        "c3e273c0ff8fcf79cc6166251ec46ff01be0d4972131d6aa2da338da3a058aed",
+        "eebb3fa88265e318adc83a089fab81c6ca5387c85ce155c25fafd127d73f5c9e"
+      ],
+      "lineage": "The staged forward fall belongs to the UMAFall video protocol. Keep footage from the same subject and scene together.",
+      "purpose": "Exact source-time person association and medical opening regression."
+    },
+    {
+      "id": "upfall-camera1-six-trials",
+      "manifest": "upfall-camera1-six-trials-v1.manifest.json",
+      "sha256": "373c57eafee30d24c2a4561c667b52ede84ecccbc58c4dc0c5ec63ea8f9837e5",
+      "seen_lineage": [
+        [
+          "upfall-up",
+          "camera_id",
+          "upfall-camera-1"
+        ],
+        [
+          "upfall-up",
+          "scene_id",
+          "upfall-laboratory"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-02-activity-01-trial-1"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-02-activity-09-trial-1"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-06-activity-05-trial-1"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-06-activity-08-trial-1"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-10-activity-04-trial-1"
+        ],
+        [
+          "upfall-up",
+          "session_id",
+          "subject-10-activity-11-trial-1"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-background-crossing-a"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-background-door-a"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-background-door-b"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-background-glass"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-subject-02"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-subject-06"
+        ],
+        [
+          "upfall-up",
+          "subject",
+          "upfall-subject-10"
+        ]
+      ],
+      "seen_media_sha256": [
+        "20d1a2dee9098728b142d70021698085628a9caa2ae08173f053565f8d97ddc3",
+        "39fa5276f645185b3242d7e20136de15ec7fc954b7cb2a142bb35fe48c9464e1",
+        "4bd60ed1772862bfe0c8d72b35f6303bbfea9f37d71c5d7a1f7bc52baf9d3aa7",
+        "5bf8f1871fa2c7943edd425b9d2f06c690fcdd51857de2de5947d90232bc6281",
+        "6f95793f438db4d24066f2a42f1544ecdc746c6c4b8831100cc784c4a458c4a5",
+        "75ec021d3d453bb9ef2956d166b68bbb7d4b99981ccad1c452ae2dc587f94b3d",
+        "918009df4f16434fae635a8c5c197ae05f55baef851bbd6502c30bff20ec084c",
+        "96fe44da1b00c2a380cf222fa81690ade841ce88d93dd35b8066e1588959c829",
+        "a197e1b919f781e45bb4d131871c026fbfc2cf44b5562a99cbbc657f6a80a749",
+        "b9a88b994f6b948e2af8c3649efa48a5030a5dce7cacab3a6af6369393b2238c",
+        "bf24017eb72026409a343c4ade77f95356056ea5b92836c5fd98737097fcfdf0",
+        "e4f012b32f2c01aa1c06a538f05f3a02579f64b80ab9ec6741f1ef55d872cd70"
+      ],
+      "lineage": "One UP-Fall laboratory camera. Three WCCI training subjects each contribute a prespecified simulated fall and a daily activity. The original Camera1 PNG archive and lossless replay share a source timeline.",
+      "purpose": "Ground the opening to the foreground participant, measure time from the visible onset, and count openings during ordinary activity including already lying on the mat."
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+use std::time::Duration;
+
+use process_wrap::tokio::ChildWrapper;
+use sw_domain::{Observation, ObservationLabel};
+use sw_protocol::worker::{
+    CONFIG_MAX_BYTES, ExecutionTiming, FireProposalResult, INFERENCE_READY, InferenceConfig,
+    InferenceResult, RESULT_MAX_BYTES, TIMED_INFERENCE_READY, Tasks, inference_startup_failure,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::{ChildStdin, ChildStdout},
+};
+use uuid::Uuid;
+
+use crate::{Frame, WorkerBinary, WorkerError, capture_process::reap};
+
+pub(crate) struct InferenceProcess {
+    child: Option<Box<dyn ChildWrapper>>,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    result: Vec<u8>,
+    timed: bool,
+    proposals: bool,
+}
+
+pub(crate) struct CompletedInference {
+    pub result: InferenceResult,
+    pub fire_proposals: Vec<Observation>,
+    pub worker_timing: Option<ExecutionTiming>,
+}
+
+impl InferenceProcess {
+    pub async fn start(
+        binary: &WorkerBinary,
+        config: &InferenceConfig,
+    ) -> Result<Self, WorkerError> {
+        let (timed, proposals) = binary.inference_capabilities().await?;
+        let mut child = binary.spawn(match (timed, proposals) {
+            (true, true) => "infer-v2-proposals",
+            (true, false) => "infer-v2",
+            (false, _) => "infer",
+        })?;
+        let stdin = child.stdin().take().ok_or(WorkerError::Unavailable)?;
+        let stdout = child.stdout().take().ok_or(WorkerError::Unavailable)?;
+        let mut process = Self {
+            child: Some(child),
+            stdin,
+            stdout,
+            result: Vec::new(),
+            timed,
+            proposals: timed && proposals,
+        };
+        // A cold CUDA worker may compile kernels before it can accept live frames.
+        let startup_budget = if config.cuda.is_some() {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(30)
+        };
+        let initialized = tokio::time::timeout(startup_budget, process.bootstrap(config)).await;
+        match initialized {
+            Ok(Ok(())) => Ok(process),
+            Ok(Err(error)) => {
+                process.stop().await?;
+                Err(error)
+            }
+            Err(_) => {
+                process.stop().await?;
+                Err(WorkerError::Deadline)
+            }
+        }
+    }
+
+    async fn bootstrap(&mut self, config: &InferenceConfig) -> Result<(), WorkerError> {
+        let payload = serde_json::to_vec(config).map_err(|_| WorkerError::Config)?;
+        if payload.is_empty() || payload.len() > CONFIG_MAX_BYTES {
+            return Err(WorkerError::Config);
+        }
+        self.stdin.write_u32_le(payload.len() as u32).await?;
+        self.stdin.write_all(&payload).await?;
+        self.stdin.flush().await?;
+        let mut ready = [0; 4];
+        self.stdout.read_exact(&mut ready).await?;
+        if let Some(failure) = inference_startup_failure(ready) {
+            return Err(WorkerError::InferenceStartup(failure));
+        }
+        let expected = if self.timed {
+            TIMED_INFERENCE_READY
+        } else {
+            INFERENCE_READY
+        };
+        if ready != expected {
+            return Err(WorkerError::Config);
+        }
+        Ok(())
+    }
+
+    pub async fn infer(
+        &mut self,
+        frame: &Frame,
+        tasks: Tasks,
+    ) -> Result<CompletedInference, WorkerError> {
+        tokio::time::timeout(Duration::from_secs(2), self.exchange(frame, tasks))
+            .await
+            .map_err(|_| WorkerError::Deadline)?
+    }
+
+    async fn exchange(
+        &mut self,
+        frame: &Frame,
+        tasks: Tasks,
+    ) -> Result<CompletedInference, WorkerError> {
+        let request = Uuid::new_v4();
+        self.stdin.write_all(request.as_bytes()).await?;
+        self.stdin.write_u8(tasks.byte()).await?;
+        self.stdin.write_all(&frame.header.encode()?).await?;
+        self.stdin.write_all(&frame.rgb).await?;
+        self.stdin.flush().await?;
+        let length = self.stdout.read_u32_le().await? as usize;
+        if !(1..=RESULT_MAX_BYTES).contains(&length) {
+            return Err(WorkerError::Config);
+        }
+        self.result.resize(length, 0);
+        self.stdout.read_exact(&mut self.result).await?;
+        let worker_timing = if self.timed {
+            let mut timing = [0; ExecutionTiming::BYTES];
+            self.stdout.read_exact(&mut timing).await?;
+            let timing = ExecutionTiming::decode(timing);
+            if (!tasks.pose() && (timing.pose_run_us > 0 || timing.pose_decode_us > 0))
+                || (!tasks.fire() && (timing.fire_run_us > 0 || timing.fire_decode_us > 0))
+            {
+                return Err(WorkerError::Config);
+            }
+            Some(timing)
+        } else {
+            None
+        };
+        let (result, fire_proposals) = if self.proposals {
+            let result: FireProposalResult =
+                serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?;
+            (result.inference, result.fire_proposals)
+        } else {
+            (
+                serde_json::from_slice(&self.result).map_err(|_| WorkerError::Config)?,
+                Vec::new(),
+            )
+        };
+        if result.request != request
+            || result.pose.is_some() != tasks.pose()
+            || result.fire.is_some() != tasks.fire()
+            || (!tasks.fire() && !fire_proposals.is_empty())
+        {
+            return Err(WorkerError::Config);
+        }
+        if result
+            .pose
+            .as_deref()
+            .is_some_and(|items| !validate(items, frame, true))
+            || result
+                .fire
+                .as_deref()
+                .is_some_and(|items| !validate(items, frame, false))
+            || fire_proposals.len() > 8
+            || !validate(&fire_proposals, frame, false)
+            || fire_proposals
+                .iter()
+                .any(|item| !(f64::from(0.12_f32)..=f64::from(0.20_f32)).contains(&item.score))
+        {
+            return Err(WorkerError::Config);
+        }
+        Ok(CompletedInference {
+            result,
+            fire_proposals,
+            worker_timing,
+        })
+    }
+
+    pub async fn stop(mut self) -> Result<(), WorkerError> {
+        if let Some(child) = &mut self.child {
+            reap(&mut **child).await?;
+        }
+        self.child = None;
+        Ok(())
+    }
+}
+
+/// Check that the same worker bootstrap used by Core reaches ready.
+pub async fn verify_inference_startup(
+    binary: &WorkerBinary,
+    config: &InferenceConfig,
+    lanes: usize,
+) -> Result<(), WorkerError> {
+    let mut workers = Vec::with_capacity(lanes);
+    let startup = async {
+        for _ in 0..lanes {
+            workers.push(InferenceProcess::start(binary, config).await?);
+        }
+        Ok(())
+    }
+    .await;
+    let mut result = startup;
+    for worker in workers {
+        let stopped = worker.stop().await;
+        result = result.and(stopped);
+    }
+    result
+}
+
+impl Drop for InferenceProcess {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.start_kill();
+        }
+    }
+}
+
+fn validate(items: &[Observation], frame: &Frame, pose: bool) -> bool {
+    let width = f64::from(frame.header.width);
+    let height = f64::from(frame.header.height);
+    let Some(source) = frame.header.source_micros else {
+        return false;
+    };
+    let capture_ts = source as f64 / 1_000_000.0;
+    items.len() <= 300
+        && items.iter().all(|item| {
+            item.valid()
+                && item.track_id.is_none()
+                && (item.capture_ts - capture_ts).abs() <= 1e-8
+                && item.region.x1 >= 0.0
+                && item.region.y1 >= 0.0
+                && item.region.x2 <= width
+                && item.region.y2 <= height
+                && if pose {
+                    item.label == ObservationLabel::Person && item.keypoints.len() == 17
+                } else {
+                    item.label != ObservationLabel::Person && item.keypoints.is_empty()
+                }
+        })
+}

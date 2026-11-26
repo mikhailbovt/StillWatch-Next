@@ -1,0 +1,632 @@
+{
+  "models": {
+    "fire": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.001800537109375,
+        "mean_abs": 0.000021232866695506283
+      },
+      "gray": {
+        "above_threshold": 5,
+        "max_abs": 0.002410888671875,
+        "mean_abs": 0.00003232258786810617
+      },
+      "reference_00": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.000518798828125,
+        "mean_abs": 0.000014076896396409879
+      },
+      "reference_01": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.00048828125,
+        "mean_abs": 0.000011802245642907141
+      },
+      "reference_02": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0007476806640625,
+        "mean_abs": 0.000012852856849523773
+      },
+      "reference_03": {
+        "above_threshold": 16,
+        "image": {
+          "full_pipeline": {
+            "actual": 2,
+            "box_max_abs_px": 0.000091552734375,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 2,
+            "score_max_abs": 4.172325134277344e-7
+          },
+          "postprocess": {
+            "actual": 2,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 2,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.000518798828125,
+        "mean_abs": 0.000011810502467397822
+      },
+      "reference_04": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.000732421875,
+        "mean_abs": 0.000014075527287619603
+      },
+      "reference_05": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.00048828125,
+        "mean_abs": 0.000010328579766473828
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.000640869140625,
+        "mean_abs": 0.000012295930236114392
+      }
+    },
+    "pose": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.0084686279296875,
+        "mean_abs": 0.00011521622680710755
+      },
+      "gray": {
+        "above_threshold": 0,
+        "max_abs": 0.0073089599609375,
+        "mean_abs": 0.00010194428055739494
+      },
+      "reference_00": {
+        "above_threshold": 9,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.00018310546875,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0008784693439625416,
+            "joint_confidence_max_abs": 5.96046447642884e-7,
+            "keypoint_max_abs_px": 0.0001220703125,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 1.1920928955078125e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 2.842170943040401e-14,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0008784693439625416,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 5.684341886080802e-14,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0015869140625,
+        "mean_abs": 0.00003308108167082178
+      },
+      "reference_01": {
+        "above_threshold": 10,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.000091552734375,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.00812233285917496,
+            "joint_confidence_max_abs": 6.854534149169922e-7,
+            "keypoint_max_abs_px": 0.00006103515625,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 2.384185791015625e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.00812233285917496,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0029754638671875,
+        "mean_abs": 0.000032190434644105824
+      },
+      "reference_02": {
+        "above_threshold": 13,
+        "image": {
+          "full_pipeline": {
+            "actual": 2,
+            "box_max_abs_px": 0.00018310546875,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 1.8477439880371094e-6,
+            "keypoint_max_abs_px": 0.00030517578125,
+            "missing": 0,
+            "reference": 2,
+            "score_max_abs": 8.642673492431641e-7
+          },
+          "postprocess": {
+            "actual": 2,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 1.1368683772161603e-13,
+            "missing": 0,
+            "reference": 2,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.003143310546875,
+        "mean_abs": 0.00003461694360487501
+      },
+      "reference_03": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.003021240234375,
+        "mean_abs": 0.00003500222686051292
+      },
+      "reference_04": {
+        "above_threshold": 9,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.0001220703125,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0014596761994196304,
+            "joint_confidence_max_abs": 7.748603820800781e-7,
+            "keypoint_max_abs_px": 0.000091552734375,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0014596761994196304,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 2.842170943040401e-14,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.00225830078125,
+        "mean_abs": 0.00003305074014409356
+      },
+      "reference_05": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0032196044921875,
+        "mean_abs": 0.00004380268597774164
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.01071929931640625,
+        "mean_abs": 0.00005603371738817904
+      }
+    },
+    "pose_balanced": {
+      "black": {
+        "above_threshold": 0,
+        "max_abs": 0.002197265625,
+        "mean_abs": 0.000015132708660830918
+      },
+      "gray": {
+        "above_threshold": 14,
+        "max_abs": 0.002777099609375,
+        "mean_abs": 0.000020549873005584147
+      },
+      "reference_00": {
+        "above_threshold": 8,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.000091552734375,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0010180995475113385,
+            "joint_confidence_max_abs": 8.34465026966491e-7,
+            "keypoint_max_abs_px": 0.00018310546875,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 1.7881393432617188e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 2.842170943040401e-14,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0010180995475113385,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 5.684341886080802e-14,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0023345947265625,
+        "mean_abs": 0.000026362498112234232
+      },
+      "reference_01": {
+        "above_threshold": 9,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.0001220703125,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.01085754455134173,
+            "joint_confidence_max_abs": 1.2516975402832031e-6,
+            "keypoint_max_abs_px": 0.00018310546875,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 2.384185791015625e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.01085754455134173,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 5.684341886080802e-14,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.002105712890625,
+        "mean_abs": 0.00002586703550122295
+      },
+      "reference_02": {
+        "above_threshold": 8,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.00018310546875,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 3.635883331298828e-6,
+            "keypoint_max_abs_px": 0.00030517578125,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 6.556510925292969e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": -0.0,
+            "joint_confidence_max_abs": 4.336808689942018e-19,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0028228759765625,
+        "mean_abs": 0.00003031641897046615
+      },
+      "reference_03": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.002777099609375,
+        "mean_abs": 0.00002809998849232151
+      },
+      "reference_04": {
+        "above_threshold": 9,
+        "image": {
+          "full_pipeline": {
+            "actual": 1,
+            "box_max_abs_px": 0.000030517578125,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0020540975162379534,
+            "joint_confidence_max_abs": 4.172325135387567e-7,
+            "keypoint_max_abs_px": 0.000091552734375,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 2.384185791015625e-7
+          },
+          "postprocess": {
+            "actual": 1,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0020540975162379534,
+            "joint_confidence_max_abs": 1.1102230246251565e-16,
+            "keypoint_max_abs_px": 2.842170943040401e-14,
+            "missing": 0,
+            "reference": 1,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.0045166015625,
+        "mean_abs": 0.000023858275685620844
+      },
+      "reference_05": {
+        "above_threshold": 0,
+        "image": {
+          "full_pipeline": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "postprocess": {
+            "actual": 0,
+            "box_max_abs_px": 0.0,
+            "extra": 0,
+            "flag_differences": 0,
+            "histogram_max_l1": 0.0,
+            "joint_confidence_max_abs": 0.0,
+            "keypoint_max_abs_px": 0.0,
+            "missing": 0,
+            "reference": 0,
+            "score_max_abs": 0.0
+          },
+          "tensor_max_abs": 0.0
+        },
+        "max_abs": 0.00273895263671875,
+        "mean_abs": 0.000028518582279568475
+      },
+      "seeded_noise": {
+        "above_threshold": 0,
+        "max_abs": 0.00125885009765625,
+        "mean_abs": 0.000018387140678810335
+      }
+    }
+  },
+  "ort": "ORT Build Info: git-branch=HEAD, git-commit-id=402979a, fp8-kv-cache=1, build type=Release"
+}
