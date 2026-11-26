@@ -1,0 +1,254 @@
+{
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "processor": "x86_64",
+  "physical_cores": 24,
+  "logical_cores": 24,
+  "system_ram_bytes": 33319702528,
+  "core_sha256": "4ae036651a83356d73d5c859be67f72cd6535cbd0555eaba4ee5efeb316570c9",
+  "worker_sha256": "1bafb38f538d56c1a2c5d7a7237708156d5310342d2cfbf65dfb2e7053021aa4",
+  "ffmpeg_sha256": "ed16af623947494a72e284b6eb8ff225f2da22b38b5d5069c2fd4b4ba3384e41",
+  "demo_sha256": "42121b24381b163e057eab7f7fe617269c6a26cc6acde05689222899ea80e656",
+  "model_manifest_sha256": "b1389a94fc0c90d68a49277906e1a4c8b427217b6b2301883b9c0f5dfcb23a8c",
+  "runtime_sha256": "7a7a2cfec3da75774dd8116e6a31fe466b46f5f6901e3fa87350d9391a840bfa",
+  "profile": "cuda-fp32",
+  "cuda_device": 0,
+  "threads_per_worker": 2,
+  "inference_workers": 1,
+  "raw_frame_bytes": 268435456,
+  "fixture_sha256": "d870b5aeb23914a6769ae5a866480db5aa63b2181ace7f5ad1f2f1611e815d77",
+  "repeat": false,
+  "sample_every_seconds": 1,
+  "width": 640,
+  "warmup_seconds": 12,
+  "results": [
+    {
+      "cameras": 1,
+      "seconds": 24.006,
+      "api_p95_ms": 1.0646,
+      "inference_worker_p95_ms_sampled": 21,
+      "analysis_age_p95_ms_sampled": 217,
+      "rss_median_mib": 1279.82,
+      "rss_max_mib": 1281.09,
+      "rss_start_mib": 1279.76,
+      "rss_end_mib": 1281.09,
+      "data_start_bytes": 538438,
+      "data_end_bytes": 538438,
+      "data_max_bytes": 538438,
+      "cpu_percent_one_core": 11.04,
+      "threads_max": 37,
+      "processes_max": 3,
+      "degraded_samples": 0,
+      "analysis_samples": 24,
+      "per_camera": {
+        "5ff9c7ff-fbc7-4624-9655-6054391606f7": {
+          "pose_fps": 4.996,
+          "fire_fps": 1.852,
+          "last_epoch": "1"
+        }
+      }
+    },
+    {
+      "cameras": 4,
+      "seconds": 24.0,
+      "api_p95_ms": 1.0621,
+      "inference_worker_p95_ms_sampled": 19,
+      "analysis_age_p95_ms_sampled": 218,
+      "rss_median_mib": 1298.51,
+      "rss_max_mib": 1299.98,
+      "rss_start_mib": 1298.84,
+      "rss_end_mib": 1297.25,
+      "data_start_bytes": 1229900,
+      "data_end_bytes": 1229900,
+      "data_max_bytes": 1229900,
+      "cpu_percent_one_core": 41.17,
+      "threads_max": 42,
+      "processes_max": 6,
+      "degraded_samples": 0,
+      "analysis_samples": 96,
+      "per_camera": {
+        "212d0863-4687-41bb-bde3-38cc2058d78c": {
+          "pose_fps": 4.993,
+          "fire_fps": 1.867,
+          "last_epoch": "1"
+        },
+        "018b4738-1037-442e-b558-06dafa77658b": {
+          "pose_fps": 4.993,
+          "fire_fps": 1.867,
+          "last_epoch": "1"
+        },
+        "0d575dc9-35db-4e6b-be9b-6a41bd20b737": {
+          "pose_fps": 4.993,
+          "fire_fps": 1.867,
+          "last_epoch": "1"
+        },
+        "14e6dd10-a40e-48fd-8a18-37314c9d1083": {
+          "pose_fps": 4.993,
+          "fire_fps": 1.867,
+          "last_epoch": "1"
+        }
+      }
+    },
+    {
+      "cameras": 8,
+      "seconds": 24.002,
+      "api_p95_ms": 1.1306,
+      "inference_worker_p95_ms_sampled": 18,
+      "analysis_age_p95_ms_sampled": 225,
+      "rss_median_mib": 1345.2,
+      "rss_max_mib": 1350.01,
+      "rss_start_mib": 1344.4,
+      "rss_end_mib": 1348.39,
+      "data_start_bytes": 1889733,
+      "data_end_bytes": 1889733,
+      "data_max_bytes": 1889733,
+      "cpu_percent_one_core": 80.24,
+      "threads_max": 47,
+      "processes_max": 10,
+      "degraded_samples": 0,
+      "analysis_samples": 192,
+      "per_camera": {
+        "8d17487a-506b-4584-9847-f4791b911a01": {
+          "pose_fps": 5.028,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        },
+        "aa25c293-0c6f-4b84-a48a-0825931bbf8c": {
+          "pose_fps": 4.985,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        },
+        "2d1af98f-5000-4d13-bb94-256f15e6be46": {
+          "pose_fps": 4.985,
+          "fire_fps": 1.907,
+          "last_epoch": "1"
+        },
+        "39f9edae-ab17-40e2-b332-d701c5819f9f": {
+          "pose_fps": 5.028,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        },
+        "eedc222a-48fd-4fd3-9c00-4494fc4a4537": {
+          "pose_fps": 4.985,
+          "fire_fps": 1.907,
+          "last_epoch": "1"
+        },
+        "c7a338b8-fad7-42e6-9527-acb00f48f760": {
+          "pose_fps": 4.942,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        },
+        "8e87bc42-9d94-4f18-841b-c3d3c00cb9b7": {
+          "pose_fps": 4.985,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        },
+        "51278959-c100-4e42-a606-4abda6cac289": {
+          "pose_fps": 5.028,
+          "fire_fps": 1.864,
+          "last_epoch": "1"
+        }
+      }
+    },
+    {
+      "cameras": 16,
+      "seconds": 24.014,
+      "api_p95_ms": 0.9806,
+      "inference_worker_p95_ms_sampled": 21,
+      "analysis_age_p95_ms_sampled": 331,
+      "rss_median_mib": 1477.83,
+      "rss_max_mib": 1485.69,
+      "rss_start_mib": 1470.13,
+      "rss_end_mib": 1483.45,
+      "data_start_bytes": 4836438,
+      "data_end_bytes": 7670136,
+      "data_max_bytes": 7670136,
+      "cpu_percent_one_core": 130.34,
+      "threads_max": 53,
+      "processes_max": 18,
+      "degraded_samples": 0,
+      "analysis_samples": 384,
+      "per_camera": {
+        "9e7ec74a-92cf-4b78-90b7-490257cbfe57": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "f0333c28-2737-4f4c-8c7f-41f2d68153dc": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.517,
+          "last_epoch": "1"
+        },
+        "dace779b-ae8f-4feb-baa9-b9ddfbf5d4e5": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.474,
+          "last_epoch": "1"
+        },
+        "14f1bf14-30fc-4623-bb02-4e8d8d5fd1d4": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "d52e226e-3960-45fd-93be-30e1e5828b3b": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "7c029dde-ff1f-41bc-a078-3375c60933e8": {
+          "pose_fps": 3.945,
+          "fire_fps": 1.517,
+          "last_epoch": "1"
+        },
+        "82b2a621-222e-4854-97ca-f779d68d8307": {
+          "pose_fps": 3.945,
+          "fire_fps": 1.517,
+          "last_epoch": "1"
+        },
+        "2f3e19db-2332-44d3-ac35-8ca2de7c3ab9": {
+          "pose_fps": 3.945,
+          "fire_fps": 1.604,
+          "last_epoch": "1"
+        },
+        "fb787208-9aac-4420-b40c-6a31074f00f4": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "3286d727-0dc3-4ae9-87c1-fd86948bf23f": {
+          "pose_fps": 3.945,
+          "fire_fps": 1.517,
+          "last_epoch": "1"
+        },
+        "23c1d362-13c1-4e8d-9e65-ccdecdafcf4a": {
+          "pose_fps": 3.945,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "de8f1713-b2bb-41d3-bd9c-2ff968569f95": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "fb6869ae-a312-415b-bb7c-22cdd6ed9e17": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "aadbea2b-707e-47df-a7d2-3210feedb600": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        },
+        "c88f1bc8-1a4c-4823-9789-027564e47b39": {
+          "pose_fps": 3.989,
+          "fire_fps": 1.517,
+          "last_epoch": "1"
+        },
+        "5d3ba751-9d79-4052-9413-18303168fa2d": {
+          "pose_fps": 3.902,
+          "fire_fps": 1.561,
+          "last_epoch": "1"
+        }
+      }
+    }
+  ]
+}

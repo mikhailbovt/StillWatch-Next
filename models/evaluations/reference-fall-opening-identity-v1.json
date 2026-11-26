@@ -1,0 +1,417 @@
+{
+  "evaluation": "Retrospective reference fall opening identity, development only",
+  "geometry": [
+    640,
+    360
+  ],
+  "annotation": "One visual reviewer marked each visible dataset actor using the decoded source without detection boxes. All opening timestamps from both archived runs were included. The original footage is staged. The labels cover these timestamps only.",
+  "sources": {
+    "gmdcsa24": {
+      "credit": "Ekram Alam and contributors, GMDCSA-24 v2.1",
+      "url": "https://zenodo.org/records/13354453",
+      "actors": 4
+    },
+    "caucafall": {
+      "credit": "Jose Camilo Eraso, Elena Muñoz, Mariela Muñoz and Jesus Pinto, CAUCAFall v4",
+      "url": "https://data.mendeley.com/datasets/7w7fccy7ky/4",
+      "actors": 2
+    }
+  },
+  "source_manifest_sha256": "0892f4e6d602498c0c4eb307452804303ce5fe5896b67827b70021f163a2913f",
+  "original_lineage_sha256": "57cb860e063e386fae9a8d28f655663bd7e225e5dac4146010af4002f1ea485d",
+  "provenance": "The dataset actor identifier comes from the original clip. Author PNGs at CAUCA opening times differed from the decoded AVI and did not meet the preregistered exact-pixel requirement. The coordinates below are independent manual annotations on the actual replay images.",
+  "minimum_subject_iou": 0.3,
+  "evaluation_sha256": "1af038cbd68c2b0ee573a09bfc3ad8c3eddf708e2c04b0b09f4578ed187f97b6",
+  "windows_replay_sha256": "14c5f761af00eac9d145e75cdcee2b90f283984efde25d9a557181ec20c70659",
+  "cuda_replay_sha256": "f8e49b7d37eca3faf5375c7ac72a004f4cbb7893b2ab3af899e330e9fc93b84f",
+  "clips": [
+    {
+      "file": "gmdcsa24-subject-1-fall-03.mp4",
+      "sha256": "7672fa7b98111a0601c007289c2040ebf15f354e8239ef037ba36f877eebd123",
+      "original_sha256": "b17c5217c0050c959c45f7ead8ce80fa1c459d62109f25ea72461ac729d5307c",
+      "dataset_subject": "1",
+      "frames": [
+        {
+          "pts_us": 2800000,
+          "decoded_png_sha256": "db1313b20a4180b791799150d1b0e6e0842072bb6b1a63b3f465287a4bf505a5",
+          "visible_person_xyxy_px": [
+            140,
+            145,
+            362,
+            326
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-1-fall-08.mp4",
+      "sha256": "83bb980b8779d303581aa116068e6f590ddb2d0d0574be1efe106ea63e3c61a4",
+      "original_sha256": "db2f0ead5f8daf17df4b9fbad5ed30debeffd37ec451eb72ec004e1e8972fbb9",
+      "dataset_subject": "1",
+      "frames": [
+        {
+          "pts_us": 1400000,
+          "decoded_png_sha256": "baca75f9a5fa6f9cd54ae75c98171bc4cf95696252ab0cfcdd6b89ddd05201ed",
+          "visible_person_xyxy_px": [
+            230,
+            157,
+            423,
+            315
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-1-fall-12.mp4",
+      "sha256": "c64483e5b02e53944bf2ed0da1162da9ae65947398a7c7d56fd164ee4142d202",
+      "original_sha256": "2354ba6441e0fc2173e283ed34cb2a75a08a45b01144882f8db5291cfb113851",
+      "dataset_subject": "1",
+      "frames": [
+        {
+          "pts_us": 2400000,
+          "decoded_png_sha256": "345276c407e7d54e51a0cc90bdf873404640c1530386eb57b4eca30534b6168b",
+          "visible_person_xyxy_px": [
+            307,
+            92,
+            475,
+            360
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-2-fall-02.mp4",
+      "sha256": "0cad9baaebb37f74c0773d4e20e3200d80f1b3a18fb68e7762d2d663b5ba4b51",
+      "original_sha256": "a8825d89c0955f6817c74438f4900b022988a43aca7b99ccab34c086fc14b429",
+      "dataset_subject": "2",
+      "frames": [
+        {
+          "pts_us": 3400000,
+          "decoded_png_sha256": "558a42517f638cd4ea1aa8d693d20393a9b254edfd1a2081df2a2e1c711766eb",
+          "visible_person_xyxy_px": [
+            205,
+            193,
+            398,
+            360
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-2-fall-04.mp4",
+      "sha256": "57dcb3cc9b907c30c76accd2408b1b3b29592562a228e64ce467b78f6d271a20",
+      "original_sha256": "f249125e2c270bcdc71b09c34dfa4d398ae027fd00e9304bc6f41d1e5cd2663b",
+      "dataset_subject": "2",
+      "frames": [
+        {
+          "pts_us": 4200000,
+          "decoded_png_sha256": "1b16af297a596805adb0c26e17275a2177f53c514e98df967d9698ed561cfc9a",
+          "visible_person_xyxy_px": [
+            155,
+            168,
+            349,
+            320
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-2-fall-19.mp4",
+      "sha256": "c0279c093ea9d711076893730ccb5cf723c3273bd9ab540b8baaccd9cf23c9b9",
+      "original_sha256": "92b7789b30b1cd1381263a582f5292296060d5929b45dee2396271b8711d2b3e",
+      "dataset_subject": "2",
+      "frames": [
+        {
+          "pts_us": 8600000,
+          "decoded_png_sha256": "08b92ce9335c140659656309fd7ae000d8a03b77d95c03fd2d5e28c851165f17",
+          "visible_person_xyxy_px": [
+            107,
+            114,
+            355,
+            324
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-3-fall-03.mp4",
+      "sha256": "2cc9d2d9f61c2d5ac18abe1831ca17a853b609ab092967e45b8a9e7710d07617",
+      "original_sha256": "267abab9b0ca7f4ef8425e2bfb2272ffeae1165fc2e3523ca1a6e0a62046b912",
+      "dataset_subject": "3",
+      "frames": [
+        {
+          "pts_us": 2000000,
+          "decoded_png_sha256": "85ce6ad584786a3c6e42b5ef1252604c007155212d68de7f32f18e23756dffbc",
+          "visible_person_xyxy_px": [
+            298,
+            146,
+            451,
+            318
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-3-fall-10.mp4",
+      "sha256": "9f7bbbfeed9f7da18923eb531f510384634df810ba271da212a01592160a53ac",
+      "original_sha256": "c757966a85eca4190186ed897c0cab13e6242abf6fe78af925d6eddb8cb5a6df",
+      "dataset_subject": "3",
+      "frames": [
+        {
+          "pts_us": 2000000,
+          "decoded_png_sha256": "ff3dcf964c3e9e3ca0bc409006b09e0a971047560ec31eeffcea66315fbea5af",
+          "visible_person_xyxy_px": [
+            180,
+            155,
+            395,
+            272
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-3-fall-18.mp4",
+      "sha256": "675d66259fb723b080d554471c4df41a27148191e4897efc0c8121601b8d7f2b",
+      "original_sha256": "abaced84cd40b09fa0a31dddad8d947247bf3a717878fb423c1cc4de782a6a86",
+      "dataset_subject": "3",
+      "frames": [
+        {
+          "pts_us": 5000000,
+          "decoded_png_sha256": "fbbcac537e633c860fab46759cfd0121a3cb6c09d7c98e93b3b2b6ad05002625",
+          "visible_person_xyxy_px": [
+            222,
+            222,
+            389,
+            360
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-4-fall-05.mp4",
+      "sha256": "db94c5f80f51979c373fcfe0cd086b23a7ab92168f3c12a1d2d18004555862af",
+      "original_sha256": "f9bb9dc48699ec993413554c0b55e9c7bb9acfc6372b69df305a4943a26e5965",
+      "dataset_subject": "4",
+      "frames": [
+        {
+          "pts_us": 3200000,
+          "decoded_png_sha256": "b3514d77ab34f17c02c7c90b541c7a17ef8647d76bf432d5b52a74cd1e0fb5ef",
+          "visible_person_xyxy_px": [
+            137,
+            148,
+            351,
+            227
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-4-fall-08.mp4",
+      "sha256": "c305477641eb7bda90a9c86396d86d714efc73d98d08157d15e828ede48ab9a0",
+      "original_sha256": "2ac92f95aff7b35deac501250f17c0b406f1c707632f4080007791b26a6e4bc1",
+      "dataset_subject": "4",
+      "frames": [
+        {
+          "pts_us": 2800000,
+          "decoded_png_sha256": "4a9b8d0d64c0e90a7faed81d28eb6b8f4ed818207223a5c33e06f1dde11d9c19",
+          "visible_person_xyxy_px": [
+            101,
+            159,
+            318,
+            292
+          ]
+        }
+      ]
+    },
+    {
+      "file": "gmdcsa24-subject-4-fall-10.mp4",
+      "sha256": "e2ae3faef89830dc3062f70dd1bdeda2161582186d09f3175231421781a4f42b",
+      "original_sha256": "e00d0a0d827eb19a71a2de989af2b47fe7181dbe1c13f30ff32c71932b10e068",
+      "dataset_subject": "4",
+      "frames": [
+        {
+          "pts_us": 3000000,
+          "decoded_png_sha256": "b3fa4902a285a0ec55981680b3380ab27bc7c3a31fe2c89808ceadf55b2cf4df",
+          "visible_person_xyxy_px": [
+            101,
+            240,
+            330,
+            357
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallbackwardss8.mp4",
+      "sha256": "619b10ff813a69ed75f458e72a6b33d067b8b460df19edba37cff195d454f9e7",
+      "original_sha256": "8ec4590a85bc8a10d262f1f246305fdaac96178e5412677af7f69f67edf05cad",
+      "dataset_subject": "Subject.8",
+      "frames": [
+        {
+          "pts_us": 2400000,
+          "decoded_png_sha256": "7e00dac9061172c634778f25828044277add6657dbec4078b0b84fddfd553cb5",
+          "visible_person_xyxy_px": [
+            239,
+            94,
+            306,
+            242
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallforwards8.mp4",
+      "sha256": "1d10297b6b9085853567c78ed3d79fc84aa042aa149f16a2787dec3f71b79c84",
+      "original_sha256": "ac6a716da6471aa7d3f9a0f4cfeda57b32d2245bfa9d326c0bcb5cef1eca13e1",
+      "dataset_subject": "Subject.8",
+      "frames": [
+        {
+          "pts_us": 1200000,
+          "decoded_png_sha256": "8300b7d9e1fcb0261ddda7e199b76122ca913788863749a8211ebd63627a0179",
+          "visible_person_xyxy_px": [
+            258,
+            83,
+            318,
+            185
+          ]
+        },
+        {
+          "pts_us": 2600000,
+          "decoded_png_sha256": "e2728e0026767d3293526d00cf882af2e7bb747457006075d62aa31d1091f26d",
+          "visible_person_xyxy_px": [
+            273,
+            162,
+            330,
+            341
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallforwards9.mp4",
+      "sha256": "abdb1eb8b560960996cec0c1fd0a65cd2e7813c2ad8e15ccceaee83d5efd8e35",
+      "original_sha256": "79516c87fba3c8eb1f3d1fb6608d84d40fd169258c426b2395e66c195c76a61d",
+      "dataset_subject": "Subject.9",
+      "frames": [
+        {
+          "pts_us": 2000000,
+          "decoded_png_sha256": "2cc7a06c1bdeb8bef5c1bc1b17a4be409e7d10b5d79e3ff195240420ab7d1212",
+          "visible_person_xyxy_px": [
+            239,
+            89,
+            327,
+            208
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-falllefts8.mp4",
+      "sha256": "4fe687eb0679c043b286d9300e5177c47e14522f62490c84cd374ad1b98cd70f",
+      "original_sha256": "9e1f587661587c39244c351a8c9362e7afb021c8e3106d69d81fa26d1eefb4ca",
+      "dataset_subject": "Subject.8",
+      "frames": [
+        {
+          "pts_us": 1800000,
+          "decoded_png_sha256": "9eba8821e5e4a32d1f51491c07a910ecd2d041cd3eb789ae8f174356cade25e8",
+          "visible_person_xyxy_px": [
+            200,
+            106,
+            285,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-falllefts9.mp4",
+      "sha256": "8c9e539daae44f329e5a2f683300a4541640f67fdd3f086fda89d5134bde786e",
+      "original_sha256": "c4fa50b461e4e2cf1a511ce6925fdc03c44de0a54ba2505cc0cf451a7e9b6da3",
+      "dataset_subject": "Subject.9",
+      "frames": [
+        {
+          "pts_us": 1600000,
+          "decoded_png_sha256": "4ca2ee1625d38cb924932e3ec541ca4bd987a74c884109c1d90115bf419d51cc",
+          "visible_person_xyxy_px": [
+            201,
+            91,
+            276,
+            213
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallrights8.mp4",
+      "sha256": "0de29cb57845ba239ad65836ed21000e248974251d342138f626e926c616c2b0",
+      "original_sha256": "9baae58db53584b2d036ab722bbc0516ff56788918e616c4e8ab6af20611e05a",
+      "dataset_subject": "Subject.8",
+      "frames": [
+        {
+          "pts_us": 2400000,
+          "decoded_png_sha256": "e4f5e1f54f92ade5fcf1cb10d617deae059ccdf5edd2c82a75e8dd27e8eace58",
+          "visible_person_xyxy_px": [
+            329,
+            132,
+            419,
+            228
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallrights9.mp4",
+      "sha256": "d445130e76a752c3c0621fe1077b0435b655f302d63e8cc640eb991ab97122e7",
+      "original_sha256": "db4040ba2934980413adc82a37a0630d25a18003cf212cf2b93c3d91f4cf8631",
+      "dataset_subject": "Subject.9",
+      "frames": [
+        {
+          "pts_us": 2200000,
+          "decoded_png_sha256": "7019c5cc0c1d4d808d0d93a4f53817cf51d3ca898e648b0e71d0bf30094662c5",
+          "visible_person_xyxy_px": [
+            295,
+            91,
+            415,
+            242
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallsittings8.mp4",
+      "sha256": "19bf4712a8dc1380e749683da346af2371572b353bd08db1e6ee79760323f0d9",
+      "original_sha256": "9595fb85ae150c298b965824f527437e2ee9183dc245de9ed8183f03e7a93f5e",
+      "dataset_subject": "Subject.8",
+      "frames": [
+        {
+          "pts_us": 3800000,
+          "decoded_png_sha256": "0ac6b1645370c17ba9d09d4946ab3114c6c2f021cf1b52eb55a9c9f9332a37db",
+          "visible_person_xyxy_px": [
+            214,
+            176,
+            370,
+            284
+          ]
+        }
+      ]
+    },
+    {
+      "file": "caucafall-reference-fallsittings9.mp4",
+      "sha256": "a9114c722f026a72acc4c2be0268109df0e301061d2b9e39f7c60847bd962206",
+      "original_sha256": "d531f4785f188f6dd94ef354557be1abf6715065f0431ee7fd65c72f55108a58",
+      "dataset_subject": "Subject.9",
+      "frames": [
+        {
+          "pts_us": 2800000,
+          "decoded_png_sha256": "4302749836ea3190a12aeb45f56d152e97fb11ed79f151fe5cf8eb13ecb3ba3b",
+          "visible_person_xyxy_px": [
+            219,
+            173,
+            313,
+            289
+          ]
+        }
+      ]
+    }
+  ]
+}

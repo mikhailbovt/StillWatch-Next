@@ -1,0 +1,163 @@
+{
+  "schema": "stillwatch-development-baseline-v1",
+  "reference_source_revision": "525fd096bd5e834a51f9bb3086b37bf079a6406c",
+  "scope": "development_and_regression_only",
+  "source_root": ".local/qualification/completion-step-12/incoming-1ff57abd",
+  "runs": [
+    {
+      "path": "native-r1/mmodal-full.json",
+      "sha256": "1d21f9714df35a294e395dc782024da0f57bab10553e9ac27d5c3249f35938d2",
+      "status": "verified",
+      "clips": 8,
+      "inference": {
+        "backend": "cpu",
+        "threads_per_worker": 3,
+        "cuda": null,
+        "core_runtime_threads": 24,
+        "maximum_workers": 4
+      },
+      "manifest_sha256": "f219d92fc42c76443bf14e6457713d65bcc0499294bbbaf8dc92ab81952879ba",
+      "quality_contract_sha256": "0be092c6e563cde63d9bb7382f48c382537f6171db07e13e34cec711427b5b2c",
+      "development_corpora_sha256": "c3ae13edc32e73110a359fe1234dd625d76b97ccffca1f9f50b8a3a1fb98079a",
+      "core_sha256": "27a9e94c8a5f12337b92d1c71c3e2ba50817a32e7572496649bb944c6f1b5008",
+      "worker_sha256": "f7df5790fc6e411ea39cee2015fdbb25e045e21f2489b3cc2e765bd1144d1dec",
+      "model_manifest_sha256": "79bdd257d5d1e17bd1966a5b3880e23c7429ed7ce5ba489c17813712f966915b",
+      "ort_sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c",
+      "receipts": {
+        "6a03b326-700f-42f3-8382-b14005828c64.jsonl": {
+          "sha256": "ba4cf19a405c42d3f3fe98b9e1dfa7a9a51c207f6fee4e4a6581a341e98b81a1",
+          "file": "6a03b326-700f-42f3-8382-b14005828c64.jsonl",
+          "rows": 2532
+        },
+        "7530cfaf-2292-4612-94aa-c5affd5c2826.jsonl": {
+          "sha256": "efae506767f266a6a57ee1988173c6d172928643c0cc14283e77df569e4831f0",
+          "file": "7530cfaf-2292-4612-94aa-c5affd5c2826.jsonl",
+          "rows": 2523
+        }
+      },
+      "accepted_slots": 1440,
+      "incident_openings": 5,
+      "clips_without_policy_receipts": 8,
+      "policy_versions": [
+        "local-policy-9"
+      ]
+    },
+    {
+      "path": "native-r2/nist.json",
+      "sha256": "37b1b9ae76b4f1e0015f9f8098257cc438af5c6171ec79703424ae2dde1ff27a",
+      "status": "verified",
+      "clips": 1,
+      "inference": {
+        "backend": "cpu",
+        "threads_per_worker": 3,
+        "cuda": null,
+        "core_runtime_threads": 24,
+        "maximum_workers": 1
+      },
+      "manifest_sha256": "e68d7cf77c0562b33ec2ce0c3b4866dd18d358f98b721ddb4b85c4c9c88d85e4",
+      "quality_contract_sha256": "0be092c6e563cde63d9bb7382f48c382537f6171db07e13e34cec711427b5b2c",
+      "development_corpora_sha256": "c3ae13edc32e73110a359fe1234dd625d76b97ccffca1f9f50b8a3a1fb98079a",
+      "core_sha256": "15eabf15cd960d50206937991d8d82b9cdbbd4a0dd6ef70bc1e8997d03472b0b",
+      "worker_sha256": "f7df5790fc6e411ea39cee2015fdbb25e045e21f2489b3cc2e765bd1144d1dec",
+      "model_manifest_sha256": "bdc4fc0a24490d6ac54fe1345c9002d44ad9826edd491f31e370a304be3ba4b3",
+      "ort_sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c",
+      "receipts": {
+        "162d4dc7-be8c-453a-82bb-5bac70dc5507.jsonl": {
+          "sha256": "016c21b9d499362a7862b1bcd40fc63449903a63d58ce634aa591dc2fedd59ce",
+          "file": "162d4dc7-be8c-453a-82bb-5bac70dc5507.jsonl",
+          "rows": 2286
+        }
+      },
+      "accepted_slots": 326,
+      "incident_openings": 2,
+      "clips_without_policy_receipts": 0,
+      "policy_versions": [
+        "local-policy-9"
+      ]
+    },
+    {
+      "path": "native-r2/upfall.json",
+      "sha256": "f70c020a3d2e929f9b9841654110e3c62d16b5919bb1c92f75e8ad494fa91266",
+      "status": "verified",
+      "clips": 6,
+      "inference": {
+        "backend": "cpu",
+        "threads_per_worker": 3,
+        "cuda": null,
+        "core_runtime_threads": 24,
+        "maximum_workers": 2
+      },
+      "manifest_sha256": "373c57eafee30d24c2a4561c667b52ede84ecccbc58c4dc0c5ec63ea8f9837e5",
+      "quality_contract_sha256": "0be092c6e563cde63d9bb7382f48c382537f6171db07e13e34cec711427b5b2c",
+      "development_corpora_sha256": "c3ae13edc32e73110a359fe1234dd625d76b97ccffca1f9f50b8a3a1fb98079a",
+      "core_sha256": "15eabf15cd960d50206937991d8d82b9cdbbd4a0dd6ef70bc1e8997d03472b0b",
+      "worker_sha256": "f7df5790fc6e411ea39cee2015fdbb25e045e21f2489b3cc2e765bd1144d1dec",
+      "model_manifest_sha256": "bdc4fc0a24490d6ac54fe1345c9002d44ad9826edd491f31e370a304be3ba4b3",
+      "ort_sha256": "0c42dc4e278f0968fdf9ebf1b1e54a74c657a9942e70803e453c91993451cf4c",
+      "receipts": {
+        "5a70ce91-3cbd-4c98-8971-029d399c119d.jsonl": {
+          "sha256": "b0f36df07ab1d1fbf2d31dd148fa401a5bd886653f941f982e85a7305de47d67",
+          "file": "5a70ce91-3cbd-4c98-8971-029d399c119d.jsonl",
+          "rows": 286
+        },
+        "79d6c5d0-6f9c-4f8b-b62a-b7b36b40b0ac.jsonl": {
+          "sha256": "15f1f7352368474f3c20577558a02c4651a8e454628fb2a2ffff191ca6482cdb",
+          "file": "79d6c5d0-6f9c-4f8b-b62a-b7b36b40b0ac.jsonl",
+          "rows": 976
+        },
+        "b58505ff-652d-442e-bb2f-14d7182f2462.jsonl": {
+          "sha256": "1eea472f8ce3180c904de51a3941a5f026a98d2601c646031f066292a13416e3",
+          "file": "b58505ff-652d-442e-bb2f-14d7182f2462.jsonl",
+          "rows": 979
+        }
+      },
+      "accepted_slots": 790,
+      "incident_openings": 7,
+      "clips_without_policy_receipts": 0,
+      "policy_versions": [
+        "local-policy-9"
+      ]
+    },
+    {
+      "path": "native-r2/mist-cuda.json",
+      "sha256": "08196f83642ce417565ad3b8aa48c23fdb39a4377f3ba701626a358f1c62367f",
+      "status": "verified",
+      "clips": 1,
+      "inference": {
+        "backend": "cuda",
+        "threads_per_worker": 2,
+        "cuda": {
+          "device": 0,
+          "provider_sha256": "5ea2ec896db647cd9bb1ab08e943cda07d497975b6d6b967a2bd88b8a1303f00",
+          "shared_sha256": "c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772",
+          "graph_shape": [
+            384,
+            640
+          ]
+        },
+        "core_runtime_threads": 4,
+        "maximum_workers": 1
+      },
+      "manifest_sha256": "570a1b71c481ff1085c2700ce7b6de96aa7f9d375c114d1591862f4c61996739",
+      "quality_contract_sha256": "0be092c6e563cde63d9bb7382f48c382537f6171db07e13e34cec711427b5b2c",
+      "development_corpora_sha256": "c3ae13edc32e73110a359fe1234dd625d76b97ccffca1f9f50b8a3a1fb98079a",
+      "core_sha256": "2db79a348f991f6eb52b389d8ba9ca5c45253f94643720a9b99d6763f2674724",
+      "worker_sha256": "a64e87216ef1da2d6a076c5aed101349c03d4d7d5291e9c61fdfb5ebf25fd782",
+      "model_manifest_sha256": "79bdd257d5d1e17bd1966a5b3880e23c7429ed7ce5ba489c17813712f966915b",
+      "ort_sha256": "7a7a2cfec3da75774dd8116e6a31fe466b46f5f6901e3fa87350d9391a840bfa",
+      "receipts": {
+        "8ffaf6ab-504f-4722-9f67-a2869844d991.jsonl": {
+          "sha256": "d7ebfdb4d143e73560f86fa52759d3eea2499f906799e4229e7582d824d55345",
+          "file": "8ffaf6ab-504f-4722-9f67-a2869844d991.jsonl",
+          "rows": 283
+        }
+      },
+      "accepted_slots": 40,
+      "incident_openings": 1,
+      "clips_without_policy_receipts": 0,
+      "policy_versions": [
+        "local-policy-9"
+      ]
+    }
+  ]
+}

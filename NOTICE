@@ -1,0 +1,8 @@
+StillWatch Next
+
+Includes work based on Stillwatch, Copyright 2026 Mikhail Bovt.
+The baseline Stillwatch application source code is licensed under Apache-2.0.
+See the baseline's THIRD_PARTY_NOTICES.md for its weights and datasets.
+
+StillWatch Next application code is covered by this repository's LICENSE.
+Model weights and native libraries retain their own licenses and notices.

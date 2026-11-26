@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InferenceResult",
+  "type": "object",
+  "properties": {
+    "elapsed_ms": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "fire": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Observation"
+      }
+    },
+    "pose": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Observation"
+      }
+    },
+    "request": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "request",
+    "elapsed_ms"
+  ],
+  "$defs": {
+    "Box2d": {
+      "type": "object",
+      "properties": {
+        "x1": {
+          "type": "number",
+          "format": "double"
+        },
+        "x2": {
+          "type": "number",
+          "format": "double"
+        },
+        "y1": {
+          "type": "number",
+          "format": "double"
+        },
+        "y2": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "x1",
+        "y1",
+        "x2",
+        "y2"
+      ]
+    },
+    "Keypoint": {
+      "type": "array",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Observation": {
+      "type": "object",
+      "properties": {
+        "association_uncertain": {
+          "type": "boolean",
+          "default": false
+        },
+        "box": {
+          "$ref": "#/$defs/Box2d"
+        },
+        "capture_ts": {
+          "type": "number",
+          "format": "double"
+        },
+        "keypoints": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Keypoint"
+          }
+        },
+        "label": {
+          "$ref": "#/$defs/ObservationLabel"
+        },
+        "limited": {
+          "type": "boolean",
+          "default": false
+        },
+        "score": {
+          "type": "number",
+          "format": "double"
+        },
+        "torso_histogram": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "track_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "capture_ts",
+        "box",
+        "score",
+        "label"
+      ]
+    },
+    "ObservationLabel": {
+      "type": "string",
+      "enum": [
+        "person",
+        "smoke",
+        "fire"
+      ]
+    }
+  }
+}

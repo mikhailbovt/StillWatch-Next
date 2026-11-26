@@ -1,0 +1,13 @@
+[project]
+name = "stillwatch-sdk"
+version = "1.0.0"
+description = "Pinned-TLS sync and async clients for the StillWatch v2 API"
+requires-python = ">=3.11"
+dependencies = ["httpx==0.28.1", "anyio==4.15.1", "cryptography>=46,<50"]
+
+[build-system]
+requires = ["hatchling>=1.28,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stillwatch_sdk"]

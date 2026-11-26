@@ -1,0 +1,223 @@
+#![forbid(unsafe_code)]
+
+mod activate;
+mod capture;
+#[cfg(feature = "diagnostics")]
+mod fire_scale;
+mod inference;
+mod parity;
+
+use std::{
+    ffi::OsString,
+    path::Path,
+    sync::{Arc, atomic::AtomicBool},
+};
+
+use anyhow::{Context, Result, bail, ensure};
+use inference::Mode;
+use serde_json::json;
+use sw_capture::{Decoder, PtsQuality, ReadLimits};
+use sw_protocol::worker::{CAPTURE_SOURCE_EXIT, CudaConfig, ModelSelection};
+
+fn main() -> Result<()> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [command]
+            if command == "capture"
+                || command == "capture-with-codec"
+                || command == "capture-with-source-metadata" =>
+        {
+            match capture::run(
+                command != "capture",
+                command == "capture-with-source-metadata",
+            ) {
+                Err(error) if error.is::<sw_capture::CaptureError>() => {
+                    eprintln!("Capture source is unavailable");
+                    std::process::exit(CAPTURE_SOURCE_EXIT);
+                }
+                result => result,
+            }
+        }
+        [command] if command == "capture-devices" => capture::devices(),
+        [command] if command == "infer" => inference::run(Mode::Legacy),
+        [command] if command == "infer-v2" => inference::run(Mode::Timed),
+        [command] if command == "infer-v2-proposals" => inference::run(Mode::TimedProposals),
+        [command] if command == "diagnose-fire" => inference::run(Mode::FireDiagnostic),
+        #[cfg(feature = "diagnostics")]
+        [command, variant] if command == "diagnose-fire-scale" => {
+            fire_scale::run(text_arg(variant)?)
+        }
+        [command] if command == "capture-doctor" => {
+            println!(
+                "{}",
+                json!({"rtsp_peer_confined": sw_capture::confined_rtsp_available(), "capture_codec": true,
+                    "inference_timing_v2": true, "fire_proposals": true, "capture_source_metadata": true,
+                    "decoder_identity": sw_capture::decoder_identity()})
+            );
+            Ok(())
+        }
+        [command] if command == "version" || command == "--version" => {
+            println!("stillwatch-worker {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        [command, source, count] if command == "decode-file" => {
+            decode_file(Path::new(source), text_arg(count)?.parse()?)
+        }
+        [
+            command,
+            selection,
+            library,
+            library_sha,
+            pack,
+            manifest_sha,
+            flags @ ..,
+        ] if command == "activate-model-pack" => activate::publish(
+            Path::new(selection),
+            ModelSelection {
+                library: Path::new(library).canonicalize()?,
+                library_sha256: text_arg(library_sha)?.to_ascii_lowercase(),
+                models: Path::new(pack).canonicalize()?,
+                manifest_sha256: text_arg(manifest_sha)?.to_ascii_lowercase(),
+                cuda: cuda_args(flags)?,
+            },
+        ),
+        [
+            command,
+            profile_dir,
+            library,
+            library_sha,
+            model_pack,
+            manifest_sha,
+            flags @ ..,
+        ] if command == "profile-model-pack" => {
+            let dir = Path::new(profile_dir);
+            std::fs::create_dir(dir).context("create a new profiling output directory")?;
+            parity::verify_with_profile(
+                Path::new(library),
+                text_arg(library_sha)?,
+                Path::new(model_pack),
+                text_arg(manifest_sha)?,
+                cuda_args(flags)?,
+                Some(dir),
+            )
+        }
+        [
+            command,
+            library,
+            library_sha,
+            model_pack,
+            manifest_sha,
+            flags @ ..,
+        ] if command == "doctor" || command == "verify-model-pack" => {
+            let cuda = cuda_args(flags)?;
+            let library = Path::new(library);
+            let library_sha = text_arg(library_sha)?;
+            let model_pack = Path::new(model_pack);
+            let manifest_sha = text_arg(manifest_sha)?;
+            if command == "verify-model-pack" {
+                return parity::verify(library, library_sha, model_pack, manifest_sha, cuda);
+            }
+            let capture_shape = inference::graph_shape(cuda.as_ref())?;
+            let provider = if cuda.is_some() { "cuda" } else { "cpu" };
+            let pack = sw_inference::ModelPack::open(model_pack, manifest_sha)?;
+            let runtime = sw_inference::Runtime::load(
+                library,
+                library_sha,
+                1,
+                cuda.map(inference::cuda_provider),
+            )?;
+            for id in sw_inference::ModelId::ALL {
+                if let Some(shape) = capture_shape.filter(|_| id != sw_inference::ModelId::Pose) {
+                    pack.load_captured(&runtime, id, shape)?;
+                } else {
+                    pack.load(&runtime, id)?;
+                }
+            }
+            println!(
+                "{}",
+                json!({"capture": true, "rtsp_peer_confined": sw_capture::confined_rtsp_available(),
+                    "inference": true, "models": 3, "provider": provider})
+            );
+            Ok(())
+        }
+        _ => bail!(
+            "usage: stillwatch-worker decode-file VIDEO COUNT | verify-model-pack ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256 | activate-model-pack SELECTION_FILE ORT_LIBRARY ORT_SHA256 MODEL_PACK MANIFEST_SHA256"
+        ),
+    }
+}
+
+fn cuda_args(flags: &[OsString]) -> Result<Option<CudaConfig>> {
+    if flags.is_empty() {
+        return Ok(None);
+    }
+    let [option, device, provider, shared, extra @ ..] = flags else {
+        bail!("expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256");
+    };
+    ensure!(
+        option == "--cuda",
+        "expected --cuda DEVICE PROVIDER_SHA256 SHARED_SHA256"
+    );
+    let graph_shape = match extra {
+        [] => None,
+        [option, h, w] if option == "--cuda-graph-shape" => {
+            Some([text_arg(h)?.parse()?, text_arg(w)?.parse()?])
+        }
+        _ => bail!("expected --cuda-graph-shape HEIGHT WIDTH"),
+    };
+    Ok(Some(CudaConfig {
+        device: text_arg(device)?.parse()?,
+        provider_sha256: text_arg(provider)?.to_ascii_lowercase(),
+        shared_sha256: text_arg(shared)?.to_ascii_lowercase(),
+        graph_shape,
+    }))
+}
+
+fn text_arg(value: &OsString) -> Result<&str> {
+    value.to_str().context("argument must be UTF-8")
+}
+
+fn decode_file(path: &Path, count: usize) -> Result<()> {
+    ensure!(
+        (1..=50_000).contains(&count),
+        "frame count must be in 1..=50000"
+    );
+    let mut reader = Decoder::open_file(
+        path,
+        ReadLimits::default(),
+        Arc::new(AtomicBool::new(false)),
+    )?;
+    let mut decoded = 0;
+    let mut native_pts = 0;
+    let mut first_source_micros = None;
+    let mut last_source_micros = None;
+    let mut regressions = 0;
+    let mut dimensions = None;
+    let mut corrupt_frames = 0;
+    for _ in 0..count {
+        let Some(frame) = reader.next_frame()? else {
+            break;
+        };
+        decoded += 1;
+        dimensions = Some([frame.width, frame.height]);
+        native_pts += usize::from(frame.timestamp.quality == PtsQuality::Native);
+        corrupt_frames += usize::from(frame.corrupt);
+        if let Some(micros) = frame.timestamp.micros {
+            first_source_micros.get_or_insert(micros);
+            if last_source_micros.is_some_and(|last| last >= micros) {
+                regressions += 1;
+            }
+            last_source_micros = Some(micros);
+        }
+    }
+    ensure!(decoded > 0, "video contains no decodable frames");
+    println!(
+        "{}",
+        json!({
+            "frames": decoded, "dimensions": dimensions,
+            "native_pts": native_pts, "non_increasing_pts": regressions,
+            "first_source_micros": first_source_micros, "last_source_micros": last_source_micros,
+            "corrupt_frames": corrupt_frames,
+        })
+    );
+    Ok(())
+}

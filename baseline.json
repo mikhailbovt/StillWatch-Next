@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/mikhailbovt/stillwatch",
+  "revision": "b0d20a20d38a5bbc22178d150999e57cc9e7bfb3",
+  "version": "0.5.0",
+  "license": "Apache-2.0",
+  "model_lock_sha256": "20f7e93bd5c7291795c622e66a41f9b7491a54f0629dc9ea0cf4e1f459acca6a",
+  "python_lock_sha256": "823e91087808eac74823d15e2ae4c976ca282523f791a65ea7250ddf2ada3f95",
+  "demonstration": {
+    "url": "https://github.com/mikhailbovt/stillwatch/releases/download/v0.5.0/stillwatch-demo-0.5.0.mp4",
+    "sha256": "42121b24381b163e057eab7f7fe617269c6a26cc6acde05689222899ea80e656",
+    "sample_offsets_seconds": [6, 13, 30, 42],
+    "license": "CC-BY-4.0",
+    "credits": "https://github.com/mikhailbovt/stillwatch/blob/b0d20a20d38a5bbc22178d150999e57cc9e7bfb3/docs/demo.md"
+  }
+}

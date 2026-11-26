@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+home=/usr/libexec/stillwatch
+data=${STILLWATCH_DATA_DIR:-/var/lib/stillwatch}
+runtime=${STILLWATCH_RUNTIME_DIR:-$home/runtime}
+model=${STILLWATCH_MODEL_DIR:-$home/models}
+set -- --data-dir "$data" "$@"
+if [ -n "${STILLWATCH_SETTINGS_FILE:-}" ]; then
+    set -- "$@" --settings-file "$STILLWATCH_SETTINGS_FILE"
+fi
+if [ -n "${STILLWATCH_MODEL_SHA256:-}" ]; then
+    ort_sha256=${STILLWATCH_ORT_SHA256:-469849977cb60744ea160927e1a3a0643fd4c55c0aff743251c6d293402e334e}
+    set -- "$@" --model-pack "$model" --model-manifest-sha256 "$STILLWATCH_MODEL_SHA256" \
+        --ort-library "$runtime/libonnxruntime.so.1.31.0" --ort-library-sha256 "$ort_sha256"
+    if [ -n "${STILLWATCH_CUDA_DEVICE:-}" ]; then
+        : "${STILLWATCH_CUDA_PROVIDER_SHA256:?Set the trusted CUDA provider digest}"
+        : "${STILLWATCH_CUDA_SHARED_SHA256:?Set the trusted ORT provider support library digest}"
+        set -- "$@" --cuda-device "$STILLWATCH_CUDA_DEVICE" \
+            --cuda-provider-sha256 "$STILLWATCH_CUDA_PROVIDER_SHA256" \
+            --cuda-shared-sha256 "$STILLWATCH_CUDA_SHARED_SHA256"
+    fi
+elif [ -n "${STILLWATCH_CUDA_DEVICE:-}" ]; then
+    echo 'CUDA requires the authorized model pack manifest digest' >&2
+    exit 2
+fi
+if [ -n "${STILLWATCH_LAN_LISTEN:-}" ]; then
+    set -- "$@" --lan-listen "$STILLWATCH_LAN_LISTEN"
+fi
+if [ -n "${STILLWATCH_ICE_UDP:-}" ]; then
+    encoder_sha256=$(cat "$home/encoder/ffmpeg.sha256")
+    set -- "$@" --mediamtx "$home/bin/mediamtx" \
+        --mediamtx-sha256 bfa372a169751bbf6da2ebddcbcd2f7d3ab3dca3cc553022162eda36fe03e73d \
+        --media-encoder "$home/encoder/ffmpeg" --media-encoder-sha256 "$encoder_sha256" \
+        --media-ice-udp "$STILLWATCH_ICE_UDP"
+fi
+exec "$home/bin/stillwatch-core" "$@"

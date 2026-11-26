@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StillWatch scene and episode ground truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_id", "sources", "clips"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "dataset_id": {"$ref": "#/$defs/id"},
+    "sources": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["origin", "rights", "license_or_permission"],
+        "properties": {
+          "origin": {"type": "string", "minLength": 1},
+          "rights": {"enum": ["local_evaluation", "training_and_evaluation", "redistributable"]},
+          "license_or_permission": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "clips": {
+      "type": "array", "minItems": 1,
+      "items": {"$ref": "#/$defs/clip"}
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "time": {"type": "number", "minimum": 0},
+    "category": {"enum": ["fire", "medical"]},
+    "stratum": {
+      "enum": ["flame", "combustion_smoke", "small_combustion_smoke", "low_light", "controlled_flame", "vapor_mist_fog", "reflection_display_light", "fall", "adl", "other", "uncertain"]
+    },
+    "roi": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "items": {"type": "number", "minimum": 0, "maximum": 1},
+      "description": "Normalized source rectangle [left, top, right, bottom]."
+    },
+    "event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "category", "onset", "strata", "roi"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "category": {"$ref": "#/$defs/category"},
+        "onset": {
+          "type": "object", "additionalProperties": false,
+          "required": ["last_negative_s", "first_visible_s"],
+          "properties": {
+            "last_negative_s": {"type": ["number", "null"], "minimum": 0},
+            "first_visible_s": {"$ref": "#/$defs/time"}
+          },
+          "description": "Times relative to the first frame. Null last negative denotes left censoring."
+        },
+        "strata": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/stratum"}},
+        "roi": {"$ref": "#/$defs/roi"},
+        "visible_target": {"enum": ["smoke", "flame"], "description": "Visible sign required in the local observation that opened a fire incident."},
+        "subject_id": {"$ref": "#/$defs/id"}
+      },
+      "if": {"properties": {"category": {"const": "medical"}}},
+      "then": {"required": ["subject_id"], "not": {"required": ["visible_target"]}}
+    },
+    "clip": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file", "sha256", "group", "category", "duration_s", "cloud_consent", "split", "lineage", "annotation", "events", "negative_strata"],
+      "properties": {
+        "file": {"type": "string", "minLength": 1, "maxLength": 512},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "group": {"$ref": "#/$defs/id"},
+        "category": {"$ref": "#/$defs/category"},
+        "duration_s": {"type": "number", "exclusiveMinimum": 0},
+        "cloud_consent": {"type": "boolean"},
+        "split": {"enum": ["development", "calibration", "holdout"]},
+        "lineage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["source_id", "scene_id", "camera_id", "session_id", "original_segments", "transform"],
+          "properties": {
+            "source_id": {"$ref": "#/$defs/id"},
+            "scene_id": {"$ref": "#/$defs/id"},
+            "camera_id": {"$ref": "#/$defs/id"},
+            "session_id": {"$ref": "#/$defs/id"},
+            "subject_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+            "transform": {"type": "string", "minLength": 1},
+            "original_segments": {
+              "type": "array", "minItems": 1,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["sha256", "start_s", "duration_s"],
+                "properties": {"sha256": {"$ref": "#/$defs/sha256"}, "start_s": {"$ref": "#/$defs/time"}, "duration_s": {"type": "number", "exclusiveMinimum": 0}}
+              }
+            }
+          }
+        },
+        "annotation": {"enum": ["positive", "negative", "uncertain"]},
+        "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+        "subject_frames": {
+          "type": "object", "minProperties": 1,
+          "propertyNames": {"pattern": "^(0|[1-9][0-9]{0,18})$"},
+          "additionalProperties": {
+            "type": "object", "propertyNames": {"$ref": "#/$defs/id"},
+            "additionalProperties": {"$ref": "#/$defs/roi"}
+          },
+          "description": "Medical replay annotations at exact native microseconds from the first decoded frame. Each entry gives boxes for all visible subjects using stable lineage IDs."
+        },
+        "controlled_fire_regions": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
+        "negative_strata": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/stratum"}}
+      },
+      "if": {"properties": {"annotation": {"const": "positive"}}},
+      "then": {"properties": {"events": {"minItems": 1}, "negative_strata": {"maxItems": 0}}},
+      "else": {"properties": {"events": {"maxItems": 0}}},
+      "allOf": [
+        {
+          "if": {"properties": {"annotation": {"const": "negative"}}},
+          "then": {"properties": {"negative_strata": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"annotation": {"const": "uncertain"}}},
+          "then": {"properties": {"negative_strata": {"maxItems": 0}}}
+        }
+      ]
+    }
+  }
+}

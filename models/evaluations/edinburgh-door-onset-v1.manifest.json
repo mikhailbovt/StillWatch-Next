@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "dataset_id": "edinburgh-test1-door-source-onset-v1",
+  "sources": {
+    "edinburgh-test1": {
+      "origin": "https://doi.org/10.7488/ds/2884",
+      "rights": "redistributable",
+      "license_or_permission": "CC BY 4.0"
+    }
+  },
+  "clips": [
+    {
+      "file": "door-24s.mp4",
+      "sha256": "6cfee41f99f43b48a6687727361a780cbd5c0507bee1730a2a99a55327f5817e",
+      "group": "edinburgh-tests",
+      "category": "fire",
+      "duration_s": 24,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "positive",
+      "lineage": {
+        "source_id": "edinburgh-test1",
+        "scene_id": "test1",
+        "camera_id": "door",
+        "session_id": "test1",
+        "original_segments": [
+          {
+            "sha256": "4ee987abc851751f839d8e1ccf1341cfb17f977502fe17c516f1946fdb75b5ea",
+            "start_s": 2056,
+            "duration_s": 24
+          }
+        ],
+        "transform": "Complete verified Video/door/00001.MTS, 8 s decoder preroll. Source interval 2056..2080 s at 640x360, 15 fps, original aspect. Same room as Test 1 door part 2."
+      },
+      "events": [
+        {
+          "id": "visible-flame-door-opening",
+          "category": "fire",
+          "strata": [
+            "flame"
+          ],
+          "roi": [
+            0.703125,
+            0.4388888888888889,
+            0.915625,
+            0.625
+          ],
+          "onset": {
+            "last_negative_s": 3.6,
+            "first_visible_s": 8.0
+          }
+        }
+      ],
+      "negative_strata": []
+    }
+  ]
+}

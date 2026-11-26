@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PairingOffer",
+  "type": "object",
+  "properties": {
+    "api": {
+      "$ref": "#/$defs/ApiVersion"
+    },
+    "challenge": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "core_instance_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "expires_at": {
+      "$ref": "#/$defs/UtcTimestamp"
+    },
+    "secret": {
+      "type": "string"
+    },
+    "tls_certificate_der": {
+      "description": "Base64url DER for the explicitly pinned, self-signed endpoint certificate.",
+      "type": "string"
+    },
+    "tls_certificate_sha256": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "api",
+    "endpoint",
+    "core_instance_id",
+    "tls_certificate_sha256",
+    "tls_certificate_der",
+    "challenge",
+    "secret",
+    "expires_at"
+  ],
+  "$defs": {
+    "ApiVersion": {
+      "type": "object",
+      "properties": {
+        "major": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "minor": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "major",
+        "minor"
+      ]
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

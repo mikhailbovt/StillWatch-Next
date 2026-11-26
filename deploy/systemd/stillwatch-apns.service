@@ -1,0 +1,20 @@
+[Unit]
+Description=StillWatch APNs delivery worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=stillwatch-apns
+Group=stillwatch-apns
+EnvironmentFile=/etc/stillwatch/apns-worker.conf
+ExecStart=/usr/libexec/stillwatch/bin/stillwatch-apns-worker --listen ${LISTEN} --delivery-token-file ${DELIVERY_TOKEN_FILE} --apple-key-file ${APPLE_KEY_FILE} --team-id ${TEAM_ID} --key-id ${KEY_ID} --environment ${APNS_ENVIRONMENT}
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

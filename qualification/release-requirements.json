@@ -1,0 +1,31 @@
+{
+  "contract_version": 1,
+  "source": "StillWatch_Next_Rust_Technical_Implementation_Plan_RU.md §23.1",
+  "completion_plan": "StillWatch_Next_Completion_Plan_RU.md §12",
+  "requirements": [
+    {"id": "autonomy", "cards": "R01–R06 F16 T03–T08 C07", "evidence": "Installed Core recovers useful local live analysis after reboot and faults without Python, Cargo, Firebase or UI."},
+    {"id": "rust-migration", "cards": "F10 F17 P09 P10 C07", "evidence": "Model and source provenance, tensor and observation parity, deliberate policy changes and independent events."},
+    {"id": "component-separation", "cards": "C07", "evidence": "Signed Companion inventory and independent Core operation."},
+    {"id": "cameras", "cards": "R01 F09 P04 P05 P07 P08 C03", "evidence": "Physical UVC and ONVIF, concurrent admission, CRUD, stream recovery, epochs and geometry."},
+    {"id": "vision", "cards": "F01–F18 T02", "evidence": "Independent time-bound fire, smoke, controlled fire, fall and ADL results, with nuisance, identity and uncertainty."},
+    {"id": "firebase", "cards": "R04 C04 C08", "evidence": "Actual on-device restart and consented cloud fallback, App Check rotation and route failure recovery."},
+    {"id": "safety-semantics", "cards": "R03 R04 F06 F07 F14–F16 C01 C05", "evidence": "Freshness, uncertainty, distinct ACK/resolve, independent urgent and re-alert tests."},
+    {"id": "durable-state", "cards": "R03–R08 T04 T06", "evidence": "Crash-safe state, evidence and outbox, bounded retention, idempotent recovery and TTL."},
+    {"id": "access", "cards": "R08 C03 C06", "evidence": "Physical LAN, TLS, roles, scope, revoke, upload and SSRF protection, refresh retry and provisioned external DNS."},
+    {"id": "live", "cards": "F09 P04 P06 P07 C03 C06", "evidence": "Masks, codecs, shared detail, concurrent viewers, freshness, external NAT/TURN and analysis under view load."},
+    {"id": "sdk", "cards": "R07 R08 P01 P07 C05", "evidence": "Four SDK suites, isolation, reconnect, cursor and idempotency plus N/N−1 for a supported pair."},
+    {"id": "applications", "cards": "C01–C03 C05 C07", "evidence": "Installable Windows, Linux, iOS and Android builds exercised on supported devices."},
+    {"id": "alerts", "cards": "R07 R08 F16 C01–C03 C08", "evidence": "Live native delivery with observed presentation, distinct receipt and ACK, background and platform limits."},
+    {"id": "optimization", "cards": "P01–P13 F02 F10 F17 T01 T07 T08", "evidence": "Measured 16-camera target with viewers and evidence, plus separately qualified CPU fallback."},
+    {"id": "recovery", "cards": "R01–R08 F15 T05 T06 C07", "evidence": "Bounded useful recovery, backup, restore, import, migration, upgrade and rollback."},
+    {"id": "packaging", "cards": "P09–P11 C07 C08", "evidence": "Exact signed and installed native bundles, provenance, licenses and SBOM."},
+    {"id": "operations", "cards": "R02 P01 P07 C03 C08", "evidence": "English installation and operation, redacted diagnostics, verified profile limits and remote network checks."}
+  ],
+  "external_gates": [
+    {"id": "G1", "owner": "release owner and contest organizer", "evidence": "Real Web Hybrid demonstration and documented contest interpretation."},
+    {"id": "G2", "owner": "Firebase project operator", "evidence": "Real on-device and cloud recovery, deployed production App Check issuance and refresh."},
+    {"id": "G3", "owner": "release owner and notification service operators", "evidence": "Authorized deployment use and observed native transport and OS capabilities."},
+    {"id": "G4", "owner": "release owner and component rights holders", "evidence": "Redistribution and data-use inventory and rights for exact artifacts."},
+    {"id": "G5", "owner": "maintainer and qualification runner operator", "evidence": "Numerical, event, capacity and installed-native evidence for exact model and runtime roles."}
+  ]
+}

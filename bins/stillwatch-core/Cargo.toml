@@ -1,0 +1,43 @@
+[package]
+name = "stillwatch-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+diagnostics = ["sw-engine/diagnostics"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+clap.workspace = true
+fs4.workspace = true
+getrandom.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+mdns-sd.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+sw-api.workspace = true
+sw-engine.workspace = true
+sw-protocol = { workspace = true, features = ["worker"] }
+sw-storage.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = "=0.5.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "=0.8.1"
+
+[lints]
+workspace = true

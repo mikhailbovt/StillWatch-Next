@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StreamRequest",
+  "type": "object",
+  "properties": {
+    "camera_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "profile": {
+      "$ref": "#/$defs/StreamProfile"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "camera_id",
+    "profile"
+  ],
+  "$defs": {
+    "StreamProfile": {
+      "type": "string",
+      "enum": [
+        "preview",
+        "detail"
+      ]
+    }
+  }
+}

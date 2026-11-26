@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StillWatch Fast RC v2 native execution profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "profile_id", "contract_digests", "candidate_digest", "host", "models", "workload", "budgets"],
+  "properties": {
+    "protocol": {"const": "fast-rc-v2"},
+    "profile_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "contract_digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["native", "quality", "release"],
+      "properties": {
+        "native": {"$ref": "#/$defs/digest"},
+        "quality": {"$ref": "#/$defs/digest"},
+        "release": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "candidate_digest": {"$ref": "#/$defs/digest"},
+    "execution_profile_digest": {"$ref": "#/$defs/digest"},
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "os_release", "architecture", "cpu", "physical_cores", "logical_cores", "ram_bytes", "power_mode", "accelerator"],
+      "properties": {
+        "os": {"enum": ["windows", "linux"]},
+        "os_release": {"$ref": "#/$defs/label"},
+        "architecture": {"const": "x86_64"},
+        "cpu": {"$ref": "#/$defs/label"},
+        "physical_cores": {"type": "integer", "minimum": 1},
+        "logical_cores": {"type": "integer", "minimum": 1},
+        "core_runtime_threads": {"type": "integer", "minimum": 1},
+        "ram_bytes": {"type": "integer", "minimum": 1},
+        "power_mode": {"$ref": "#/$defs/label"},
+        "accelerator": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "driver", "vram_bytes"],
+              "properties": {
+                "name": {"$ref": "#/$defs/label"},
+                "driver": {"$ref": "#/$defs/label"},
+                "vram_bytes": {"type": "integer", "minimum": 1}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "manifest_digest", "policy_version", "roles", "tensor_shapes", "workers", "threads_per_worker"],
+      "if": {"required": ["cuda_graph"]},
+      "then": {"properties": {
+        "backend": {"const": "cuda_fp32"}, "workers": {"const": 1}, "tensor_shapes": {"maxItems": 1}
+      }},
+      "properties": {
+        "backend": {"enum": ["cpu_fp32", "cuda_fp32"]},
+        "cuda_graph": {"const": true},
+        "manifest_digest": {"$ref": "#/$defs/digest"},
+        "policy_version": {"$ref": "#/$defs/label"},
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["person", "hazard"],
+          "properties": {
+            "person": {"$ref": "#/$defs/modelRole"},
+            "hazard": {"$ref": "#/$defs/modelRole"}
+          }
+        },
+        "tensor_shapes": {
+          "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+          "items": {
+            "type": "array", "minItems": 4, "maxItems": 4,
+            "prefixItems": [{"const": 1}, {"const": 3}, {"$ref": "#/$defs/tensorSide"}, {"$ref": "#/$defs/tensorSide"}]
+          }
+        },
+        "workers": {"type": "integer", "minimum": 1, "maximum": 8},
+        "threads_per_worker": {"type": "integer", "minimum": 1, "maximum": 64}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["camera_count", "source_manifest_digest", "fault_schedule_digest", "pose_fps", "fire_fps", "evidence_fps", "preview_publishers", "detail_publishers", "viewer_sessions", "snapshot_requests_per_minute", "semantic_route"],
+      "properties": {
+        "camera_count": {"type": "integer", "minimum": 4, "maximum": 64},
+        "source_manifest_digest": {"$ref": "#/$defs/digest"},
+        "fault_schedule_digest": {"$ref": "#/$defs/digest"},
+        "pose_fps": {"type": "integer", "minimum": 3, "maximum": 5},
+        "fire_fps": {"type": "integer", "minimum": 1, "maximum": 2},
+        "evidence_fps": {"type": "integer", "minimum": 1, "maximum": 5},
+        "preview_publishers": {"type": "integer", "minimum": 0, "maximum": 32},
+        "detail_publishers": {"type": "integer", "minimum": 0, "maximum": 32},
+        "viewer_sessions": {"type": "integer", "minimum": 1, "maximum": 128},
+        "snapshot_requests_per_minute": {"type": "integer", "minimum": 1},
+        "semantic_route": {"enum": ["disabled", "local_only", "prefer_local", "cloud_only"]}
+      },
+      "anyOf": [
+        {"properties": {"preview_publishers": {"minimum": 1}}},
+        {"properties": {"detail_publishers": {"minimum": 1}}}
+      ]
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rss_bytes", "vram_bytes", "disk_bytes", "max_children", "max_os_handles", "max_open_sockets", "headroom_bytes", "growth_horizon_seconds", "rtsp_recovery_ms", "rtsps_recovery_ms", "inference_recovery_ms", "core_recovery_ms", "storage_recovery_ms", "viewer_recovery_ms"],
+      "properties": {
+        "rss_bytes": {"type": "integer", "minimum": 1},
+        "vram_bytes": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 1},
+        "max_children": {"type": "integer", "minimum": 1},
+        "max_os_handles": {"type": "integer", "minimum": 1},
+        "max_open_sockets": {"type": "integer", "minimum": 1},
+        "headroom_bytes": {
+          "type": "object",
+          "required": ["rss", "vram", "disk"],
+          "additionalProperties": false,
+          "properties": {
+            "rss": {"type": "integer", "minimum": 1},
+            "vram": {"type": "integer", "minimum": 0},
+            "disk": {"type": "integer", "minimum": 1}
+          }
+        },
+        "growth_horizon_seconds": {"type": "integer", "minimum": 3600},
+        "rtsp_recovery_ms": {"$ref": "#/$defs/deadline"},
+        "rtsps_recovery_ms": {"$ref": "#/$defs/deadline"},
+        "inference_recovery_ms": {"$ref": "#/$defs/deadline"},
+        "core_recovery_ms": {"$ref": "#/$defs/deadline"},
+        "storage_recovery_ms": {"$ref": "#/$defs/deadline"},
+        "viewer_recovery_ms": {"$ref": "#/$defs/deadline"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "label": {"type": "string", "minLength": 1, "maxLength": 160},
+    "deadline": {"type": "integer", "minimum": 1},
+    "tensorSide": {"type": "integer", "minimum": 32, "multipleOf": 32},
+    "modelRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest"],
+      "properties": {"id": {"$ref": "#/$defs/label"}, "digest": {"$ref": "#/$defs/digest"}}
+    }
+  },
+  "if": {"properties": {"models": {"properties": {"backend": {"const": "cuda_fp32"}}}}},
+  "then": {
+    "properties": {
+      "host": {"properties": {"accelerator": {"type": "object"}}},
+      "models": {"properties": {"workers": {"const": 1}}},
+      "budgets": {"properties": {"vram_bytes": {"minimum": 1}, "headroom_bytes": {"properties": {"vram": {"minimum": 1}}}}}
+    }
+  }
+}

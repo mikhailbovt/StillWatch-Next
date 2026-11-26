@@ -1,0 +1,6 @@
+# Use the release's verified CPU image as the native base. CUDA and model packs
+# are provisioned on the host and mounted read-only by compose.cuda.yaml.
+ARG CORE_IMAGE=stillwatch-core:1.0.0-cpu
+FROM ${CORE_IMAGE}
+ENV CUDA_CACHE_PATH=/tmp/stillwatch-cuda-cache
+LABEL org.opencontainers.image.description="StillWatch Next Core with operator-provisioned CUDA and model packs"

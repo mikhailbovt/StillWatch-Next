@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "manifest_sha256": "4731d9caedb1bc51ab8dcd297377ec0af0f753cf7bf85d28a23631db8f34c7f1",
+  "description": "One visual reviewer marked approximate normalized search regions before inspecting the raw anchors. These are fixed regions for development attribution. They are not per-frame boxes or independent hazard truth.",
+  "limits": {"minimum_iou": 0.1, "minimum_diagnostic_score": 0.05},
+  "clips": {
+    "cotton-1.mp4": {"class": "flame", "roi": [0.572, 0.347, 0.625, 0.426]},
+    "cotton-2.mp4": {"class": "flame", "roi": [0.564, 0.335, 0.641, 0.432]},
+    "heptane-pair-1.mp4": {"class": "flame", "roi": [0.582, 0.189, 0.648, 0.403]},
+    "heptane-pair-2.mp4": {"class": "flame", "roi": [0.595, 0.194, 0.651, 0.413]},
+    "polyurethane-1.mp4": {"class": "flame", "roi": [0.578, 0.212, 0.636, 0.327]},
+    "polyurethane-2.mp4": {"class": "flame", "roi": [0.543, 0.548, 0.614, 0.649]},
+    "wood-1.mp4": {"class": "smoke", "roi": [0.495, 0.133, 0.691, 0.336]},
+    "wood-2.mp4": {"class": "smoke", "roi": [0.482, 0.083, 0.699, 0.34]}
+  }
+}

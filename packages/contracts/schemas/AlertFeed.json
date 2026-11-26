@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AlertFeed",
+  "type": "object",
+  "properties": {
+    "alerts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AlertDelivery"
+      }
+    },
+    "generation": {
+      "description": "Changes when Core invalidates all delivery state during restore.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "head": {
+      "description": "Highest notification ID included in this scan.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "next": {
+      "description": "Device-scoped continuation for the current feed scan.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "description": "Server time at which this page was evaluated.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "alerts"
+  ],
+  "$defs": {
+    "AlertDelivery": {
+      "type": "object",
+      "properties": {
+        "attention": {
+          "$ref": "#/$defs/Attention"
+        },
+        "attention_cycle": {
+          "$ref": "#/$defs/Counter"
+        },
+        "camera_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "client_seen_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UtcTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "core_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/UtcTimestamp"
+        },
+        "id": {
+          "$ref": "#/$defs/Counter"
+        },
+        "incident_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "id",
+        "core_id",
+        "incident_id",
+        "camera_id",
+        "revision",
+        "attention_cycle",
+        "attention",
+        "expires_at"
+      ]
+    },
+    "Attention": {
+      "type": "string",
+      "enum": [
+        "info",
+        "review",
+        "urgent"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

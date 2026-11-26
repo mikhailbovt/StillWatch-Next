@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "evaluation": "MmodalFire laboratory video interference and onset subset",
+  "dataset": {
+    "paper": "https://doi.org/10.1038/s41597-026-06810-6",
+    "archive": "https://doi.org/10.6084/m9.figshare.28804448.v1",
+    "archive_file": "MmodalFire.rar",
+    "archive_md5": "88287408a7a36a25999cf6276fa902a9",
+    "licence": "CC BY 4.0",
+    "source_video_sha256": {
+      "Downtest_ch01_00000000005000000.mp4": "9cb7c40d4378d6247695ea6bf229ac50d5cd526d7095cf8eb52a0438132b1754",
+      "Downtest_ch01_00000000005000100.mp4": "7cd27f97074cbd3552140106db7035109c8dcf86a87b1fe3b62e864c1f7ee51b",
+      "Downtest_ch01_00000000010000000.mp4": "31c39a3532d7c64108b334cde082734d158327740c01793e2c9133ebca3b008a",
+      "Downtest_ch01_00000000013000000.mp4": "acd80d6e62b5f35a3ecab1184038664abd90d0348e0a17e572d0f3c4b4b6d267",
+      "Downtest_ch01_00000000014000000.mp4": "ca9b37c23bf4a0678d4a7baefd1e69df58a70436d311230884228a3c919719ac",
+      "Downtest_ch01_00000000014000100.mp4": "de5217f098613d72575eb4ac2681181ce85586efb44c2cb6db3834c8aeb26ba9",
+      "Downtest_ch01_00000000016000000.mp4": "44b58c6d04ca600b7b6960056e6290ac4dce373289e89d2635d1deacbd0256fa",
+      "Downtest_ch01_00000000019000200.mp4": "f99dbd15a4000c1a4a4324b175d239e52340c13aa2e34076ff0a450cad357faa",
+      "Downtest_ch01_00000000020000000.mp4": "fe7ce668a0f693adddc15cdb34152daf7837565da69b2f3d95c64eb843367b15",
+      "Downtest_ch01_00000000023000000.mp4": "863e64bc418ca603ac3c310f53bb9c7fe67e8ccf12929032c16445d521399374",
+      "Downtest_ch01_00000000024000000.mp4": "94bcacd9f00d06f080a86d8ad6f99123d1154f221d1dba52343c577b0681ff80"
+    }
+  },
+  "annotation": "First visually identifiable material flame or persistent smoke, manually bracketed in 1-second stills after a 10-second visual index. Onset uses clip time. Each heptane pair contributes only its first filmed ignition. Dry ice and mist clips use the sensor timestamp bounds, trimmed at both ends by 3 seconds. There is one camera room and no independent second annotator.",
+  "thresholds": {
+    "before_onset_tolerance_s": 2,
+    "max_delay_s": 8
+  },
+  "clips": [
+    {
+      "file": "cotton-1.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "8eff4dee3f701cd43a11b5cf83c7e5605347cd6f7fb6cbec24256fb0d3ecd187",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-02T16:27:06",
+      "sensor_clock_csv": "Cotton rope3-1.csv",
+      "sensor_clock_sha256": "93f470b73f43ab852c8414a43d58a69b3459d023ed593df5640abd12e04aa15a",
+      "recorded_clock_start": "2022-08-02T16:26:46",
+      "recorded_clock_end": "2022-08-02T16:28:16",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000005000000.mp4",
+          "seek_s": 2821.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "cotton-2.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "69de3aac7e407d675e5028b592055af7356b66447b842b5c57b5501f64cac9b5",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-02T17:22:47",
+      "sensor_clock_csv": "Cotton rope4-1.csv",
+      "sensor_clock_sha256": "d40de3fde96aaf194114eedb713208eaa6aab56061341b8f977f2611ef9a225c",
+      "recorded_clock_start": "2022-08-02T17:22:27",
+      "recorded_clock_end": "2022-08-02T17:23:57",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000005000100.mp4",
+          "seek_s": 631.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "heptane-pair-1.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "865dc490b08adf68da4224d9c38925aa53584c7ee0035b99600d6dcbe023b02f",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-03T16:03:41",
+      "sensor_clock_csv": "N-Heptane1-1 2-1.csv",
+      "sensor_clock_sha256": "10e91bea02ae6e32c5840bfa1a41de7ddb934eb0afcc01f51d7af84c0b728a0a",
+      "recorded_clock_start": "2022-08-03T16:03:21",
+      "recorded_clock_end": "2022-08-03T16:04:51",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000010000000.mp4",
+          "seek_s": 2093.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "heptane-pair-2.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "f834fa7d33231090614aa8b3667419caf508957a2f4480e0a8f4eda8f6e0557a",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-03T16:38:38",
+      "sensor_clock_csv": "N-Heptane3-1 4-1.csv",
+      "sensor_clock_sha256": "c6b0c32f7def3e3dd1818d0483f05160ded61ebee037c8106358d0411443d26b",
+      "recorded_clock_start": "2022-08-03T16:38:18",
+      "recorded_clock_end": "2022-08-03T16:39:48",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000010000000.mp4",
+          "seek_s": 4190.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "polyurethane-1.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "498455d425821b523ad4ee13178cc187e01eb2d09f02bb7c584ada2cb3415649",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-08T10:00:32",
+      "sensor_clock_csv": "Polyurethane1-1.csv",
+      "sensor_clock_sha256": "4dc60da7e3976bf5529672d385873ceb2813a679c37271b5f7da8113a7dbf9b2",
+      "recorded_clock_start": "2022-08-08T10:00:12",
+      "recorded_clock_end": "2022-08-08T10:01:42",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000014000100.mp4",
+          "seek_s": 508.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "polyurethane-2.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 90.0,
+      "sha256": "ec2ea71297107928fe5f71539e17f669758c0bec3c148083a959e9cf32036e20",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-08T15:37:29",
+      "sensor_clock_csv": "Polyurethane2-1.csv",
+      "sensor_clock_sha256": "fd85ae7ea0c9a901ceb3701f6c48a11216b31151afaeb19cb6329e5433cb8374",
+      "recorded_clock_start": "2022-08-08T15:37:09",
+      "recorded_clock_end": "2022-08-08T15:38:39",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000016000000.mp4",
+          "seek_s": 5341.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "wood-1.mp4",
+      "group": "fire_wood_smoke",
+      "duration_s": 90.0,
+      "sha256": "1febf04301f274d19bf98140dae437356b42c33c9e85216d06107c1683a27fd9",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-10T10:00:37",
+      "sensor_clock_csv": "Wood1-1.csv",
+      "sensor_clock_sha256": "26506346772b54197c0f40f8c9af5ff932932faed26a79ff7f1a0a895fc6ea75",
+      "recorded_clock_start": "2022-08-10T10:00:17",
+      "recorded_clock_end": "2022-08-10T10:01:47",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000019000200.mp4",
+          "seek_s": 608.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "wood-2.mp4",
+      "group": "fire_wood_smoke",
+      "duration_s": 90.0,
+      "sha256": "c1930b23a5a639eab26e506fde94042c54883356486306f35ba347f1e662d0d7",
+      "cloud_consent": false,
+      "onset_s": 20.0,
+      "annotation_clock": "2022-08-10T11:17:53",
+      "sensor_clock_csv": "Wood2-1.csv",
+      "sensor_clock_sha256": "6b7952693340e383889dd3ab98744680c541ad38b2fa0814a7fb6d7c2038d34c",
+      "recorded_clock_start": "2022-08-10T11:17:33",
+      "recorded_clock_end": "2022-08-10T11:19:03",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000020000000.mp4",
+          "seek_s": 4439.0,
+          "duration_s": 90.0
+        }
+      ]
+    },
+    {
+      "file": "dry-ice-1.mp4",
+      "group": "fire_negative_dry_ice",
+      "duration_s": 500.0,
+      "sha256": "9b060a23e9cb2a1621587dc767c8e9bde83dbd25d1986f0490861d64b07ae0b9",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Dry Ice1-1.csv",
+      "sensor_clock_sha256": "edd638d1014dd0619a2de94420a0459a2bf71572d6760b88b506afed6f74b276",
+      "recorded_clock_start": "2022-08-04T15:11:41",
+      "recorded_clock_end": "2022-08-04T15:20:01",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000013000000.mp4",
+          "seek_s": 4526.0,
+          "duration_s": 500.0
+        }
+      ]
+    },
+    {
+      "file": "dry-ice-2.mp4",
+      "group": "fire_negative_dry_ice",
+      "duration_s": 312.0,
+      "sha256": "fbdacdf7e47eae5be76d87dfd398a0a7b4009b143605529a6ecfa5c388ccd7ec",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Dry Ice2-1.csv",
+      "sensor_clock_sha256": "24e61c7c7ae7b15c4ddc98c4f92086b82684dcc2b016bf309204fa488464a761",
+      "recorded_clock_start": "2022-08-04T15:23:01",
+      "recorded_clock_end": "2022-08-04T15:28:13",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000013000000.mp4",
+          "seek_s": 5206.0,
+          "duration_s": 312.0
+        }
+      ]
+    },
+    {
+      "file": "dry-ice-3.mp4",
+      "group": "fire_negative_dry_ice",
+      "duration_s": 593.04,
+      "sha256": "b45c17fdddbb548e59d9b358e3625e60674b51d64da7e0c207bf7d78ba5c378e",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Dry Ice3-1.csv",
+      "sensor_clock_sha256": "e67d3c6c5639e09ed7924a65f0af462a2d0cad274b06a21e63b1d1e7b9d4c135",
+      "recorded_clock_start": "2022-08-04T15:41:02",
+      "recorded_clock_end": "2022-08-04T15:50:55",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000013000000.mp4",
+          "seek_s": 6287.0,
+          "duration_s": 346.912
+        },
+        {
+          "file": "Downtest_ch01_00000000014000000.mp4",
+          "seek_s": 0.912,
+          "duration_s": 246.088
+        }
+      ]
+    },
+    {
+      "file": "dry-ice-4.mp4",
+      "group": "fire_negative_dry_ice",
+      "duration_s": 405.0,
+      "sha256": "0568cbefb37c866e357cbc6f58b040e194d0b36842203dba7048e9ef7b530b95",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Dry Ice4-1.csv",
+      "sensor_clock_sha256": "dbadb799f36d6e1977b78cbdef5794ca523dba2f6bc3d5d2eee4734220163ea0",
+      "recorded_clock_start": "2022-08-04T15:56:34",
+      "recorded_clock_end": "2022-08-04T16:03:19",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000014000000.mp4",
+          "seek_s": 586.0,
+          "duration_s": 405.0
+        }
+      ]
+    },
+    {
+      "file": "mist-1.mp4",
+      "group": "fire_negative_mist",
+      "duration_s": 495.0,
+      "sha256": "028fc9859c54a5fbb2f1b13eedf315021f39a2e6216452d688fee3efc5da6c17",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Humidifier1-1.csv",
+      "sensor_clock_sha256": "92b97a01c8da02515a485614a776ea2771a6de344461cf0dea22aea75f58675c",
+      "recorded_clock_start": "2022-08-10T16:01:28",
+      "recorded_clock_end": "2022-08-10T16:09:43",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000023000000.mp4",
+          "seek_s": 4083.0,
+          "duration_s": 495.0
+        }
+      ]
+    },
+    {
+      "file": "mist-2.mp4",
+      "group": "fire_negative_mist",
+      "duration_s": 491.0,
+      "sha256": "24438554ff890321b07b571db035d7e0f175a9fb66d9bd69e705a6828dbc170a",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Humidifier2-1.csv",
+      "sensor_clock_sha256": "a3d789d0420f5cd1bc05a843f5906fde1400b977a4a9e0f36dbdc6a5554f1fcc",
+      "recorded_clock_start": "2022-08-10T16:12:00",
+      "recorded_clock_end": "2022-08-10T16:20:11",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000023000000.mp4",
+          "seek_s": 4715.0,
+          "duration_s": 491.0
+        }
+      ]
+    },
+    {
+      "file": "mist-3.mp4",
+      "group": "fire_negative_mist",
+      "duration_s": 419.04,
+      "sha256": "0f8654513467834c14923c0448a268cb82204c0b6539a59e59161b429b77dabf",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Humidifier3-1.csv",
+      "sensor_clock_sha256": "a9a41982f76a7e6657f1f9a3bc97d859adfe3157d90918ce531d49840a5d14f6",
+      "recorded_clock_start": "2022-08-10T16:22:36",
+      "recorded_clock_end": "2022-08-10T16:29:35",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000023000000.mp4",
+          "seek_s": 5351.0,
+          "duration_s": 219.254
+        },
+        {
+          "file": "Downtest_ch01_00000000024000000.mp4",
+          "seek_s": 0.254,
+          "duration_s": 199.746
+        }
+      ]
+    },
+    {
+      "file": "mist-4.mp4",
+      "group": "fire_negative_mist",
+      "duration_s": 350.0,
+      "sha256": "0b6d47905efc2b25513063e09f6110d929f0c43d976902c91011481059002a56",
+      "cloud_consent": false,
+      "onset_s": null,
+      "annotation_clock": null,
+      "sensor_clock_csv": "Humidifier4-1.csv",
+      "sensor_clock_sha256": "3b8cf615faaf2a704d55a4abcba5b182c39608e73741672cbc67c942ca89918a",
+      "recorded_clock_start": "2022-08-10T16:31:26",
+      "recorded_clock_end": "2022-08-10T16:37:16",
+      "video_segments": [
+        {
+          "file": "Downtest_ch01_00000000024000000.mp4",
+          "seek_s": 311.0,
+          "duration_s": 350.0
+        }
+      ]
+    }
+  ]
+}

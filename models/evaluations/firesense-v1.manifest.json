@@ -1,0 +1,664 @@
+{
+  "schema_version": 1,
+  "evaluation": "FIRESENSE v1 visible-hazard transfer and negative development replay",
+  "dataset": {
+    "doi": "https://doi.org/10.5281/zenodo.836749",
+    "licence": "CC BY 4.0",
+    "authors": [
+      "Nikos Grammalidis",
+      "Kosmas Dimitropoulos",
+      "Enis Cetin"
+    ],
+    "archive_md5": {
+      "fire_videos.1406.zip": "7cfe8286cc4b45193149186bf67ea00d",
+      "smoke_videos.1407.zip": "5ee6bc867c4a9332b4e75f308c26fc23"
+    }
+  },
+  "annotation": "Positive videos show material flame or a persistent smoke-like plume at the start of the selected view. Zero refers to the start of the clip. The smoke positives include recorded demonstrations. Negatives retain the archive label, without independent per-frame annotations. Two source positives show fire in an ordinary fireplace and were reclassified as contextual negatives. Each camera and scene can appear more than once among the source negatives. Two obvious near-duplicate positive views were excluded by visual inspection. This is a development/transfer corpus. Its classifications do not claim a known ignition time or operational false-alert rates.",
+  "preprocess": "Source frame timing preserved, no audio, at most 960 pixels wide, even height, yuv420p H.264 with one libx264 thread and fast preset, native timestamps.",
+  "exclusions": {
+    "flame-posVideo9.878.avi": "Fire is visible throughout. Camera zoom prevents a fixed controlled-region comparison.",
+    "smoke-testpos05.821.avi": "Published source contains a prior detection overlay, which can confound an independent visual comparison.",
+    "smoke-testpos03.819.avi": "Same camera and setting as flame-posVideo7.876.avi.",
+    "smoke-testpos07.823.avi": "Same camera and setting as smoke-testpos06.822.avi."
+  },
+  "thresholds": {
+    "before_onset_tolerance_s": 0,
+    "max_delay_s": 8
+  },
+  "clips": [
+    {
+      "file": "flame-posVideo5.874.mp4",
+      "group": "fire_controlled_fireplace",
+      "duration_s": 59.993267,
+      "sha256": "d65f1297383d44e51896eaaa406ea19867371ab636b1b44f1c24bba722988549",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo5.874.avi",
+      "source_sha256": "dd0461b4fc585efa27c7dd632b642a93cfbddced1acb25a6c3462618aa188454",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 60.0,
+      "controlled_fire_regions": [
+        {
+          "source": "fireplace",
+          "mode": "intermittent",
+          "polygon": [
+            {
+              "x": 150,
+              "y": 0
+            },
+            {
+              "x": 9820,
+              "y": 0
+            },
+            {
+              "x": 9820,
+              "y": 10000
+            },
+            {
+              "x": 150,
+              "y": 10000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "flame-posVideo4.873.mp4",
+      "group": "fire_controlled_fireplace",
+      "duration_s": 55.221833,
+      "sha256": "00540f4bba168007d3e24556eedd2efe7769f02c8935ca01d4b6a10997e970f7",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo4.873.avi",
+      "source_sha256": "db50879d39b4a43739aae45a4311ea3cd2ac37cc64140c1cd2ee51eb01f5740e",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 55.221833,
+      "controlled_fire_regions": [
+        {
+          "source": "fireplace",
+          "mode": "intermittent",
+          "polygon": [
+            {
+              "x": 350,
+              "y": 0
+            },
+            {
+              "x": 9600,
+              "y": 0
+            },
+            {
+              "x": 9600,
+              "y": 10000
+            },
+            {
+              "x": 350,
+              "y": 10000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "flame-negsVideo1.858.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 45.0,
+      "sha256": "dedc47ef37e48cf964227f8c78a6e6a698658f99c5d843d1633fc02bc65e2609",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo1.858.avi",
+      "source_sha256": "54594879622ecf02e3137ea536baf1e4dcf0965a5ad695a59ece75c02717b266",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "flame-negsVideo4.861.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 45.0,
+      "sha256": "d664d42d93f88e85defe347a354d5bafcce093a38881cd7305a07d3042103334",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo4.861.avi",
+      "source_sha256": "69eb56d0d4ac912626780c1405850380770443aee51d49a244ad11f5ee651286",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "flame-negsVideo6.863.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 45.0,
+      "sha256": "79832686df8240837de7f2a5ac6b09909c7d2586b287f5022fb4cbf0112ff628",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo6.863.avi",
+      "source_sha256": "ba0bbf7935bd7cd95e28496cb01bd92a5cc153eeaad44687f2d31d22bad5606c",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "flame-negsVideo8.865.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 45.011,
+      "sha256": "e492d968e55a4e2b0b5160bfcf2254b5e994bccaf5fdd95a1fa70236c59a06f3",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo8.865.avi",
+      "source_sha256": "53af634ba50d6a27c2e2970ba28f79d5a5fde786f6f25e7025571bed8ed36bd4",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "smoke-testneg02.808.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 45.0,
+      "sha256": "9af721448e4218089a8478d44ae3cc3c91c96d6e4d9dc18eb00b61dbf399ec1f",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg02.808.avi",
+      "source_sha256": "d53ae16d7fd74471946a6b1a05045cbd548321aeec7abab07d20aaf7fd25c380",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "smoke-testneg04.810.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 45.0,
+      "sha256": "7d825e4dc068ff02c0e69c503e8a4d4cf7b897b4abdc2a6e33ab0564fc7b8bdc",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg04.810.avi",
+      "source_sha256": "68260909bd93d1bfe07accf6ef4e90dcad4fd17e96531b956d10ff8df38311cf",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 45.0
+    },
+    {
+      "file": "smoke-testneg07.813.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 31.04,
+      "sha256": "9e685f3aed3974c106c617ec00d9b05d9748f835ba1f76a5edc6f82038514605",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg07.813.avi",
+      "source_sha256": "d7aa5ebac09c8dbf85db5e71db3c987c96d1bcf75038ac4567473997618d1acb",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 31.04
+    },
+    {
+      "file": "smoke-testneg08.814.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 30.04,
+      "sha256": "40248f574785870baf219c03c880ec2f4166f43999dc2f52b3139eb74150d7ce",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg08.814.avi",
+      "source_sha256": "5ca5139095f8b0d5ba474a446afa1c717a6b3862379612ff90e9c897cbbff8d4",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 30.04
+    },
+    {
+      "file": "smoke-testneg09.815.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 28.92,
+      "sha256": "ee3b0b0da4ea88e9fcbf8053f90ee0d00b32b11b47caba1bf02dd7393a8dcebf",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg09.815.avi",
+      "source_sha256": "82ca550003c2fc6d23096c0beb49a514e5313a96364173873fc0216793ad3433",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 28.92
+    },
+    {
+      "file": "flame-negsVideo9.866.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 25.8,
+      "sha256": "65d5ce2500520f130915e89daaa4fcee2deab17e14f3c6c6ee2b7a6f6d7ab18d",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo9.866.avi",
+      "source_sha256": "f73e17309b27d2252b87cf9134a1fc75f8bad4fa99db5a149839c355e599b21f",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 26.305306
+    },
+    {
+      "file": "flame-negsVideo12.1074.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 26.1112,
+      "sha256": "95bc874365107023b41f5b9327559c24238d280005685aaeb164ced08f61b327",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo12.1074.avi",
+      "source_sha256": "a28dd64fb322f22cd31f6c352dc4cfac56b55c402b14907873ba4c22446c6286",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 26.1112
+    },
+    {
+      "file": "smoke-testneg03.809.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 24.733309,
+      "sha256": "228a7e1e8c3f460f8b0a8fb868679d163ad912d3c63173f1b2831102c07eeb8f",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg03.809.avi",
+      "source_sha256": "f4d3437f13c6e55d332d0d97a09e856528c9f38f85239ca8a484a110996e5791",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 24.933308
+    },
+    {
+      "file": "flame-posVideo1.868.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 20.0,
+      "sha256": "6a0f0ab4c4c03964830bc84bae046b04e0576d495e2cb550db3790a4e986bf1b",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo1.868.avi",
+      "source_sha256": "e82b782e63e7e8ac7223ba134f184b58007a694d11434a55e45a3992dece67d8",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "flame-posVideo6.875.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 20.0,
+      "sha256": "fb63a8bce4fe8e8febbb997d24783afea0b8d298593aa6626da3626c7a6b74b4",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo6.875.avi",
+      "source_sha256": "94bd37ea4a952fab0d76028c199607d0f42c2b58df312ab53bea5954599e7912",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "flame-posVideo7.876.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 20.0,
+      "sha256": "b0b3e9401ece931d028cc35fdf11ec7a50c3fae8a04d76061daa5d6be0ee91b1",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo7.876.avi",
+      "source_sha256": "6e84a2a5890e94de8a7d003a196ba361d43db6c880c01f5f1d02196afdb9f50e",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos02.818.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 19.986633,
+      "sha256": "4069a1f1b69581fba41ebf33abf263f150fd639de1c8079f689ab1a5ca70f292",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos02.818.avi",
+      "source_sha256": "f09934deee5aafc7e460d3b74313c2f8a172b1c9c8278515ab92aa6b042b0dc1",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos04.820.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 20.0,
+      "sha256": "99b7c06d8ed1dec796a5e1dfc82a6327eba9feb85862f3de6bda6bd3325a8ef9",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos04.820.avi",
+      "source_sha256": "934d92ace78daf33bbf29abf385ed7f96cc8ba3469e53df9199829a4dfc445ec",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos06.822.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 20.0,
+      "sha256": "7db8b8e792c6dc8104e7b2e08d2de13c6a5c1aa46f4ff3d2d816560c1de59ec0",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos06.822.avi",
+      "source_sha256": "fb28263a6215465aaa617ddc52e4f08d498f37dcbc7a80687282f0722fa4975b",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos08.824.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 20.0,
+      "sha256": "34ec379fc8e25fb66fd6ec84d1580547993dc1f6fe1ca97c29c880bbace1879a",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos08.824.avi",
+      "source_sha256": "32f6a9450e81f106f24b2b9c7feb7a5f50fae6a42b9871282c883b2205e057f2",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos09.825.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 20.0,
+      "sha256": "550b8c5def4ad1d495b53772db67f369d49322a049f619cfaaaf4c00f8ad2b2f",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos09.825.avi",
+      "source_sha256": "d9e5e86632f6e79cb7d6092631de69e488c09e9c9dc243bae9bb168b7677f269",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos10.826.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 19.986653,
+      "sha256": "74291ab4ca87736ffdb5ca6ea924e7189991739645390dea0b9df82895becb86",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos10.826.avi",
+      "source_sha256": "5698701d4900e39c279becc2cd8e9b0f085e19dff34885d59a930052464af3bc",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "smoke-testpos11.827.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 19.96,
+      "sha256": "bec8ef68b93a8840e9ddea484a86f377b9b9159a9923357af0b4d2621d975019",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos11.827.avi",
+      "source_sha256": "8066d6a50023145093251486b8f6f8e55b5cf6f76395221ef0887736a55b52c5",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 20.0
+    },
+    {
+      "file": "flame-negsVideo7.864.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 18.033333,
+      "sha256": "21ba0361e11f79fd22382d60bf23023c052c96eab112750d16427a067f85a169",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo7.864.avi",
+      "source_sha256": "10993dadf9a1161405df742a0ef573e0671baaf4561ad444ad04015d4bfaef89",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 18.033333
+    },
+    {
+      "file": "flame-posVideo8.877.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 17.1171,
+      "sha256": "eaeed81f5f4928d313e899e9cfca132f2b58b16098ef4f6280c2848fab8eb007",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo8.877.avi",
+      "source_sha256": "fad90831ab1b64b3483f47d84f15244093b418e0e1a6596e5ffbfbe234814487",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 17.1171
+    },
+    {
+      "file": "flame-posVideo2.871.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 17.017,
+      "sha256": "b57492779558ba1fa2313371f05e9d93f4df9190a598c7dabbda557fea9a9d13",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo2.871.avi",
+      "source_sha256": "051a9f952301795d164e6100034649c5626bf5929946da4e02097b68befd2f34",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 17.017
+    },
+    {
+      "file": "smoke-testpos01.817.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 16.958333,
+      "sha256": "3aefc53794af4f67b4de9b4b8f9da2f3b6b420dd6a6217368d6e5465e3e3b4e5",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos01.817.avi",
+      "source_sha256": "fd1284d69c02da5a84fe3c537479882158ef5f83d743c51b325d41e6ceb3a8f3",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 16.958333
+    },
+    {
+      "file": "flame-negsVideo3.860.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 16.0,
+      "sha256": "dc8b77fb74542b5cc869b145c7d6429a36f24b4938c5b8820ec646152e9808a9",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo3.860.avi",
+      "source_sha256": "b550d0a45a5b7b014efb1000eb21a0f674fd9676ddf0c93d5834d7de93a5dd3f",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 16.0
+    },
+    {
+      "file": "smoke-testpos13.829.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 15.448782,
+      "sha256": "01d94ef3566df4ea13ddbe1102bf623e6ff99ea28fd731e9c0f68e013515d3e2",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos13.829.avi",
+      "source_sha256": "143add5f9690e87f929d7779d7ca99e820e494370af9d7f116aa77285faef7ee",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 15.516735
+    },
+    {
+      "file": "flame-negsVideo2.859.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 15.5,
+      "sha256": "5a9accb2a3f1b09574e378aa468bef9b8909b08b553145764d846568a9528f31",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo2.859.avi",
+      "source_sha256": "4ba3a1bdfb199ad18191d3c306bb476b593fa07c1bdb34b6028c9008c8b2d5df",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 15.5
+    },
+    {
+      "file": "flame-negsVideo5.862.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 14.633333,
+      "sha256": "be44c6fd47027e3c1389cf5dacaefa094aed6ae8835b6cd59182e3eb736dd712",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo5.862.avi",
+      "source_sha256": "cd8af7c201c76c2181d13202f3321ff002e5105829808cfcfcda5f7864ed8300",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 14.968163
+    },
+    {
+      "file": "flame-posVideo3.872.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 12.7127,
+      "sha256": "e4f66253c149242142f65588b1d271430ee54183cb57aabf1a6f363d9b95f100",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo3.872.avi",
+      "source_sha256": "0b0371fb637bee82384024b4ebdf716a1faaeb088ce6496ec5c35244e8c48936",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 12.7127
+    },
+    {
+      "file": "smoke-testpos12.828.mp4",
+      "group": "fire_visible_smoke",
+      "duration_s": 12.090848,
+      "sha256": "6b6f97b064982fc250c63b1a21a6ba1c3c8c9dd687fe71eba4a41082d5215785",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "pos/testpos12.828.avi",
+      "source_sha256": "893d2b7fa5d327ac2c7c04165e00db5fffaf0d95aeb5d4706962a866d62acc34",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 12.512653
+    },
+    {
+      "file": "flame-posVideo11.870.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 11.866667,
+      "sha256": "c26f6f115287c376782b22a716f246a8a93a53725ed12bf2d6ac195f99dcb198",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo11.870.avi",
+      "source_sha256": "37a3c9ff44fd568a3e517a866e0f2f187fbda7c9932b55d09b463be638ead42e",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 11.866667
+    },
+    {
+      "file": "flame-negsVideo13.1075.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 11.078634,
+      "sha256": "5edcb1a9ae7dfa1eae29c8ad7c848c2644006a69acf5992228b9d8b64f6105da",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo13.1075.avi",
+      "source_sha256": "1e7c166636c409b93a5a37c6d35d06bff5056529c42ac064a735f8bb15306cd5",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 11.078634
+    },
+    {
+      "file": "flame-negsVideo16.1077.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 10.58988,
+      "sha256": "5b8836aede9ae1d783b434f20bd75436acc6ceb7fcc24052348d693c13f58a70",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo16.1077.avi",
+      "source_sha256": "70ff9977d8fb961dc053009d5f8b3f16c5818245916a129300e81b573be2570b",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 10.58988
+    },
+    {
+      "file": "smoke-testneg01.807.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 10.04,
+      "sha256": "63fbcdbef896a6f2ff005f5215942751f26d700795b49ace19a6263d11ceeb7e",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg01.807.avi",
+      "source_sha256": "9878ad2640b06e1472b015762bd52eb224936c85d7488ea9b62ed5b0590aa45c",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 10.04
+    },
+    {
+      "file": "smoke-testneg05.811.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 10.04,
+      "sha256": "c6e855cd2c2026238b4e66950d1845c27c067c31b54bdc6ba618db62bff67e67",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg05.811.avi",
+      "source_sha256": "82049d89259dfe734493ccade8873f1692aaf68d8fdf91e7f70d438ea4781078",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 10.04
+    },
+    {
+      "file": "smoke-testneg06.812.mp4",
+      "group": "fire_source_negative_smoke",
+      "duration_s": 10.04,
+      "sha256": "73c8a8408b94e0fa2fee8f3fcc20f68449dd39ddbdf092df5d0139efbb19c508",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "smoke_videos.1407.zip",
+      "archive_member": "neg/testneg06.812.avi",
+      "source_sha256": "8b9af41bc27c9e04da225d3997629aff29301ce84858876d76d297b24ef08f74",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 10.04
+    },
+    {
+      "file": "flame-negsVideo10.1072.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 9.84,
+      "sha256": "eddc2ba67d9c81944a46a342ca9be71b3c1676aaf1c5458953ab1a3a28b1105b",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo10.1072.avi",
+      "source_sha256": "1c3481d319f2266903c83f560d69db8ea328141b24904483a8ef2c0231eea5a6",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 9.84
+    },
+    {
+      "file": "flame-posVideo10.869.mp4",
+      "group": "fire_visible_flame",
+      "duration_s": 7.841167,
+      "sha256": "a950117a3a827971b68f01b3a0265dd86f815c2890b71de99083b09418d5b148",
+      "cloud_consent": false,
+      "onset_s": 0.0,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "pos/posVideo10.869.avi",
+      "source_sha256": "fc1b33b3fc231c52c36eaabde63fb7f33632715fd9cbd5a52f170cc8a60f7554",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 7.841175
+    },
+    {
+      "file": "flame-negsVideo11.1073.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 7.2,
+      "sha256": "8338b3648f8187561a66950738482e9dd0f4220ca2be64509ae44ebea536f3a0",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo11.1073.avi",
+      "source_sha256": "1fe5f45e9a05e6f6c01a2b7944ed29a58816a28974e9ec3f4502c186ad5e586d",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 7.2
+    },
+    {
+      "file": "flame-negsVideo15.1078.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 2.9464,
+      "sha256": "5dc295c0b95a1df95e6759616c6f3294284d4803a0f324363748f0a30067e37a",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo15.1078.avi",
+      "source_sha256": "1f19c8a13837b983170c093cb16695369cafaef0e88872d6492e5a7b0384b4d4",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 2.9464
+    },
+    {
+      "file": "flame-negsVideo14.1076.mp4",
+      "group": "fire_source_negative_flame",
+      "duration_s": 1.87069,
+      "sha256": "3248ce9fedf01387c4b297e0f78b55d07ce52740dc9956a001f7b3b81d482c00",
+      "cloud_consent": false,
+      "onset_s": null,
+      "archive": "fire_videos.1406.zip",
+      "archive_member": "neg/negsVideo14.1076.avi",
+      "source_sha256": "5993add02f457c96d30336e1f2e03fcc0c2a0dc187f9162dfb21fa543645e674",
+      "clip_start_s": 0.0,
+      "transcode_limit_s": 1.87069
+    }
+  ]
+}

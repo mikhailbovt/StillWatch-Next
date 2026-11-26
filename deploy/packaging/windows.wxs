@@ -1,0 +1,43 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="StillWatch Core" Manufacturer="Mikhail Bovt" Version="$(var.ProductVersion)"
+           UpgradeCode="7333E77A-338A-4314-B199-DC975F111C66" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of StillWatch Core is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="InstallFolder" Name="StillWatch Core">
+        <Directory Id="Binaries" Name="bin">
+          <Component Id="CoreService">
+            <File Id="CoreBinary" Source="$(var.Payload)\bin\stillwatch-core.exe" KeyPath="yes" />
+            <ServiceInstall Id="RegisterCore" Name="StillWatchCore" DisplayName="StillWatch Core"
+                            Type="ownProcess" Start="auto" ErrorControl="normal"
+                            Account="NT AUTHORITY\LocalService"
+                            Arguments="--service --data-dir &quot;[CoreData].&quot; --settings-file &quot;[CoreData]core.json&quot;">
+              <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+                                  ThirdFailureActionType="none" RestartServiceDelayInSeconds="3" ResetPeriodInDays="1" />
+            </ServiceInstall>
+            <ServiceControl Id="ManageCore" Name="StillWatchCore" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="CoreData" Name="StillWatch">
+        <Component Id="CoreDataAccess" Guid="6090D4CA-E448-4DC9-BB57-88C39339255C" Permanent="yes">
+          <CreateFolder>
+            <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LS)" />
+          </CreateFolder>
+        </Component>
+        <Component Id="CoreSettings" NeverOverwrite="yes" Permanent="yes">
+          <File Id="InitialSettings" Name="core.json" Source="windows-core.json" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Core" Title="StillWatch Core" Level="1">
+      <ComponentRef Id="CoreService" />
+      <ComponentRef Id="CoreDataAccess" />
+      <ComponentRef Id="CoreSettings" />
+      <ComponentGroupRef Id="NativePayload" />
+    </Feature>
+  </Package>
+</Wix>

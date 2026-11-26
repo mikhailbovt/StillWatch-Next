@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReplayUpload",
+  "type": "object",
+  "properties": {
+    "bytes": {
+      "$ref": "#/$defs/Counter"
+    },
+    "file": {
+      "type": "string"
+    },
+    "source_probe": {
+      "$ref": "#/$defs/SourceProbe"
+    }
+  },
+  "required": [
+    "file",
+    "bytes",
+    "source_probe"
+  ],
+  "$defs": {
+    "AnalysisCapacity": {
+      "type": "object",
+      "properties": {
+        "admissible_workload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "available_camera_slots": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "limiting_resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profile_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CapacityState"
+        }
+      },
+      "required": [
+        "state",
+        "reason"
+      ]
+    },
+    "AnalysisWorkload": {
+      "type": "object",
+      "properties": {
+        "cameras": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "detail_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceWorkload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "media": {
+          "$ref": "#/$defs/MediaWorkloadLimits"
+        },
+        "min_fire_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_pose_per_wall_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sampling": {
+          "$ref": "#/$defs/CameraSampling"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceWorkload"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "sampling",
+        "cameras",
+        "min_pose_per_wall_minute",
+        "min_fire_per_wall_minute",
+        "media"
+      ]
+    },
+    "CameraSampling": {
+      "type": "object",
+      "properties": {
+        "evidence_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 1
+        },
+        "fire_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 2,
+          "minimum": 1
+        },
+        "pose_fps": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 5,
+          "minimum": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pose_fps",
+        "fire_fps",
+        "evidence_fps"
+      ]
+    },
+    "CapacityState": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "unknown",
+        "insufficient"
+      ]
+    },
+    "CaptureCapacity": {
+      "type": "object",
+      "properties": {
+        "available_camera_slots": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "available_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fits": {
+          "type": "boolean"
+        },
+        "required_raw_bytes": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "fits",
+        "available_camera_slots",
+        "available_raw_bytes",
+        "required_raw_bytes"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "Dimensions": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    },
+    "MainStreamProbe": {
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "native_pts": {
+          "type": "boolean"
+        },
+        "source_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "dimensions",
+        "native_pts"
+      ]
+    },
+    "MediaWorkloadLimits": {
+      "description": "Simultaneous allowances on the host, including both encoder and decoder work.",
+      "type": "object",
+      "properties": {
+        "detail_decoder_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_decoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "detail_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_publishers": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "preview_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "publisher_units": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_encoders": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "snapshot_requests_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "viewer_sessions": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "preview_publishers",
+        "detail_publishers",
+        "detail_decoders",
+        "viewer_sessions",
+        "publisher_units",
+        "preview_units",
+        "detail_units",
+        "detail_decoder_units",
+        "snapshot_encoders",
+        "snapshot_requests_per_minute"
+      ]
+    },
+    "SourceKind": {
+      "type": "string",
+      "enum": [
+        "paced_replay",
+        "unpaced_replay",
+        "rtsp_tcp",
+        "rtsp_udp",
+        "rtsps",
+        "usb"
+      ]
+    },
+    "SourceProbe": {
+      "type": "object",
+      "properties": {
+        "analysis_capacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisCapacity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capture_capacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptureCapacity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "live": {
+          "type": "boolean"
+        },
+        "main_stream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MainStreamProbe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_pts": {
+          "type": "boolean"
+        },
+        "source_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "dimensions",
+        "live",
+        "native_pts"
+      ]
+    },
+    "SourceRate": {
+      "type": "object",
+      "properties": {
+        "advertised_millifps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "observed_millifps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "quality": {
+          "$ref": "#/$defs/SourceRateQuality"
+        }
+      },
+      "required": [
+        "quality"
+      ]
+    },
+    "SourceRateQuality": {
+      "type": "string",
+      "enum": [
+        "unknown",
+        "observed",
+        "variable"
+      ]
+    },
+    "SourceWorkload": {
+      "description": "Named profiles admit only sources whose decoder workload matches this class.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": "string"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Dimensions"
+        },
+        "kind": {
+          "$ref": "#/$defs/SourceKind"
+        },
+        "max_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "min_millifps": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "codec",
+        "dimensions",
+        "min_millifps",
+        "max_millifps"
+      ]
+    }
+  }
+}

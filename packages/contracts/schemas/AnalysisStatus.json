@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AnalysisStatus",
+  "type": "object",
+  "properties": {
+    "cadence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AnalysisCadence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "extra_fire_frames": {
+      "description": "Accepted fire inferences dispatched ahead of the configured base interval.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fire_frames": {
+      "$ref": "#/$defs/Counter"
+    },
+    "fire_regions": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "last_analysis_age_ms": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_fire_source_us": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+    },
+    "last_pose_source_us": {
+      "description": "Native presentation timestamp in microseconds, as a signed decimal string.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^-?(0|[1-9][0-9]{0,18})$"
+    },
+    "last_queue_age_ms": {
+      "description": "Time between receiving the last accepted frame and dispatching it to a worker.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "last_worker_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "people": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "pose_frames": {
+      "$ref": "#/$defs/Counter"
+    },
+    "smoke_regions": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "source_epoch": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Counter"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/AnalysisState"
+    },
+    "wall_cadence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WallCadence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "state",
+    "pose_frames",
+    "fire_frames"
+  ],
+  "$defs": {
+    "AnalysisCadence": {
+      "type": "object",
+      "properties": {
+        "below_target": {
+          "type": "boolean"
+        },
+        "fire_frames_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fire_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_frames_per_minute": {
+          "description": "Accepted model results in the last ten seconds, normalized by source time.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_target_per_minute": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pose_frames_per_minute",
+        "fire_frames_per_minute",
+        "pose_target_per_minute",
+        "fire_target_per_minute",
+        "below_target"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "starting",
+        "ready",
+        "degraded"
+      ]
+    },
+    "Counter": {
+      "description": "Canonical decimal u64 in 0..=18446744073709551615. Range is checked by the parser.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,19})$"
+    },
+    "WallCadence": {
+      "type": "object",
+      "properties": {
+        "fire_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pose_accepted": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "window_seconds": {
+          "description": "Accepted results in the trailing monotonic clock interval.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "window_seconds",
+        "pose_accepted",
+        "fire_accepted"
+      ]
+    }
+  }
+}

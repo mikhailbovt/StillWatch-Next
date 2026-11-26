@@ -1,0 +1,65 @@
+{
+  "contract_version": 1,
+  "baseline_revision": "79da236df1b17a5e21306b8750a7bbacb47fdad0",
+  "scope": "release-target-16-cameras",
+  "matching": {
+    "max_delay_s": 8,
+    "fire_before_onset_tolerance_s": 2,
+    "medical_before_onset_tolerance_s": 0.35,
+    "minimum_roi_iou": 0.3,
+    "require_camera_and_epoch": true,
+    "require_person_identity_for_medical": true,
+    "max_duplicate_incidents_per_episode": 0,
+    "max_wrong_subject_or_region_matches": 0
+  },
+  "review": {
+    "min_timely_fire_recall": 0.95,
+    "min_timely_fall_recall": 0.95,
+    "required_fire_strata": ["small_combustion_smoke", "low_light", "other"],
+    "min_fire_recall_per_required_stratum": 0.95,
+    "max_missed_positive_fall_regressions": 0,
+    "reference_positive_fall_regressions": 21,
+    "site_cameras": 16,
+    "site_hours_per_day": 24,
+    "max_false_reviews_per_site_day": 8,
+    "false_review_limit_per_camera_hour": 0.020833333333333332,
+    "required_negative_strata": ["controlled_flame", "vapor_mist_fog", "reflection_display_light", "adl"]
+  },
+  "urgent": {
+    "local_policy_required": true,
+    "evaluate_local_and_semantic_routes_separately": true,
+    "min_timely_recall_for_each_advertised_scenario": 0.95,
+    "max_false_urgents_per_camera_hour": 0.001
+  },
+  "coverage": {
+    "min_verified_negative_fraction": 0.99,
+    "max_invalid_required_positive_windows": 0,
+    "min_accepted_source_rate_fraction": 0.8,
+    "max_inter_observation_periods_for_development_replay": 2
+  },
+  "uncertainty": {
+    "confidence_level": 0.95,
+    "resample_by": "independent_scene_or_recording_session",
+    "cluster_bootstrap_replicates": 10000,
+    "cluster_bootstrap_seed": 2147483647,
+    "report_descriptive_binomial_interval": true,
+    "report_one_sided_poisson_bound_with_independence_assumptions": true,
+    "do_not_qualify_population_claim_if_bound_crosses_threshold": true
+  },
+  "required_regressions": [
+    "fire.early.mmodalfire",
+    "fire.mist.mmodalfire",
+    "fire.kmu.censoring",
+    "fire.dark-visible-roi",
+    "fire.controlled-escape",
+    "fire.mist-then-flame",
+    "fire.evidence-progression",
+    "fire.occlusion-and-repeat",
+    "fall.controlled-descent-at-3-4-5-fps",
+    "fall.identity-with-bystander",
+    "fall.coverage-gap",
+    "fall.durable-recovery",
+    "fall.reference-positive-regressions",
+    "urgent.offline-live-chain"
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "dataset_id": "nist-tn1969-cooktop-reignition-v1",
+  "sources": {
+    "nist-tn1969": {
+      "origin": "https://www.nist.gov/video/cooktop-reignition-oil",
+      "rights": "local_evaluation",
+      "license_or_permission": "NIST public-information notice, https://www.nist.gov/copyrights-disclaimers. Credit NIST. Local development evaluation of the official web rendition."
+    }
+  },
+  "clips": [
+    {
+      "file": "cooktop.mp4",
+      "sha256": "dc749063878f51234d7ef7b2496c1eeffa7d720f2976ff182b3ed0935e914782",
+      "group": "nist-tn1969-kitchen",
+      "category": "fire",
+      "duration_s": 162.7,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "positive",
+      "lineage": {
+        "source_id": "nist-tn1969",
+        "scene_id": "cooktop-kitchen",
+        "camera_id": "cooktop-front",
+        "session_id": "oil-reignition",
+        "original_segments": [
+          {
+            "sha256": "dc749063878f51234d7ef7b2496c1eeffa7d720f2976ff182b3ed0935e914782",
+            "start_s": 0,
+            "duration_s": 162.7
+          }
+        ],
+        "transform": "Unmodified official 640x480 Kaltura rendition 1_96pai3a5. 4,881 frames at 30 fps. Camera timer advances from 47:23 to 50:03 over the first 160 playback seconds. NIST reports that initial ignition preceded the published recording. Measure the visible re-ignition only. Other pre-suppression fire openings are part of the earlier fire. Dense suppressant limits visibility and does not establish negative exposure."
+      },
+      "events": [
+        {
+          "id": "flame-returns-above-oil-pan",
+          "category": "fire",
+          "strata": [
+            "flame",
+            "other"
+          ],
+          "roi": [
+            0.484375,
+            0.37083333333333335,
+            0.5578125,
+            0.49583333333333335
+          ],
+          "onset": {
+            "last_negative_s": 148.5,
+            "first_visible_s": 148.9
+          },
+          "visible_target": "flame"
+        }
+      ],
+      "negative_strata": []
+    }
+  ]
+}

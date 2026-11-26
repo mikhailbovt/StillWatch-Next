@@ -1,0 +1,145 @@
+{
+  "schema_version": 2,
+  "dataset_id": "bilkent-visible-smoke-onset-v1",
+  "sources": {
+    "bilkent-visifire": {
+      "origin": "https://kilyos.ee.bilkent.edu.tr/~signal/VisiFire/",
+      "rights": "local_evaluation",
+      "license_or_permission": "Public university sample. Local research evaluation. Redistribution and training rights are unverified."
+    }
+  },
+  "clips": [
+    {
+      "file": "sEmptyR1.mp4",
+      "sha256": "0d4f56b67c5bc2d3efb8e84f1be42bbd41fe2e6f378beaa74f809e8bb46aad54",
+      "group": "bilkent-backlit-corridor",
+      "category": "fire",
+      "duration_s": 28.98,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "positive",
+      "lineage": {
+        "source_id": "bilkent-visifire",
+        "scene_id": "backlit-corridor",
+        "camera_id": "backlit-corridor",
+        "session_id": "backlit-corridor-run1",
+        "original_segments": [
+          {
+            "sha256": "ca7167b18899071ff9b672251fd0d4413a7c708c731aee5d7fad70bd80283e61",
+            "start_s": 0,
+            "duration_s": 28.98
+          }
+        ],
+        "transform": "Lossless H.264 of the original 320x240 YUV420P stream. Each decoded timestamp and the complete decoded pixel hash match the AVI. The two corridor clips share the scene and camera. Smoke is optically visible. Its physical origin is unverified."
+      },
+      "events": [
+        {
+          "id": "visible-smoke-semptyr1",
+          "category": "fire",
+          "strata": [
+            "other"
+          ],
+          "roi": [
+            0.32,
+            0.2,
+            0.7,
+            0.65
+          ],
+          "onset": {
+            "last_negative_s": 4.02,
+            "first_visible_s": 4.5
+          }
+        }
+      ],
+      "negative_strata": []
+    },
+    {
+      "file": "sEmptyR2.mp4",
+      "sha256": "a19a33a67aadd76328ab43d00af3c747521ee6e249fa942068ef501be3637131",
+      "group": "bilkent-backlit-corridor",
+      "category": "fire",
+      "duration_s": 23.94,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "positive",
+      "lineage": {
+        "source_id": "bilkent-visifire",
+        "scene_id": "backlit-corridor",
+        "camera_id": "backlit-corridor",
+        "session_id": "backlit-corridor-run2",
+        "original_segments": [
+          {
+            "sha256": "865fb88dd2b1913b6e0434e9a249ef6c14cb91c57e9b3c43c32f1d3062ad6349",
+            "start_s": 0,
+            "duration_s": 23.94
+          }
+        ],
+        "transform": "Lossless H.264 of the original 320x240 YUV420P stream. Each decoded timestamp and the complete decoded pixel hash match the AVI. The two corridor clips share the scene and camera. Smoke is optically visible. Its physical origin is unverified."
+      },
+      "events": [
+        {
+          "id": "visible-smoke-semptyr2",
+          "category": "fire",
+          "strata": [
+            "other"
+          ],
+          "roi": [
+            0.46,
+            0.18,
+            0.72,
+            0.6
+          ],
+          "onset": {
+            "last_negative_s": 5.04,
+            "first_visible_s": 6.02
+          }
+        }
+      ],
+      "negative_strata": []
+    },
+    {
+      "file": "sWasteBasket.mp4",
+      "sha256": "fcc0dbdf2d5cca339fb7c4fa954ff6150a6831a87ccf909a13ecd21dbb748340",
+      "group": "bilkent-exterior-bin",
+      "category": "fire",
+      "duration_s": 90.0,
+      "cloud_consent": false,
+      "split": "development",
+      "annotation": "positive",
+      "lineage": {
+        "source_id": "bilkent-visifire",
+        "scene_id": "exterior-bin",
+        "camera_id": "exterior-bin",
+        "session_id": "exterior-bin-run1",
+        "original_segments": [
+          {
+            "sha256": "dc97293166e64144b13175ebffdacbb5d43e872c4b37290253fd40c0a42adbc7",
+            "start_s": 0,
+            "duration_s": 90.0
+          }
+        ],
+        "transform": "Lossless H.264 of the original 320x240 YUV420P stream. Each decoded timestamp and the complete decoded pixel hash match the AVI. The two corridor clips share the scene and camera. Smoke is optically visible. Its physical origin is unverified."
+      },
+      "events": [
+        {
+          "id": "visible-smoke-swastebasket",
+          "category": "fire",
+          "strata": [
+            "other"
+          ],
+          "roi": [
+            0.3,
+            0.42,
+            0.77,
+            0.76
+          ],
+          "onset": {
+            "last_negative_s": 0.5,
+            "first_visible_s": 1.0
+          }
+        }
+      ],
+      "negative_strata": []
+    }
+  ]
+}

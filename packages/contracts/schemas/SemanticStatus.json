@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SemanticStatus",
+  "type": "object",
+  "properties": {
+    "app_check_state": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AppCheckState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cloud_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cloud_route_ready": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "daily_request_limit": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "last_inference_source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "local_model_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "route_ready": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "sdk_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "$ref": "#/$defs/SemanticState"
+    },
+    "used_today": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "state",
+    "used_today",
+    "daily_request_limit"
+  ],
+  "$defs": {
+    "AppCheckState": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "renewal_due",
+        "development_debug",
+        "unavailable",
+        "unknown"
+      ]
+    },
+    "SemanticState": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "connecting",
+        "available",
+        "degraded"
+      ]
+    }
+  }
+}

@@ -1,0 +1,423 @@
+{
+  "scope": "Source-only review of main visible flame extent. Three MmodalFire recordings in one development room. Disconnected flames and indistinct boundaries omitted. Restricts scored frames to 20.5-27.52s, no independent onset or release recall claim.",
+  "input_sha256": "1dabebf14adaee9ec357a7a9ea4383598e9e3e327c8424955b58db77928ed616",
+  "clips": {
+    "heptane-pair-1.mp4": {
+      "source_sha256": "865dc490b08adf68da4224d9c38925aa53584c7ee0035b99600d6dcbe023b02f",
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "frames": [
+        {
+          "elapsed_us": 20520000,
+          "rgb_sha256": "365c1f7653a443e8f1eceeb32d8d37c28bcd55fdec9a04b637ee8068a38ae416",
+          "bbox_xyxy": [
+            1170,
+            181,
+            1202,
+            245
+          ]
+        },
+        {
+          "elapsed_us": 21000000,
+          "rgb_sha256": "ce468d51255f6f5dcaad868b6494af6c9609cdbf508b8f1065fce5b4c3e92d6b",
+          "bbox_xyxy": [
+            1168,
+            208,
+            1200,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 21520000,
+          "rgb_sha256": "9c6d07ca3de5bea1c2615f168784c45c0d58a3cf1b80192f812e66f7406d0208",
+          "bbox_xyxy": [
+            1166,
+            172,
+            1212,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 22000000,
+          "rgb_sha256": "31a06fe5e7948f732e067b1430ef40b5f3a955b1d9787b5acb5015ddb1ed8844",
+          "bbox_xyxy": [
+            1164,
+            213,
+            1204,
+            247
+          ]
+        },
+        {
+          "elapsed_us": 22520000,
+          "rgb_sha256": "b78e3230663bf786d44053dd41977bf52926f2760376c37d3ccd8540793cb15c",
+          "bbox_xyxy": [
+            1165,
+            144,
+            1208,
+            247
+          ]
+        },
+        {
+          "elapsed_us": 23000000,
+          "rgb_sha256": "415e5a9c4986292e2a11c5366d3025ccb05fad123c552d5fd44d0f9fecaa5b21",
+          "bbox_xyxy": [
+            1164,
+            114,
+            1214,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 24000000,
+          "rgb_sha256": "f47f42dfcdd9b06015c4361af46e706cb01eeb08b5f4c724631c24493c8b922a",
+          "bbox_xyxy": [
+            1166,
+            161,
+            1212,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 24520000,
+          "rgb_sha256": "72de2936793f6be0b5573b788d1819b21cb8bbbb3cf09a517d5e8770d57bf577",
+          "bbox_xyxy": [
+            1165,
+            172,
+            1208,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 25520000,
+          "rgb_sha256": "320c9ddb93425ae61cc3aaa7788bd3b0d5c802f4648dea44b1cc3b059ddb7e21",
+          "bbox_xyxy": [
+            1167,
+            180,
+            1208,
+            246
+          ]
+        },
+        {
+          "elapsed_us": 26000000,
+          "rgb_sha256": "574f6012120280a251ef519b67a7b7be14416af872d6334a80af5b45b89850e3",
+          "bbox_xyxy": [
+            1167,
+            152,
+            1210,
+            247
+          ]
+        },
+        {
+          "elapsed_us": 27000000,
+          "rgb_sha256": "35126e44b50b83b2e14dd1460b9170fabf6da3608bd2730778ae767de7b4f914",
+          "bbox_xyxy": [
+            1166,
+            136,
+            1220,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 27520000,
+          "rgb_sha256": "05346a9c23989e4c3c341c06e205a6229fa562fd12b0921851dd0cfad3277678",
+          "bbox_xyxy": [
+            1166,
+            148,
+            1210,
+            248
+          ]
+        }
+      ]
+    },
+    "heptane-pair-2.mp4": {
+      "source_sha256": "f834fa7d33231090614aa8b3667419caf508957a2f4480e0a8f4eda8f6e0557a",
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "frames": [
+        {
+          "elapsed_us": 20520000,
+          "rgb_sha256": "7462a4874b5288547ac51f730a2dc5da19202d5446ec8d3f08dc7f6bd807d621",
+          "bbox_xyxy": [
+            1168,
+            208,
+            1223,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 21000000,
+          "rgb_sha256": "1ef606cb7cf8e821bdc388867c99b47d99fa25f6fe8fe76b156855cbcc97c2ed",
+          "bbox_xyxy": [
+            1179,
+            202,
+            1220,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 21520000,
+          "rgb_sha256": "fda53e27fef0f4457d24797d83d1eac05ded90c5f5293be6cf3872a081f534dd",
+          "bbox_xyxy": [
+            1168,
+            205,
+            1214,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 22000000,
+          "rgb_sha256": "7db1f96537800e27af8cf5a34ed062fcd5820745808f330db738ed78ca830c47",
+          "bbox_xyxy": [
+            1168,
+            178,
+            1211,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 22520000,
+          "rgb_sha256": "cc3f93c0c716b5e110304a919d9ce358b2e735477421c29c2bd1f05a16f156fa",
+          "bbox_xyxy": [
+            1156,
+            183,
+            1216,
+            252
+          ]
+        },
+        {
+          "elapsed_us": 23000000,
+          "rgb_sha256": "75c47092871e61ac0c7487b684def3d3bbdfd0fc6e567c51a9e2bb0b4d3c6546",
+          "bbox_xyxy": [
+            1170,
+            170,
+            1216,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 23520000,
+          "rgb_sha256": "ef7a4d9cb39cd75b4a29a72f3577a308827adc9a41a1a4d3c52357c60198ef85",
+          "bbox_xyxy": [
+            1144,
+            198,
+            1202,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 24520000,
+          "rgb_sha256": "08a36c94e0ea22201312d33f812d5216bec037253e09382f9603eb4c7a75cffe",
+          "bbox_xyxy": [
+            1154,
+            214,
+            1202,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 25000000,
+          "rgb_sha256": "4a7e5e8fec77d80cca05556cbed42f6b096ffd39ef500a5cc2ee0b31ab0ee58c",
+          "bbox_xyxy": [
+            1164,
+            217,
+            1214,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 25520000,
+          "rgb_sha256": "034ae457dc21e8046a206ba5561df532f9c0ce45f3889eb0b459127bb83618d7",
+          "bbox_xyxy": [
+            1162,
+            218,
+            1200,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 26520000,
+          "rgb_sha256": "9490320eeaceeb1140eeed9fe9a20bc2c15358d31a8e1db629cde844b392b7c5",
+          "bbox_xyxy": [
+            1164,
+            203,
+            1202,
+            248
+          ]
+        },
+        {
+          "elapsed_us": 27000000,
+          "rgb_sha256": "b34222c8c3c2bc1377d7f95fbd46782e7ef88dee8991ab3611504f84e1c534a1",
+          "bbox_xyxy": [
+            1164,
+            204,
+            1198,
+            248
+          ]
+        }
+      ]
+    },
+    "polyurethane-1.mp4": {
+      "source_sha256": "498455d425821b523ad4ee13178cc187e01eb2d09f02bb7c584ada2cb3415649",
+      "native_dimensions": [
+        1920,
+        1080
+      ],
+      "frames": [
+        {
+          "elapsed_us": 20520000,
+          "rgb_sha256": "ca62778a5ffcfac13a16fbb1b420516286999731def8bf985b0e2d96f8bea997",
+          "bbox_xyxy": [
+            1198,
+            184,
+            1210,
+            194
+          ]
+        },
+        {
+          "elapsed_us": 21000000,
+          "rgb_sha256": "51f41d5663a6073c6c0943ae017ebdf13983c206cb870fa5f7100e262c6848d9",
+          "bbox_xyxy": [
+            1196,
+            182,
+            1209,
+            193
+          ]
+        },
+        {
+          "elapsed_us": 21520000,
+          "rgb_sha256": "c32570b273b80d42da1d71e1c3e28b9cbc4c837db23a175d0a1729cc3aafdd8e",
+          "bbox_xyxy": [
+            1196,
+            180,
+            1212,
+            195
+          ]
+        },
+        {
+          "elapsed_us": 22000000,
+          "rgb_sha256": "fde4a003d5c6b7084aa69a689c2a8e4806942322f2d73410c12f560a8bf9d8d4",
+          "bbox_xyxy": [
+            1194,
+            180,
+            1212,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 22520000,
+          "rgb_sha256": "f97a16bb0119da06046e637c40a41a130a599813fa2c7e8a74e780fe6ffe8225",
+          "bbox_xyxy": [
+            1192,
+            178,
+            1214,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 23000000,
+          "rgb_sha256": "738f89b049fbbdc8355587070d27d91bab5f5c207c833c1eef074af3a8f55a34",
+          "bbox_xyxy": [
+            1192,
+            178,
+            1212,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 23520000,
+          "rgb_sha256": "53605f04ea9f0f7a5c1ad1e3b54af4f0caa92495b6fe887d408fc310e6113571",
+          "bbox_xyxy": [
+            1192,
+            178,
+            1212,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 24000000,
+          "rgb_sha256": "913211bb816d04a70edd38cea6e40bbfd3a40e3593b74a0f6b3b45de63cb49e4",
+          "bbox_xyxy": [
+            1192,
+            176,
+            1212,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 24520000,
+          "rgb_sha256": "4e8868a053ddf208ea7e4d799a8d51aa0db6ff88a697f7b373d733ab1c6d615d",
+          "bbox_xyxy": [
+            1187,
+            176,
+            1212,
+            196
+          ]
+        },
+        {
+          "elapsed_us": 25000000,
+          "rgb_sha256": "75dafffdb28a0112c14cf27cbdd76436a62d5744afb70803b227aee03a55165c",
+          "bbox_xyxy": [
+            1186,
+            176,
+            1213,
+            198
+          ]
+        },
+        {
+          "elapsed_us": 25520000,
+          "rgb_sha256": "08ad5d8049a4be16d4815e8a879ba331b73d912dd6c2cf66bc4eff0c7659cc0a",
+          "bbox_xyxy": [
+            1186,
+            176,
+            1212,
+            198
+          ]
+        },
+        {
+          "elapsed_us": 26000000,
+          "rgb_sha256": "8fb03508134933fd06a75300f6f6f7db1315b483663cbf34eaa89c7d1b26d522",
+          "bbox_xyxy": [
+            1186,
+            176,
+            1214,
+            198
+          ]
+        },
+        {
+          "elapsed_us": 26520000,
+          "rgb_sha256": "a23c1cef8805d2392f66c1ad75707ba10fa748b96c1a2608b344b17a00012b6c",
+          "bbox_xyxy": [
+            1185,
+            172,
+            1214,
+            198
+          ]
+        },
+        {
+          "elapsed_us": 27000000,
+          "rgb_sha256": "6c8dd3b0509c102f7a8604709026e85ac620df9cff38cef89201269f30c821be",
+          "bbox_xyxy": [
+            1182,
+            168,
+            1214,
+            199
+          ]
+        },
+        {
+          "elapsed_us": 27520000,
+          "rgb_sha256": "c001a9d120d1000745ed5c91e01cefe5013795680275937984c29b5b5992e412",
+          "bbox_xyxy": [
+            1182,
+            168,
+            1214,
+            200
+          ]
+        }
+      ]
+    }
+  }
+}
